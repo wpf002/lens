@@ -1,0 +1,25 @@
+{
+  "name": "@lens/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "The lens command: scan, enrich, serve, diff, and query codebase knowledge graphs.",
+  "bin": { "lens": "./dist/index.js" },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-dashboard.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lens/core": "workspace:*",
+    "commander": "^14.0.0",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@lens/dashboard": "workspace:*",
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  }
+}

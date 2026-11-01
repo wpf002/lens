@@ -1,0 +1,4656 @@
+{
+ "schema": "lens/1",
+ "kind": "codebase",
+ "project": {
+  "name": "harbor",
+  "description": "A small team task board: React SPA, Express REST API, Prisma on Postgres, shipped as one Docker image.",
+  "languages": [
+   "TypeScript",
+   "TSX",
+   "Prisma",
+   "YAML",
+   "Dockerfile",
+   "Markdown"
+  ],
+  "frameworks": [
+   "React",
+   "Vite",
+   "Express",
+   "Prisma"
+  ],
+  "analyzedAt": "2026-09-29T17:42:08.000Z",
+  "gitCommit": "9f3c2a1e7b4d",
+  "root": "/Users/dev/harbor"
+ },
+ "nodes": [
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "config:package.json",
+   "kind": "config",
+   "name": "package.json",
+   "path": "package.json",
+   "language": "json",
+   "lines": [
+    1,
+    38
+   ],
+   "summary": "Workspace root manifest: scripts for dev/build/test and shared dev dependencies.",
+   "layer": "config",
+   "metrics": {
+    "loc": 38,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "config:tsconfig.json",
+   "kind": "config",
+   "name": "tsconfig.json",
+   "path": "tsconfig.json",
+   "language": "json",
+   "lines": [
+    1,
+    22
+   ],
+   "summary": "Base TypeScript config shared by web and server (strict, ES2022).",
+   "layer": "config",
+   "metrics": {
+    "loc": 22,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "config:.env.example",
+   "kind": "config",
+   "name": ".env.example",
+   "path": ".env.example",
+   "lines": [
+    1,
+    9
+   ],
+   "summary": "Documents required environment variables: DATABASE_URL, JWT_SECRET, SMTP_URL.",
+   "layer": "config",
+   "metrics": {
+    "loc": 9,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "document:README.md",
+   "kind": "document",
+   "name": "README.md",
+   "path": "README.md",
+   "language": "markdown",
+   "lines": [
+    1,
+    84
+   ],
+   "summary": "Project overview, local setup, and deployment notes.",
+   "layer": "config",
+   "metrics": {
+    "loc": 84,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "document:docs/architecture.md",
+   "kind": "document",
+   "name": "architecture.md",
+   "path": "docs/architecture.md",
+   "language": "markdown",
+   "lines": [
+    1,
+    120
+   ],
+   "summary": "Architecture decision record describing the SPA + REST API split.",
+   "layer": "config",
+   "metrics": {
+    "loc": 120,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "document:docs/auth.md",
+   "kind": "document",
+   "name": "auth.md",
+   "path": "docs/auth.md",
+   "language": "markdown",
+   "lines": [
+    1,
+    66
+   ],
+   "summary": "How session tokens are issued, rotated, and verified.",
+   "layer": "config",
+   "metrics": {
+    "loc": 66,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "service:Dockerfile",
+   "kind": "service",
+   "name": "Dockerfile",
+   "path": "Dockerfile",
+   "language": "dockerfile",
+   "lines": [
+    1,
+    34
+   ],
+   "summary": "Multi-stage image: builds web assets and the API, runs node server/dist/index.js.",
+   "layer": "infra",
+   "metrics": {
+    "loc": 34,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "config:docker-compose.yml",
+   "kind": "config",
+   "name": "docker-compose.yml",
+   "path": "docker-compose.yml",
+   "language": "yaml",
+   "lines": [
+    1,
+    41
+   ],
+   "summary": "Local stack: api, postgres 16, and mailhog.",
+   "layer": "infra",
+   "metrics": {
+    "loc": 41,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "pipeline:.github/workflows/ci.yml",
+   "kind": "pipeline",
+   "name": "ci.yml",
+   "path": ".github/workflows/ci.yml",
+   "language": "yaml",
+   "lines": [
+    1,
+    52
+   ],
+   "summary": "CI: install, typecheck, test, build image on main.",
+   "layer": "infra",
+   "metrics": {
+    "loc": 52,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "schema:prisma/schema.prisma",
+   "kind": "schema",
+   "name": "schema.prisma",
+   "path": "prisma/schema.prisma",
+   "language": "prisma",
+   "lines": [
+    1,
+    58
+   ],
+   "summary": "Prisma schema for User, Task, and Webhook models.",
+   "layer": "data",
+   "metrics": {
+    "loc": 58,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:apps/web/src/main.tsx",
+   "kind": "file",
+   "name": "main.tsx",
+   "path": "apps/web/src/main.tsx",
+   "language": "tsx",
+   "lines": [
+    1,
+    24
+   ],
+   "summary": "Browser entry: mounts <App/> with the query client and router.",
+   "layer": "ui",
+   "metrics": {
+    "loc": 24,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "file:apps/web/src/App.tsx",
+   "kind": "file",
+   "name": "App.tsx",
+   "path": "apps/web/src/App.tsx",
+   "language": "tsx",
+   "lines": [
+    1,
+    71
+   ],
+   "summary": "Top-level router with auth-gated routes for board and settings.",
+   "layer": "ui",
+   "metrics": {
+    "loc": 71,
+    "fanIn": 1,
+    "fanOut": 5
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "file:apps/web/src/pages/LoginPage.tsx",
+   "kind": "file",
+   "name": "LoginPage.tsx",
+   "path": "apps/web/src/pages/LoginPage.tsx",
+   "language": "tsx",
+   "lines": [
+    1,
+    96
+   ],
+   "summary": "Email/password login form that stores the session token.",
+   "layer": "ui",
+   "metrics": {
+    "loc": 96,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "complex",
+   "id": "file:apps/web/src/pages/BoardPage.tsx",
+   "kind": "file",
+   "name": "BoardPage.tsx",
+   "path": "apps/web/src/pages/BoardPage.tsx",
+   "language": "tsx",
+   "lines": [
+    1,
+    188
+   ],
+   "summary": "Kanban board of tasks grouped by status with drag-to-move.",
+   "layer": "ui",
+   "metrics": {
+    "loc": 188,
+    "fanIn": 1,
+    "fanOut": 4
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "heuristic",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "file:apps/web/src/pages/SettingsPage.tsx",
+   "kind": "file",
+   "name": "SettingsPage.tsx",
+   "path": "apps/web/src/pages/SettingsPage.tsx",
+   "language": "tsx",
+   "lines": [
+    1,
+    132
+   ],
+   "summary": "User profile and webhook configuration screen.",
+   "layer": "ui",
+   "metrics": {
+    "loc": 132,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:apps/web/src/components/TaskCard.tsx",
+   "kind": "file",
+   "name": "TaskCard.tsx",
+   "path": "apps/web/src/components/TaskCard.tsx",
+   "language": "tsx",
+   "lines": [
+    1,
+    77
+   ],
+   "summary": "Renders a single task card with rich-text description and assignee avatar.",
+   "layer": "ui",
+   "metrics": {
+    "loc": 77,
+    "fanIn": 2,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:apps/web/src/components/TaskList.tsx",
+   "kind": "file",
+   "name": "TaskList.tsx",
+   "path": "apps/web/src/components/TaskList.tsx",
+   "language": "tsx",
+   "lines": [
+    1,
+    64
+   ],
+   "summary": "Virtualized column of TaskCards for one status.",
+   "layer": "ui",
+   "metrics": {
+    "loc": 64,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "heuristic",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:apps/web/src/components/Avatar.tsx",
+   "kind": "file",
+   "name": "Avatar.tsx",
+   "path": "apps/web/src/components/Avatar.tsx",
+   "language": "tsx",
+   "lines": [
+    1,
+    31
+   ],
+   "summary": "Initials avatar with deterministic background color.",
+   "layer": "ui",
+   "metrics": {
+    "loc": 31,
+    "fanIn": 3,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:apps/web/src/hooks/useAuth.ts",
+   "kind": "file",
+   "name": "useAuth.ts",
+   "path": "apps/web/src/hooks/useAuth.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    58
+   ],
+   "summary": "React hook exposing the current user, login and logout.",
+   "layer": "ui",
+   "metrics": {
+    "loc": 58,
+    "fanIn": 3,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:apps/web/src/hooks/useTasks.ts",
+   "kind": "file",
+   "name": "useTasks.ts",
+   "path": "apps/web/src/hooks/useTasks.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    72
+   ],
+   "summary": "Query/mutation hooks for tasks backed by the API client.",
+   "layer": "ui",
+   "metrics": {
+    "loc": 72,
+    "fanIn": 2,
+    "fanOut": 2
+   },
+   "exported": true,
+   "stale": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:apps/web/src/lib/apiClient.ts",
+   "kind": "file",
+   "name": "apiClient.ts",
+   "path": "apps/web/src/lib/apiClient.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    69
+   ],
+   "summary": "Typed fetch wrapper that attaches the bearer token and parses JSON errors.",
+   "layer": "utility",
+   "metrics": {
+    "loc": 69,
+    "fanIn": 3,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "config:apps/web/vite.config.ts",
+   "kind": "config",
+   "name": "vite.config.ts",
+   "path": "apps/web/vite.config.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    19
+   ],
+   "summary": "Vite config with React plugin and /api dev proxy.",
+   "layer": "config",
+   "metrics": {
+    "loc": 19,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:server/src/index.ts",
+   "kind": "file",
+   "name": "index.ts",
+   "path": "server/src/index.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    33
+   ],
+   "summary": "Process entry: loads config, connects DB, starts HTTP server and digest worker.",
+   "layer": "service",
+   "metrics": {
+    "loc": 33,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "file:server/src/app.ts",
+   "kind": "file",
+   "name": "app.ts",
+   "path": "server/src/app.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    58
+   ],
+   "summary": "Builds the Express app: JSON body parser, rate limiter, and route mounting.",
+   "layer": "api",
+   "metrics": {
+    "loc": 58,
+    "fanIn": 1,
+    "fanOut": 7
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "file:server/src/routes/auth.ts",
+   "kind": "file",
+   "name": "auth.ts",
+   "path": "server/src/routes/auth.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    82
+   ],
+   "summary": "Login, logout and session refresh routes.",
+   "layer": "api",
+   "metrics": {
+    "loc": 82,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "file:server/src/routes/tasks.ts",
+   "kind": "file",
+   "name": "tasks.ts",
+   "path": "server/src/routes/tasks.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    141
+   ],
+   "summary": "CRUD and search routes for tasks.",
+   "layer": "api",
+   "metrics": {
+    "loc": 141,
+    "fanIn": 1,
+    "fanOut": 3
+   },
+   "exported": true,
+   "stale": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:server/src/routes/admin.ts",
+   "kind": "file",
+   "name": "admin.ts",
+   "path": "server/src/routes/admin.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    64
+   ],
+   "summary": "Admin-only export and user management routes.",
+   "layer": "api",
+   "metrics": {
+    "loc": 64,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:server/src/routes/webhooks.ts",
+   "kind": "file",
+   "name": "webhooks.ts",
+   "path": "server/src/routes/webhooks.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    71
+   ],
+   "summary": "Register webhooks and deliver test pings.",
+   "layer": "api",
+   "metrics": {
+    "loc": 71,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:server/src/routes/files.ts",
+   "kind": "file",
+   "name": "files.ts",
+   "path": "server/src/routes/files.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    38
+   ],
+   "summary": "Serves uploaded attachments from the uploads directory.",
+   "layer": "api",
+   "metrics": {
+    "loc": 38,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:server/src/middleware/requireAuth.ts",
+   "kind": "file",
+   "name": "requireAuth.ts",
+   "path": "server/src/middleware/requireAuth.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    36
+   ],
+   "summary": "Express middleware that verifies the bearer token and attaches req.user.",
+   "layer": "api",
+   "metrics": {
+    "loc": 36,
+    "fanIn": 4,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "heuristic",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:server/src/middleware/rateLimit.ts",
+   "kind": "file",
+   "name": "rateLimit.ts",
+   "path": "server/src/middleware/rateLimit.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    41
+   ],
+   "summary": "Fixed-window in-memory rate limiter keyed by IP.",
+   "layer": "api",
+   "metrics": {
+    "loc": 41,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "file:server/src/services/authService.ts",
+   "kind": "file",
+   "name": "authService.ts",
+   "path": "server/src/services/authService.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    94
+   ],
+   "summary": "Password verification and session token issuance.",
+   "layer": "service",
+   "metrics": {
+    "loc": 94,
+    "fanIn": 2,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "complex",
+   "id": "file:server/src/services/taskService.ts",
+   "kind": "file",
+   "name": "taskService.ts",
+   "path": "server/src/services/taskService.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    156
+   ],
+   "summary": "Task business rules: status transitions, assignment, and search.",
+   "layer": "service",
+   "metrics": {
+    "loc": 156,
+    "fanIn": 2,
+    "fanOut": 3
+   },
+   "exported": true,
+   "stale": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "file:server/src/services/exportService.ts",
+   "kind": "file",
+   "name": "exportService.ts",
+   "path": "server/src/services/exportService.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    57
+   ],
+   "summary": "Exports a board to PDF by shelling out to wkhtmltopdf.",
+   "layer": "service",
+   "metrics": {
+    "loc": 57,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:server/src/services/mailer.ts",
+   "kind": "file",
+   "name": "mailer.ts",
+   "path": "server/src/services/mailer.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    45
+   ],
+   "summary": "SMTP mailer used for digests and password resets.",
+   "layer": "service",
+   "metrics": {
+    "loc": 45,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:server/src/db/client.ts",
+   "kind": "file",
+   "name": "client.ts",
+   "path": "server/src/db/client.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    18
+   ],
+   "summary": "Singleton Prisma client with query logging in development.",
+   "layer": "data",
+   "metrics": {
+    "loc": 18,
+    "fanIn": 3,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "file:server/src/db/taskRepo.ts",
+   "kind": "file",
+   "name": "taskRepo.ts",
+   "path": "server/src/db/taskRepo.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    98
+   ],
+   "summary": "Task persistence including a raw SQL full-text search.",
+   "layer": "data",
+   "metrics": {
+    "loc": 98,
+    "fanIn": 2,
+    "fanOut": 2
+   },
+   "exported": true,
+   "stale": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:server/src/db/userRepo.ts",
+   "kind": "file",
+   "name": "userRepo.ts",
+   "path": "server/src/db/userRepo.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    44
+   ],
+   "summary": "User lookup and creation.",
+   "layer": "data",
+   "metrics": {
+    "loc": 44,
+    "fanIn": 2,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:server/src/lib/crypto.ts",
+   "kind": "file",
+   "name": "crypto.ts",
+   "path": "server/src/lib/crypto.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    29
+   ],
+   "summary": "Hashing helpers for passwords and API tokens.",
+   "layer": "utility",
+   "metrics": {
+    "loc": 29,
+    "fanIn": 2,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "heuristic",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:server/src/lib/logger.ts",
+   "kind": "file",
+   "name": "logger.ts",
+   "path": "server/src/lib/logger.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    27
+   ],
+   "summary": "Structured JSON logger with request id correlation.",
+   "layer": "utility",
+   "metrics": {
+    "loc": 27,
+    "fanIn": 5,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "config:server/src/config.ts",
+   "kind": "config",
+   "name": "config.ts",
+   "path": "server/src/config.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    34
+   ],
+   "summary": "Reads and validates environment variables into a typed config object.",
+   "layer": "config",
+   "metrics": {
+    "loc": 34,
+    "fanIn": 4,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "file:server/src/jobs/digestWorker.ts",
+   "kind": "file",
+   "name": "digestWorker.ts",
+   "path": "server/src/jobs/digestWorker.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    61
+   ],
+   "summary": "Nightly cron job emailing each user a digest of due tasks.",
+   "layer": "service",
+   "metrics": {
+    "loc": 61,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:server/test/tasks.test.ts",
+   "kind": "file",
+   "name": "tasks.test.ts",
+   "path": "server/test/tasks.test.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    118
+   ],
+   "summary": "Integration tests for task routes against a test database.",
+   "layer": "test",
+   "metrics": {
+    "loc": 118,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "file:server/test/auth.test.ts",
+   "kind": "file",
+   "name": "auth.test.ts",
+   "path": "server/test/auth.test.ts",
+   "language": "typescript",
+   "lines": [
+    1,
+    87
+   ],
+   "summary": "Tests login, token refresh, and requireAuth rejection paths.",
+   "layer": "test",
+   "metrics": {
+    "loc": 87,
+    "fanIn": 1,
+    "fanOut": 2
+   },
+   "exported": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "function:apps/web/src/App.tsx:App",
+   "kind": "function",
+   "name": "App",
+   "path": "apps/web/src/App.tsx",
+   "language": "tsx",
+   "lines": [
+    12,
+    70
+   ],
+   "summary": "Declares routes and redirects anonymous users to /login.",
+   "layer": "ui",
+   "signature": "function App(): JSX.Element",
+   "exported": true,
+   "metrics": {
+    "loc": 59,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "function:apps/web/src/pages/LoginPage.tsx:LoginPage",
+   "kind": "function",
+   "name": "LoginPage",
+   "path": "apps/web/src/pages/LoginPage.tsx",
+   "language": "tsx",
+   "lines": [
+    9,
+    95
+   ],
+   "summary": "Controlled login form; calls useAuth().login and navigates on success.",
+   "layer": "ui",
+   "signature": "function LoginPage(): JSX.Element",
+   "exported": true,
+   "metrics": {
+    "loc": 87,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   },
+   "notes": "Uses React 19 form actions: the <form action={...}> receives FormData directly."
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "complex",
+   "id": "function:apps/web/src/pages/BoardPage.tsx:BoardPage",
+   "kind": "function",
+   "name": "BoardPage",
+   "path": "apps/web/src/pages/BoardPage.tsx",
+   "language": "tsx",
+   "lines": [
+    14,
+    187
+   ],
+   "summary": "Loads tasks, groups them by status and handles drop events to move tasks.",
+   "layer": "ui",
+   "signature": "function BoardPage(): JSX.Element",
+   "exported": true,
+   "metrics": {
+    "loc": 174,
+    "branches": 14,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "heuristic",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "function:apps/web/src/pages/SettingsPage.tsx:SettingsPage",
+   "kind": "function",
+   "name": "SettingsPage",
+   "path": "apps/web/src/pages/SettingsPage.tsx",
+   "language": "tsx",
+   "lines": [
+    10,
+    131
+   ],
+   "summary": "Profile form plus webhook URL registration.",
+   "layer": "ui",
+   "exported": true,
+   "metrics": {
+    "loc": 122,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:apps/web/src/components/TaskCard.tsx:TaskCard",
+   "kind": "function",
+   "name": "TaskCard",
+   "path": "apps/web/src/components/TaskCard.tsx",
+   "language": "tsx",
+   "lines": [
+    8,
+    76
+   ],
+   "summary": "Card showing title, due date, and description rendered as HTML.",
+   "layer": "ui",
+   "signature": "function TaskCard({ task }: { task: Task }): JSX.Element",
+   "exported": true,
+   "metrics": {
+    "loc": 69,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:apps/web/src/components/TaskList.tsx:TaskList",
+   "kind": "function",
+   "name": "TaskList",
+   "path": "apps/web/src/components/TaskList.tsx",
+   "language": "tsx",
+   "lines": [
+    6,
+    63
+   ],
+   "summary": "Virtualized list of TaskCard for one column.",
+   "layer": "ui",
+   "exported": true,
+   "metrics": {
+    "loc": 58,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:apps/web/src/hooks/useAuth.ts:useAuth",
+   "kind": "function",
+   "name": "useAuth",
+   "path": "apps/web/src/hooks/useAuth.ts",
+   "language": "typescript",
+   "lines": [
+    7,
+    57
+   ],
+   "summary": "Returns { user, login, logout } and persists the token in localStorage.",
+   "layer": "ui",
+   "signature": "function useAuth(): AuthState",
+   "exported": true,
+   "metrics": {
+    "loc": 51,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:apps/web/src/hooks/useTasks.ts:useTasks",
+   "kind": "function",
+   "name": "useTasks",
+   "path": "apps/web/src/hooks/useTasks.ts",
+   "language": "typescript",
+   "lines": [
+    5,
+    40
+   ],
+   "summary": "Fetches tasks for the board with a 30s stale time.",
+   "layer": "ui",
+   "exported": true,
+   "metrics": {
+    "loc": 36,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   },
+   "stale": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:apps/web/src/hooks/useTasks.ts:useMoveTask",
+   "kind": "function",
+   "name": "useMoveTask",
+   "path": "apps/web/src/hooks/useTasks.ts",
+   "language": "typescript",
+   "lines": [
+    42,
+    71
+   ],
+   "summary": "Optimistic mutation that changes a task's status.",
+   "layer": "ui",
+   "exported": true,
+   "metrics": {
+    "loc": 30,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "class:apps/web/src/lib/apiClient.ts:ApiClient",
+   "kind": "class",
+   "name": "ApiClient",
+   "path": "apps/web/src/lib/apiClient.ts",
+   "language": "typescript",
+   "lines": [
+    4,
+    68
+   ],
+   "summary": "Wraps fetch with base URL, auth header, and error normalization.",
+   "layer": "utility",
+   "signature": "class ApiClient",
+   "exported": true,
+   "metrics": {
+    "loc": 65,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:apps/web/src/lib/apiClient.ts:request",
+   "kind": "function",
+   "name": "request",
+   "path": "apps/web/src/lib/apiClient.ts",
+   "language": "typescript",
+   "lines": [
+    18,
+    52
+   ],
+   "summary": "Performs a request and throws ApiError on non-2xx.",
+   "layer": "utility",
+   "signature": "request<T>(method: string, path: string, body?: unknown): Promise<T>",
+   "exported": true,
+   "metrics": {
+    "loc": 35,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "function:server/src/app.ts:createApp",
+   "kind": "function",
+   "name": "createApp",
+   "path": "server/src/app.ts",
+   "language": "typescript",
+   "lines": [
+    8,
+    57
+   ],
+   "summary": "Assembles middleware and mounts routers under /api.",
+   "layer": "api",
+   "signature": "function createApp(deps: Deps): Express",
+   "exported": true,
+   "metrics": {
+    "loc": 50,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/index.ts:main",
+   "kind": "function",
+   "name": "main",
+   "path": "server/src/index.ts",
+   "language": "typescript",
+   "lines": [
+    5,
+    32
+   ],
+   "summary": "Boots the server and schedules the digest worker.",
+   "layer": "service",
+   "exported": true,
+   "metrics": {
+    "loc": 28,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "function:server/src/routes/auth.ts:loginHandler",
+   "kind": "function",
+   "name": "loginHandler",
+   "path": "server/src/routes/auth.ts",
+   "language": "typescript",
+   "lines": [
+    12,
+    44
+   ],
+   "summary": "Validates credentials and returns a session token.",
+   "layer": "api",
+   "exported": true,
+   "metrics": {
+    "loc": 33,
+    "branches": 4,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/routes/auth.ts:refreshHandler",
+   "kind": "function",
+   "name": "refreshHandler",
+   "path": "server/src/routes/auth.ts",
+   "language": "typescript",
+   "lines": [
+    46,
+    80
+   ],
+   "summary": "Rotates an existing session token.",
+   "layer": "api",
+   "exported": true,
+   "metrics": {
+    "loc": 35,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/routes/tasks.ts:listTasks",
+   "kind": "function",
+   "name": "listTasks",
+   "path": "server/src/routes/tasks.ts",
+   "language": "typescript",
+   "lines": [
+    10,
+    32
+   ],
+   "summary": "Returns tasks visible to the current user.",
+   "layer": "api",
+   "exported": true,
+   "metrics": {
+    "loc": 23,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "function:server/src/routes/tasks.ts:createTask",
+   "kind": "function",
+   "name": "createTask",
+   "path": "server/src/routes/tasks.ts",
+   "language": "typescript",
+   "lines": [
+    34,
+    70
+   ],
+   "summary": "Validates body and creates a task.",
+   "layer": "api",
+   "exported": true,
+   "metrics": {
+    "loc": 37,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/routes/tasks.ts:searchTasksHandler",
+   "kind": "function",
+   "name": "searchTasksHandler",
+   "path": "server/src/routes/tasks.ts",
+   "language": "typescript",
+   "lines": [
+    72,
+    101
+   ],
+   "summary": "Full-text search over tasks using the q query parameter.",
+   "layer": "api",
+   "exported": true,
+   "metrics": {
+    "loc": 30,
+    "branches": 3,
+    "fanIn": 1,
+    "fanOut": 1
+   },
+   "stale": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "function:server/src/routes/tasks.ts:updateTask",
+   "kind": "function",
+   "name": "updateTask",
+   "path": "server/src/routes/tasks.ts",
+   "language": "typescript",
+   "lines": [
+    103,
+    140
+   ],
+   "summary": "Patches a task; spreads req.body into the update.",
+   "layer": "api",
+   "exported": true,
+   "metrics": {
+    "loc": 38,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/routes/admin.ts:exportBoardHandler",
+   "kind": "function",
+   "name": "exportBoardHandler",
+   "path": "server/src/routes/admin.ts",
+   "language": "typescript",
+   "lines": [
+    9,
+    38
+   ],
+   "summary": "Triggers a PDF export of a board and streams the file back.",
+   "layer": "api",
+   "exported": true,
+   "metrics": {
+    "loc": 30,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/routes/webhooks.ts:registerWebhook",
+   "kind": "function",
+   "name": "registerWebhook",
+   "path": "server/src/routes/webhooks.ts",
+   "language": "typescript",
+   "lines": [
+    8,
+    36
+   ],
+   "summary": "Stores a webhook URL for the current user.",
+   "layer": "api",
+   "exported": true,
+   "metrics": {
+    "loc": 29,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/routes/webhooks.ts:pingWebhook",
+   "kind": "function",
+   "name": "pingWebhook",
+   "path": "server/src/routes/webhooks.ts",
+   "language": "typescript",
+   "lines": [
+    38,
+    70
+   ],
+   "summary": "Sends a test POST to the stored webhook URL.",
+   "layer": "api",
+   "exported": true,
+   "metrics": {
+    "loc": 33,
+    "branches": 2,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/routes/files.ts:downloadFile",
+   "kind": "function",
+   "name": "downloadFile",
+   "path": "server/src/routes/files.ts",
+   "language": "typescript",
+   "lines": [
+    7,
+    37
+   ],
+   "summary": "Streams uploads/<name> to the client.",
+   "layer": "api",
+   "exported": true,
+   "metrics": {
+    "loc": 31,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/middleware/requireAuth.ts:requireAuth",
+   "kind": "function",
+   "name": "requireAuth",
+   "path": "server/src/middleware/requireAuth.ts",
+   "language": "typescript",
+   "lines": [
+    6,
+    35
+   ],
+   "summary": "Rejects requests without a valid bearer token with 401.",
+   "layer": "api",
+   "signature": "function requireAuth(req, res, next): void",
+   "exported": true,
+   "metrics": {
+    "loc": 30,
+    "branches": 1,
+    "fanIn": 4,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "heuristic",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/middleware/rateLimit.ts:rateLimit",
+   "kind": "function",
+   "name": "rateLimit",
+   "path": "server/src/middleware/rateLimit.ts",
+   "language": "typescript",
+   "lines": [
+    5,
+    40
+   ],
+   "summary": "Returns middleware allowing N requests per window per IP.",
+   "layer": "api",
+   "exported": true,
+   "metrics": {
+    "loc": 36,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "class:server/src/services/authService.ts:AuthService",
+   "kind": "class",
+   "name": "AuthService",
+   "path": "server/src/services/authService.ts",
+   "language": "typescript",
+   "lines": [
+    10,
+    93
+   ],
+   "summary": "Verifies passwords and signs/verifies JWT session tokens.",
+   "layer": "service",
+   "exported": true,
+   "metrics": {
+    "loc": 84,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/services/authService.ts:verifyPassword",
+   "kind": "function",
+   "name": "verifyPassword",
+   "path": "server/src/services/authService.ts",
+   "language": "typescript",
+   "lines": [
+    22,
+    40
+   ],
+   "summary": "Compares a password to the stored scrypt hash in constant time.",
+   "layer": "service",
+   "exported": true,
+   "metrics": {
+    "loc": 19,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/services/authService.ts:issueToken",
+   "kind": "function",
+   "name": "issueToken",
+   "path": "server/src/services/authService.ts",
+   "language": "typescript",
+   "lines": [
+    42,
+    60
+   ],
+   "summary": "Signs a 1h JWT with the user id and role.",
+   "layer": "service",
+   "exported": true,
+   "metrics": {
+    "loc": 19,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/services/authService.ts:verifyToken",
+   "kind": "function",
+   "name": "verifyToken",
+   "path": "server/src/services/authService.ts",
+   "language": "typescript",
+   "lines": [
+    62,
+    92
+   ],
+   "summary": "Verifies signature and expiry; returns claims or null.",
+   "layer": "service",
+   "exported": true,
+   "metrics": {
+    "loc": 31,
+    "branches": 1,
+    "fanIn": 2,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "complex",
+   "id": "class:server/src/services/taskService.ts:TaskService",
+   "kind": "class",
+   "name": "TaskService",
+   "path": "server/src/services/taskService.ts",
+   "language": "typescript",
+   "lines": [
+    12,
+    155
+   ],
+   "summary": "Enforces status transitions and delegates persistence to taskRepo.",
+   "layer": "service",
+   "exported": true,
+   "metrics": {
+    "loc": 144,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   },
+   "stale": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "complex",
+   "id": "function:server/src/services/taskService.ts:moveTask",
+   "kind": "function",
+   "name": "moveTask",
+   "path": "server/src/services/taskService.ts",
+   "language": "typescript",
+   "lines": [
+    40,
+    88
+   ],
+   "summary": "Validates a status transition against the workflow table.",
+   "layer": "service",
+   "exported": true,
+   "metrics": {
+    "loc": 49,
+    "branches": 9,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/services/taskService.ts:search",
+   "kind": "function",
+   "name": "search",
+   "path": "server/src/services/taskService.ts",
+   "language": "typescript",
+   "lines": [
+    90,
+    120
+   ],
+   "summary": "Normalizes the query and calls taskRepo.searchTasks.",
+   "layer": "service",
+   "exported": true,
+   "metrics": {
+    "loc": 31,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   },
+   "stale": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "function:server/src/services/exportService.ts:exportPdf",
+   "kind": "function",
+   "name": "exportPdf",
+   "path": "server/src/services/exportService.ts",
+   "language": "typescript",
+   "lines": [
+    9,
+    55
+   ],
+   "summary": "Renders board HTML to a temp file and runs wkhtmltopdf on it.",
+   "layer": "service",
+   "exported": true,
+   "metrics": {
+    "loc": 47,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/services/mailer.ts:sendMail",
+   "kind": "function",
+   "name": "sendMail",
+   "path": "server/src/services/mailer.ts",
+   "language": "typescript",
+   "lines": [
+    8,
+    44
+   ],
+   "summary": "Sends an email through the configured SMTP transport.",
+   "layer": "service",
+   "exported": true,
+   "metrics": {
+    "loc": 37,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/db/taskRepo.ts:searchTasks",
+   "kind": "function",
+   "name": "searchTasks",
+   "path": "server/src/db/taskRepo.ts",
+   "language": "typescript",
+   "lines": [
+    40,
+    72
+   ],
+   "summary": "Runs a raw SQL ILIKE query over title and description.",
+   "layer": "data",
+   "exported": true,
+   "metrics": {
+    "loc": 33,
+    "branches": 2,
+    "fanIn": 1,
+    "fanOut": 1
+   },
+   "stale": true
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/db/taskRepo.ts:findTasksForUser",
+   "kind": "function",
+   "name": "findTasksForUser",
+   "path": "server/src/db/taskRepo.ts",
+   "language": "typescript",
+   "lines": [
+    10,
+    38
+   ],
+   "summary": "Loads tasks by owner or assignee.",
+   "layer": "data",
+   "exported": true,
+   "metrics": {
+    "loc": 29,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/db/taskRepo.ts:updateTaskRow",
+   "kind": "function",
+   "name": "updateTaskRow",
+   "path": "server/src/db/taskRepo.ts",
+   "language": "typescript",
+   "lines": [
+    74,
+    97
+   ],
+   "summary": "Persists partial task updates.",
+   "layer": "data",
+   "exported": true,
+   "metrics": {
+    "loc": 24,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/db/userRepo.ts:findUserByEmail",
+   "kind": "function",
+   "name": "findUserByEmail",
+   "path": "server/src/db/userRepo.ts",
+   "language": "typescript",
+   "lines": [
+    6,
+    22
+   ],
+   "summary": "Looks up a user by lowercase email.",
+   "layer": "data",
+   "exported": true,
+   "metrics": {
+    "loc": 17,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/lib/crypto.ts:hashToken",
+   "kind": "function",
+   "name": "hashToken",
+   "path": "server/src/lib/crypto.ts",
+   "language": "typescript",
+   "lines": [
+    5,
+    14
+   ],
+   "summary": "Hashes an API token for storage (md5).",
+   "layer": "utility",
+   "exported": true,
+   "metrics": {
+    "loc": 10,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "function:server/src/lib/crypto.ts:hashPassword",
+   "kind": "function",
+   "name": "hashPassword",
+   "path": "server/src/lib/crypto.ts",
+   "language": "typescript",
+   "lines": [
+    16,
+    28
+   ],
+   "summary": "scrypt password hash with random salt.",
+   "layer": "utility",
+   "exported": true,
+   "metrics": {
+    "loc": 13,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "moderate",
+   "id": "function:server/src/jobs/digestWorker.ts:runDigest",
+   "kind": "function",
+   "name": "runDigest",
+   "path": "server/src/jobs/digestWorker.ts",
+   "language": "typescript",
+   "lines": [
+    9,
+    60
+   ],
+   "summary": "Collects due tasks per user and emails a digest.",
+   "layer": "service",
+   "exported": true,
+   "metrics": {
+    "loc": 52,
+    "branches": 1,
+    "fanIn": 1,
+    "fanOut": 1
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "postgres"
+   ],
+   "complexity": "simple",
+   "id": "table:User",
+   "kind": "table",
+   "name": "User",
+   "path": "prisma/schema.prisma",
+   "language": "prisma",
+   "lines": [
+    8,
+    20
+   ],
+   "summary": "Application users with role and password hash.",
+   "layer": "data"
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "postgres"
+   ],
+   "complexity": "simple",
+   "id": "table:Task",
+   "kind": "table",
+   "name": "Task",
+   "path": "prisma/schema.prisma",
+   "language": "prisma",
+   "lines": [
+    22,
+    42
+   ],
+   "summary": "Tasks with status, assignee, due date and HTML description.",
+   "layer": "data"
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "postgres"
+   ],
+   "complexity": "simple",
+   "id": "table:Webhook",
+   "kind": "table",
+   "name": "Webhook",
+   "path": "prisma/schema.prisma",
+   "language": "prisma",
+   "lines": [
+    44,
+    56
+   ],
+   "summary": "Per-user outbound webhook URLs.",
+   "layer": "data"
+  },
+  {
+   "summarySource": "heuristic",
+   "tags": [
+    "docker"
+   ],
+   "complexity": "simple",
+   "id": "service:postgres",
+   "kind": "service",
+   "name": "postgres",
+   "summary": "PostgreSQL 16 container from docker-compose.",
+   "layer": "infra",
+   "path": "docker-compose.yml",
+   "lines": [
+    14,
+    26
+   ]
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "http",
+    "public"
+   ],
+   "complexity": "simple",
+   "id": "endpoint:POST /api/auth/login",
+   "kind": "endpoint",
+   "name": "POST /api/auth/login",
+   "path": "server/src/routes/auth.ts",
+   "language": "typescript",
+   "lines": [
+    12,
+    44
+   ],
+   "summary": "Exchanges email and password for a session token.",
+   "layer": "api",
+   "endpoint": {
+    "method": "POST",
+    "route": "/api/auth/login",
+    "framework": "express",
+    "auth": "public",
+    "entryType": "http",
+    "handlerId": "function:server/src/routes/auth.ts:loginHandler",
+    "authEvidence": "route is on the public allowlist"
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "http",
+    "guarded"
+   ],
+   "complexity": "simple",
+   "id": "endpoint:POST /api/auth/refresh",
+   "kind": "endpoint",
+   "name": "POST /api/auth/refresh",
+   "path": "server/src/routes/auth.ts",
+   "language": "typescript",
+   "lines": [
+    46,
+    80
+   ],
+   "summary": "Rotates the current session token.",
+   "layer": "api",
+   "endpoint": {
+    "method": "POST",
+    "route": "/api/auth/refresh",
+    "framework": "express",
+    "auth": "guarded",
+    "entryType": "http",
+    "handlerId": "function:server/src/routes/auth.ts:refreshHandler",
+    "authEvidence": "requireAuth middleware at routes/auth.ts:47"
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "http",
+    "guarded"
+   ],
+   "complexity": "simple",
+   "id": "endpoint:GET /api/tasks",
+   "kind": "endpoint",
+   "name": "GET /api/tasks",
+   "path": "server/src/routes/tasks.ts",
+   "language": "typescript",
+   "lines": [
+    10,
+    32
+   ],
+   "summary": "Lists tasks for the signed-in user.",
+   "layer": "api",
+   "endpoint": {
+    "method": "GET",
+    "route": "/api/tasks",
+    "framework": "express",
+    "auth": "guarded",
+    "entryType": "http",
+    "handlerId": "function:server/src/routes/tasks.ts:listTasks",
+    "authEvidence": "router.use(requireAuth) at routes/tasks.ts:8"
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "http",
+    "guarded"
+   ],
+   "complexity": "simple",
+   "id": "endpoint:POST /api/tasks",
+   "kind": "endpoint",
+   "name": "POST /api/tasks",
+   "path": "server/src/routes/tasks.ts",
+   "language": "typescript",
+   "lines": [
+    34,
+    70
+   ],
+   "summary": "Creates a task.",
+   "layer": "api",
+   "endpoint": {
+    "method": "POST",
+    "route": "/api/tasks",
+    "framework": "express",
+    "auth": "guarded",
+    "entryType": "http",
+    "handlerId": "function:server/src/routes/tasks.ts:createTask",
+    "authEvidence": "router.use(requireAuth) at routes/tasks.ts:8"
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "http",
+    "guarded"
+   ],
+   "complexity": "simple",
+   "id": "endpoint:GET /api/tasks/search",
+   "kind": "endpoint",
+   "name": "GET /api/tasks/search",
+   "path": "server/src/routes/tasks.ts",
+   "language": "typescript",
+   "lines": [
+    72,
+    101
+   ],
+   "summary": "Searches tasks by free text.",
+   "layer": "api",
+   "endpoint": {
+    "method": "GET",
+    "route": "/api/tasks/search",
+    "framework": "express",
+    "auth": "guarded",
+    "entryType": "http",
+    "handlerId": "function:server/src/routes/tasks.ts:searchTasksHandler",
+    "authEvidence": "router.use(requireAuth) at routes/tasks.ts:8"
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "http",
+    "guarded"
+   ],
+   "complexity": "simple",
+   "id": "endpoint:PATCH /api/tasks/:id",
+   "kind": "endpoint",
+   "name": "PATCH /api/tasks/:id",
+   "path": "server/src/routes/tasks.ts",
+   "language": "typescript",
+   "lines": [
+    103,
+    140
+   ],
+   "summary": "Updates a task.",
+   "layer": "api",
+   "endpoint": {
+    "method": "PATCH",
+    "route": "/api/tasks/:id",
+    "framework": "express",
+    "auth": "guarded",
+    "entryType": "http",
+    "handlerId": "function:server/src/routes/tasks.ts:updateTask",
+    "authEvidence": "router.use(requireAuth) at routes/tasks.ts:8"
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "http",
+    "unguarded"
+   ],
+   "complexity": "simple",
+   "id": "endpoint:POST /api/admin/export",
+   "kind": "endpoint",
+   "name": "POST /api/admin/export",
+   "path": "server/src/routes/admin.ts",
+   "language": "typescript",
+   "lines": [
+    9,
+    38
+   ],
+   "summary": "Exports a board to PDF.",
+   "layer": "api",
+   "endpoint": {
+    "method": "POST",
+    "route": "/api/admin/export",
+    "framework": "express",
+    "auth": "unguarded",
+    "entryType": "http",
+    "handlerId": "function:server/src/routes/admin.ts:exportBoardHandler",
+    "authEvidence": "no auth middleware found on router or route"
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "http",
+    "guarded"
+   ],
+   "complexity": "simple",
+   "id": "endpoint:POST /api/webhooks/ping",
+   "kind": "endpoint",
+   "name": "POST /api/webhooks/ping",
+   "path": "server/src/routes/webhooks.ts",
+   "language": "typescript",
+   "lines": [
+    38,
+    70
+   ],
+   "summary": "Sends a test ping to the user's webhook.",
+   "layer": "api",
+   "endpoint": {
+    "method": "POST",
+    "route": "/api/webhooks/ping",
+    "framework": "express",
+    "auth": "guarded",
+    "entryType": "http",
+    "handlerId": "function:server/src/routes/webhooks.ts:pingWebhook",
+    "authEvidence": "requireAuth at routes/webhooks.ts:6"
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "http",
+    "unknown"
+   ],
+   "complexity": "simple",
+   "id": "endpoint:GET /api/files/:name",
+   "kind": "endpoint",
+   "name": "GET /api/files/:name",
+   "path": "server/src/routes/files.ts",
+   "language": "typescript",
+   "lines": [
+    7,
+    37
+   ],
+   "summary": "Downloads an attachment by file name.",
+   "layer": "api",
+   "endpoint": {
+    "method": "GET",
+    "route": "/api/files/:name",
+    "framework": "express",
+    "auth": "unknown",
+    "entryType": "http",
+    "handlerId": "function:server/src/routes/files.ts:downloadFile",
+    "authEvidence": "custom check in handler could not be classified"
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "cron"
+   ],
+   "complexity": "simple",
+   "id": "endpoint:cron digest",
+   "kind": "endpoint",
+   "name": "cron 0 7 * * *",
+   "path": "server/src/jobs/digestWorker.ts",
+   "lines": [
+    9,
+    60
+   ],
+   "summary": "Nightly digest job trigger.",
+   "layer": "service",
+   "endpoint": {
+    "route": "0 7 * * *",
+    "auth": "public",
+    "entryType": "cron",
+    "handlerId": "function:server/src/jobs/digestWorker.ts:runDigest"
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "domain"
+   ],
+   "complexity": "moderate",
+   "id": "domain:identity",
+   "kind": "domain",
+   "name": "Identity & Access",
+   "summary": "Who users are and what they may do: login, sessions, tokens.",
+   "domain": {
+    "entities": [
+     "User",
+     "Session"
+    ],
+    "businessRules": [
+     "Sessions expire after 1 hour",
+     "Only admins may export boards"
+    ]
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "domain"
+   ],
+   "complexity": "moderate",
+   "id": "domain:work",
+   "kind": "domain",
+   "name": "Task Management",
+   "summary": "Creating, moving, and finding tasks on the team board.",
+   "domain": {
+    "entities": [
+     "Task",
+     "Board"
+    ],
+    "businessRules": [
+     "Done tasks cannot move back to Todo",
+     "Assignee must be a board member"
+    ]
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "domain"
+   ],
+   "complexity": "moderate",
+   "id": "domain:notify",
+   "kind": "domain",
+   "name": "Notifications",
+   "summary": "Outbound communication: email digests and webhooks.",
+   "domain": {
+    "entities": [
+     "Webhook",
+     "Digest"
+    ]
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "flow"
+   ],
+   "complexity": "simple",
+   "id": "flow:login",
+   "kind": "flow",
+   "name": "Sign in",
+   "summary": "User exchanges credentials for a session token.",
+   "domain": {
+    "entryPoint": "endpoint:POST /api/auth/login",
+    "entryType": "http"
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "flow"
+   ],
+   "complexity": "simple",
+   "id": "flow:move-task",
+   "kind": "flow",
+   "name": "Move a task",
+   "summary": "Drag a card to a new column; server validates the transition.",
+   "domain": {
+    "entryPoint": "endpoint:PATCH /api/tasks/:id",
+    "entryType": "http"
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "flow"
+   ],
+   "complexity": "simple",
+   "id": "flow:search",
+   "kind": "flow",
+   "name": "Search tasks",
+   "summary": "Free-text search across titles and descriptions.",
+   "domain": {
+    "entryPoint": "endpoint:GET /api/tasks/search",
+    "entryType": "http"
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "flow"
+   ],
+   "complexity": "simple",
+   "id": "flow:digest",
+   "kind": "flow",
+   "name": "Nightly digest",
+   "summary": "Email each user their due tasks every morning.",
+   "domain": {
+    "entryPoint": "endpoint:cron digest",
+    "entryType": "cron"
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "step"
+   ],
+   "complexity": "simple",
+   "id": "step:login-submit",
+   "kind": "step",
+   "name": "Submit credentials",
+   "summary": "LoginPage posts email and password."
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "step"
+   ],
+   "complexity": "simple",
+   "id": "step:login-verify",
+   "kind": "step",
+   "name": "Verify password",
+   "summary": "AuthService checks the scrypt hash."
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "step"
+   ],
+   "complexity": "simple",
+   "id": "step:login-issue",
+   "kind": "step",
+   "name": "Issue token",
+   "summary": "A signed JWT is returned and stored client-side."
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "step"
+   ],
+   "complexity": "simple",
+   "id": "step:move-drop",
+   "kind": "step",
+   "name": "Drop card",
+   "summary": "BoardPage fires an optimistic move mutation."
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "step"
+   ],
+   "complexity": "simple",
+   "id": "step:move-validate",
+   "kind": "step",
+   "name": "Validate transition",
+   "summary": "TaskService.moveTask checks the workflow rules."
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "step"
+   ],
+   "complexity": "simple",
+   "id": "step:move-persist",
+   "kind": "step",
+   "name": "Persist",
+   "summary": "taskRepo writes the new status."
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "step"
+   ],
+   "complexity": "simple",
+   "id": "step:search-query",
+   "kind": "step",
+   "name": "Run search",
+   "summary": "Handler forwards q to TaskService.search and taskRepo."
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "step"
+   ],
+   "complexity": "simple",
+   "id": "step:digest-collect",
+   "kind": "step",
+   "name": "Collect due tasks",
+   "summary": "Worker queries due tasks per user."
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "step"
+   ],
+   "complexity": "simple",
+   "id": "step:digest-send",
+   "kind": "step",
+   "name": "Send email",
+   "summary": "Mailer delivers the digest over SMTP."
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "adr"
+   ],
+   "complexity": "simple",
+   "id": "article:architecture",
+   "kind": "article",
+   "name": "Architecture",
+   "path": "docs/architecture.md",
+   "summary": "Why the app is a SPA plus REST API, and how requests flow.",
+   "knowledge": {
+    "wikilinks": [
+     "Auth"
+    ],
+    "category": "design"
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [
+    "security"
+   ],
+   "complexity": "simple",
+   "id": "article:auth",
+   "kind": "article",
+   "name": "Auth",
+   "path": "docs/auth.md",
+   "summary": "Token issuance, rotation and verification.",
+   "knowledge": {
+    "wikilinks": [
+     "Architecture"
+    ],
+    "backlinks": [
+     "Architecture"
+    ],
+    "category": "security"
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "article:readme",
+   "kind": "article",
+   "name": "README",
+   "path": "README.md",
+   "summary": "Setup and deployment guide.",
+   "knowledge": {
+    "category": "ops"
+   }
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "topic:security",
+   "kind": "topic",
+   "name": "Security",
+   "summary": "Authentication, secrets, and hardening."
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "topic:design",
+   "kind": "topic",
+   "name": "Design",
+   "summary": "Architecture and structural decisions."
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "topic:ops",
+   "kind": "topic",
+   "name": "Operations",
+   "summary": "Running, deploying and monitoring."
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "entity:jwt",
+   "kind": "entity",
+   "name": "JWT",
+   "summary": "JSON Web Token used for sessions."
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "entity:postgres",
+   "kind": "entity",
+   "name": "PostgreSQL",
+   "summary": "Primary relational database."
+  },
+  {
+   "summarySource": "llm",
+   "tags": [],
+   "complexity": "simple",
+   "id": "claim:stateless",
+   "kind": "claim",
+   "name": "API is stateless",
+   "summary": "No server-side session store; tokens carry identity."
+  }
+ ],
+ "edges": [
+  {
+   "source": "file:apps/web/src/App.tsx",
+   "target": "function:apps/web/src/App.tsx:App",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/pages/LoginPage.tsx",
+   "target": "function:apps/web/src/pages/LoginPage.tsx:LoginPage",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/pages/BoardPage.tsx",
+   "target": "function:apps/web/src/pages/BoardPage.tsx:BoardPage",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/pages/SettingsPage.tsx",
+   "target": "function:apps/web/src/pages/SettingsPage.tsx:SettingsPage",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/components/TaskCard.tsx",
+   "target": "function:apps/web/src/components/TaskCard.tsx:TaskCard",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/components/TaskList.tsx",
+   "target": "function:apps/web/src/components/TaskList.tsx:TaskList",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/hooks/useAuth.ts",
+   "target": "function:apps/web/src/hooks/useAuth.ts:useAuth",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/hooks/useTasks.ts",
+   "target": "function:apps/web/src/hooks/useTasks.ts:useTasks",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/hooks/useTasks.ts",
+   "target": "function:apps/web/src/hooks/useTasks.ts:useMoveTask",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/lib/apiClient.ts",
+   "target": "class:apps/web/src/lib/apiClient.ts:ApiClient",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "class:apps/web/src/lib/apiClient.ts:ApiClient",
+   "target": "function:apps/web/src/lib/apiClient.ts:request",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/app.ts",
+   "target": "function:server/src/app.ts:createApp",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/index.ts",
+   "target": "function:server/src/index.ts:main",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/auth.ts",
+   "target": "function:server/src/routes/auth.ts:loginHandler",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/auth.ts",
+   "target": "function:server/src/routes/auth.ts:refreshHandler",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/tasks.ts",
+   "target": "function:server/src/routes/tasks.ts:listTasks",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/tasks.ts",
+   "target": "function:server/src/routes/tasks.ts:createTask",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/tasks.ts",
+   "target": "function:server/src/routes/tasks.ts:searchTasksHandler",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/tasks.ts",
+   "target": "function:server/src/routes/tasks.ts:updateTask",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/admin.ts",
+   "target": "function:server/src/routes/admin.ts:exportBoardHandler",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/webhooks.ts",
+   "target": "function:server/src/routes/webhooks.ts:registerWebhook",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/webhooks.ts",
+   "target": "function:server/src/routes/webhooks.ts:pingWebhook",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/files.ts",
+   "target": "function:server/src/routes/files.ts:downloadFile",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/middleware/requireAuth.ts",
+   "target": "function:server/src/middleware/requireAuth.ts:requireAuth",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/middleware/rateLimit.ts",
+   "target": "function:server/src/middleware/rateLimit.ts:rateLimit",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/services/authService.ts",
+   "target": "class:server/src/services/authService.ts:AuthService",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "class:server/src/services/authService.ts:AuthService",
+   "target": "function:server/src/services/authService.ts:verifyPassword",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "class:server/src/services/authService.ts:AuthService",
+   "target": "function:server/src/services/authService.ts:issueToken",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "class:server/src/services/authService.ts:AuthService",
+   "target": "function:server/src/services/authService.ts:verifyToken",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/services/taskService.ts",
+   "target": "class:server/src/services/taskService.ts:TaskService",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "class:server/src/services/taskService.ts:TaskService",
+   "target": "function:server/src/services/taskService.ts:moveTask",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "class:server/src/services/taskService.ts:TaskService",
+   "target": "function:server/src/services/taskService.ts:search",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/services/exportService.ts",
+   "target": "function:server/src/services/exportService.ts:exportPdf",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/services/mailer.ts",
+   "target": "function:server/src/services/mailer.ts:sendMail",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/db/taskRepo.ts",
+   "target": "function:server/src/db/taskRepo.ts:searchTasks",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/db/taskRepo.ts",
+   "target": "function:server/src/db/taskRepo.ts:findTasksForUser",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/db/taskRepo.ts",
+   "target": "function:server/src/db/taskRepo.ts:updateTaskRow",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/db/userRepo.ts",
+   "target": "function:server/src/db/userRepo.ts:findUserByEmail",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/lib/crypto.ts",
+   "target": "function:server/src/lib/crypto.ts:hashToken",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/lib/crypto.ts",
+   "target": "function:server/src/lib/crypto.ts:hashPassword",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/jobs/digestWorker.ts",
+   "target": "function:server/src/jobs/digestWorker.ts:runDigest",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "schema:prisma/schema.prisma",
+   "target": "table:User",
+   "kind": "defines_schema",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "schema:prisma/schema.prisma",
+   "target": "table:Task",
+   "kind": "defines_schema",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "schema:prisma/schema.prisma",
+   "target": "table:Webhook",
+   "kind": "defines_schema",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/auth.ts",
+   "target": "endpoint:POST /api/auth/login",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "endpoint:POST /api/auth/login",
+   "target": "function:server/src/routes/auth.ts:loginHandler",
+   "kind": "routes",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/auth.ts",
+   "target": "endpoint:POST /api/auth/refresh",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "endpoint:POST /api/auth/refresh",
+   "target": "function:server/src/routes/auth.ts:refreshHandler",
+   "kind": "routes",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/tasks.ts",
+   "target": "endpoint:GET /api/tasks",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "endpoint:GET /api/tasks",
+   "target": "function:server/src/routes/tasks.ts:listTasks",
+   "kind": "routes",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/tasks.ts",
+   "target": "endpoint:POST /api/tasks",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "endpoint:POST /api/tasks",
+   "target": "function:server/src/routes/tasks.ts:createTask",
+   "kind": "routes",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/tasks.ts",
+   "target": "endpoint:GET /api/tasks/search",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "endpoint:GET /api/tasks/search",
+   "target": "function:server/src/routes/tasks.ts:searchTasksHandler",
+   "kind": "routes",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/tasks.ts",
+   "target": "endpoint:PATCH /api/tasks/:id",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "endpoint:PATCH /api/tasks/:id",
+   "target": "function:server/src/routes/tasks.ts:updateTask",
+   "kind": "routes",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/admin.ts",
+   "target": "endpoint:POST /api/admin/export",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "endpoint:POST /api/admin/export",
+   "target": "function:server/src/routes/admin.ts:exportBoardHandler",
+   "kind": "routes",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/webhooks.ts",
+   "target": "endpoint:POST /api/webhooks/ping",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "endpoint:POST /api/webhooks/ping",
+   "target": "function:server/src/routes/webhooks.ts:pingWebhook",
+   "kind": "routes",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/files.ts",
+   "target": "endpoint:GET /api/files/:name",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "endpoint:GET /api/files/:name",
+   "target": "function:server/src/routes/files.ts:downloadFile",
+   "kind": "routes",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/jobs/digestWorker.ts",
+   "target": "endpoint:cron digest",
+   "kind": "contains",
+   "weight": 1,
+   "origin": "static"
+  },
+  {
+   "source": "endpoint:cron digest",
+   "target": "function:server/src/jobs/digestWorker.ts:runDigest",
+   "kind": "triggers",
+   "weight": 0.6,
+   "origin": "static"
+  },
+  {
+   "source": "endpoint:POST /api/auth/refresh",
+   "target": "function:server/src/middleware/requireAuth.ts:requireAuth",
+   "kind": "middleware",
+   "weight": 0.6,
+   "origin": "static"
+  },
+  {
+   "source": "endpoint:GET /api/tasks",
+   "target": "function:server/src/middleware/requireAuth.ts:requireAuth",
+   "kind": "middleware",
+   "weight": 0.6,
+   "origin": "static"
+  },
+  {
+   "source": "endpoint:POST /api/tasks",
+   "target": "function:server/src/middleware/requireAuth.ts:requireAuth",
+   "kind": "middleware",
+   "weight": 0.6,
+   "origin": "static"
+  },
+  {
+   "source": "endpoint:GET /api/tasks/search",
+   "target": "function:server/src/middleware/requireAuth.ts:requireAuth",
+   "kind": "middleware",
+   "weight": 0.6,
+   "origin": "static"
+  },
+  {
+   "source": "endpoint:PATCH /api/tasks/:id",
+   "target": "function:server/src/middleware/requireAuth.ts:requireAuth",
+   "kind": "middleware",
+   "weight": 0.6,
+   "origin": "static"
+  },
+  {
+   "source": "endpoint:POST /api/webhooks/ping",
+   "target": "function:server/src/middleware/requireAuth.ts:requireAuth",
+   "kind": "middleware",
+   "weight": 0.6,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/main.tsx",
+   "target": "file:apps/web/src/App.tsx",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/App.tsx",
+   "target": "file:apps/web/src/pages/LoginPage.tsx",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/App.tsx",
+   "target": "file:apps/web/src/pages/BoardPage.tsx",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/App.tsx",
+   "target": "file:apps/web/src/pages/SettingsPage.tsx",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/App.tsx",
+   "target": "file:apps/web/src/hooks/useAuth.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/pages/LoginPage.tsx",
+   "target": "file:apps/web/src/hooks/useAuth.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/pages/BoardPage.tsx",
+   "target": "file:apps/web/src/components/TaskList.tsx",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/pages/BoardPage.tsx",
+   "target": "file:apps/web/src/hooks/useTasks.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/pages/SettingsPage.tsx",
+   "target": "file:apps/web/src/hooks/useAuth.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/pages/SettingsPage.tsx",
+   "target": "file:apps/web/src/components/Avatar.tsx",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/pages/SettingsPage.tsx",
+   "target": "file:apps/web/src/lib/apiClient.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/components/TaskList.tsx",
+   "target": "file:apps/web/src/components/TaskCard.tsx",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/components/TaskCard.tsx",
+   "target": "file:apps/web/src/components/Avatar.tsx",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/hooks/useAuth.ts",
+   "target": "file:apps/web/src/lib/apiClient.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:apps/web/src/hooks/useTasks.ts",
+   "target": "file:apps/web/src/lib/apiClient.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/index.ts",
+   "target": "file:server/src/app.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/index.ts",
+   "target": "config:server/src/config.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/index.ts",
+   "target": "file:server/src/jobs/digestWorker.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/index.ts",
+   "target": "file:server/src/lib/logger.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/app.ts",
+   "target": "file:server/src/routes/auth.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/app.ts",
+   "target": "file:server/src/routes/tasks.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/app.ts",
+   "target": "file:server/src/routes/admin.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/app.ts",
+   "target": "file:server/src/routes/webhooks.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/app.ts",
+   "target": "file:server/src/routes/files.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/app.ts",
+   "target": "file:server/src/middleware/rateLimit.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/app.ts",
+   "target": "file:server/src/lib/logger.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/auth.ts",
+   "target": "file:server/src/services/authService.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/auth.ts",
+   "target": "file:server/src/middleware/requireAuth.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/tasks.ts",
+   "target": "file:server/src/services/taskService.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/tasks.ts",
+   "target": "file:server/src/middleware/requireAuth.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/tasks.ts",
+   "target": "file:server/src/db/taskRepo.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/admin.ts",
+   "target": "file:server/src/services/exportService.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/webhooks.ts",
+   "target": "file:server/src/middleware/requireAuth.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/webhooks.ts",
+   "target": "file:server/src/db/client.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/routes/files.ts",
+   "target": "config:server/src/config.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/middleware/requireAuth.ts",
+   "target": "file:server/src/services/authService.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/services/authService.ts",
+   "target": "file:server/src/db/userRepo.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/services/authService.ts",
+   "target": "file:server/src/lib/crypto.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/services/authService.ts",
+   "target": "config:server/src/config.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/services/taskService.ts",
+   "target": "file:server/src/db/taskRepo.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/services/taskService.ts",
+   "target": "file:server/src/lib/logger.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/services/exportService.ts",
+   "target": "file:server/src/db/taskRepo.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/services/exportService.ts",
+   "target": "file:server/src/lib/logger.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/services/mailer.ts",
+   "target": "config:server/src/config.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/db/taskRepo.ts",
+   "target": "file:server/src/db/client.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/db/userRepo.ts",
+   "target": "file:server/src/db/client.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/jobs/digestWorker.ts",
+   "target": "file:server/src/services/mailer.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/jobs/digestWorker.ts",
+   "target": "file:server/src/db/taskRepo.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/src/jobs/digestWorker.ts",
+   "target": "file:server/src/lib/logger.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/test/tasks.test.ts",
+   "target": "file:server/src/app.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/test/auth.test.ts",
+   "target": "file:server/src/app.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "file:server/test/auth.test.ts",
+   "target": "file:server/src/services/authService.ts",
+   "kind": "imports",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "function:apps/web/src/pages/LoginPage.tsx:LoginPage",
+   "target": "function:apps/web/src/hooks/useAuth.ts:useAuth",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:apps/web/src/pages/BoardPage.tsx:BoardPage",
+   "target": "function:apps/web/src/hooks/useTasks.ts:useTasks",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:apps/web/src/pages/BoardPage.tsx:BoardPage",
+   "target": "function:apps/web/src/hooks/useTasks.ts:useMoveTask",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:apps/web/src/pages/BoardPage.tsx:BoardPage",
+   "target": "function:apps/web/src/components/TaskList.tsx:TaskList",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:apps/web/src/components/TaskList.tsx:TaskList",
+   "target": "function:apps/web/src/components/TaskCard.tsx:TaskCard",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:apps/web/src/hooks/useAuth.ts:useAuth",
+   "target": "function:apps/web/src/lib/apiClient.ts:request",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:apps/web/src/hooks/useTasks.ts:useTasks",
+   "target": "function:apps/web/src/lib/apiClient.ts:request",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:apps/web/src/hooks/useTasks.ts:useMoveTask",
+   "target": "function:apps/web/src/lib/apiClient.ts:request",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/index.ts:main",
+   "target": "function:server/src/app.ts:createApp",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/index.ts:main",
+   "target": "function:server/src/jobs/digestWorker.ts:runDigest",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/routes/auth.ts:loginHandler",
+   "target": "function:server/src/services/authService.ts:verifyPassword",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/routes/auth.ts:loginHandler",
+   "target": "function:server/src/services/authService.ts:issueToken",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/routes/auth.ts:refreshHandler",
+   "target": "function:server/src/services/authService.ts:issueToken",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/middleware/requireAuth.ts:requireAuth",
+   "target": "function:server/src/services/authService.ts:verifyToken",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/services/authService.ts:verifyPassword",
+   "target": "function:server/src/db/userRepo.ts:findUserByEmail",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/services/authService.ts:issueToken",
+   "target": "function:server/src/lib/crypto.ts:hashToken",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/routes/tasks.ts:listTasks",
+   "target": "function:server/src/db/taskRepo.ts:findTasksForUser",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/routes/tasks.ts:searchTasksHandler",
+   "target": "function:server/src/services/taskService.ts:search",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/routes/tasks.ts:updateTask",
+   "target": "function:server/src/services/taskService.ts:moveTask",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/routes/tasks.ts:updateTask",
+   "target": "function:server/src/db/taskRepo.ts:updateTaskRow",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/routes/tasks.ts:createTask",
+   "target": "function:server/src/db/taskRepo.ts:updateTaskRow",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/services/taskService.ts:search",
+   "target": "function:server/src/db/taskRepo.ts:searchTasks",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/services/taskService.ts:moveTask",
+   "target": "function:server/src/db/taskRepo.ts:updateTaskRow",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/routes/admin.ts:exportBoardHandler",
+   "target": "function:server/src/services/exportService.ts:exportPdf",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/services/exportService.ts:exportPdf",
+   "target": "function:server/src/db/taskRepo.ts:findTasksForUser",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/jobs/digestWorker.ts:runDigest",
+   "target": "function:server/src/db/taskRepo.ts:findTasksForUser",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "function:server/src/jobs/digestWorker.ts:runDigest",
+   "target": "function:server/src/services/mailer.ts:sendMail",
+   "kind": "calls",
+   "weight": 0.8,
+   "origin": "static"
+  },
+  {
+   "source": "class:server/src/services/taskService.ts:TaskService",
+   "target": "file:server/src/lib/logger.ts",
+   "kind": "depends_on",
+   "weight": 0.6,
+   "origin": "llm"
+  },
+  {
+   "source": "function:server/src/db/taskRepo.ts:searchTasks",
+   "target": "table:Task",
+   "kind": "reads_from",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "function:server/src/db/taskRepo.ts:findTasksForUser",
+   "target": "table:Task",
+   "kind": "reads_from",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "function:server/src/db/taskRepo.ts:updateTaskRow",
+   "target": "table:Task",
+   "kind": "writes_to",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "function:server/src/db/userRepo.ts:findUserByEmail",
+   "target": "table:User",
+   "kind": "reads_from",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "function:server/src/routes/webhooks.ts:registerWebhook",
+   "target": "table:Webhook",
+   "kind": "writes_to",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "function:server/src/routes/webhooks.ts:pingWebhook",
+   "target": "table:Webhook",
+   "kind": "reads_from",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "file:server/src/db/client.ts",
+   "target": "service:postgres",
+   "kind": "depends_on",
+   "weight": 0.7,
+   "origin": "heuristic"
+  },
+  {
+   "source": "config:server/src/config.ts",
+   "target": "file:server/src/services/authService.ts",
+   "kind": "configures",
+   "weight": 0.7,
+   "origin": "heuristic"
+  },
+  {
+   "source": "config:.env.example",
+   "target": "config:server/src/config.ts",
+   "kind": "documents",
+   "weight": 0.7,
+   "origin": "heuristic"
+  },
+  {
+   "source": "config:apps/web/vite.config.ts",
+   "target": "file:apps/web/src/main.tsx",
+   "kind": "configures",
+   "weight": 0.7,
+   "origin": "heuristic"
+  },
+  {
+   "source": "service:Dockerfile",
+   "target": "file:server/src/index.ts",
+   "kind": "deploys",
+   "weight": 0.7,
+   "origin": "heuristic"
+  },
+  {
+   "source": "config:docker-compose.yml",
+   "target": "service:Dockerfile",
+   "kind": "deploys",
+   "weight": 0.7,
+   "origin": "heuristic"
+  },
+  {
+   "source": "config:docker-compose.yml",
+   "target": "service:postgres",
+   "kind": "provisions",
+   "weight": 0.7,
+   "origin": "heuristic"
+  },
+  {
+   "source": "pipeline:.github/workflows/ci.yml",
+   "target": "service:Dockerfile",
+   "kind": "triggers",
+   "weight": 0.7,
+   "origin": "heuristic"
+  },
+  {
+   "source": "pipeline:.github/workflows/ci.yml",
+   "target": "file:server/test/tasks.test.ts",
+   "kind": "triggers",
+   "weight": 0.7,
+   "origin": "heuristic"
+  },
+  {
+   "source": "file:server/src/routes/tasks.ts",
+   "target": "file:server/test/tasks.test.ts",
+   "kind": "tested_by",
+   "weight": 0.7,
+   "origin": "heuristic"
+  },
+  {
+   "source": "file:server/src/routes/auth.ts",
+   "target": "file:server/test/auth.test.ts",
+   "kind": "tested_by",
+   "weight": 0.7,
+   "origin": "heuristic"
+  },
+  {
+   "source": "file:server/src/middleware/requireAuth.ts",
+   "target": "file:server/test/auth.test.ts",
+   "kind": "tested_by",
+   "weight": 0.7,
+   "origin": "heuristic"
+  },
+  {
+   "source": "document:docs/auth.md",
+   "target": "file:server/src/services/authService.ts",
+   "kind": "documents",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "document:docs/architecture.md",
+   "target": "file:server/src/app.ts",
+   "kind": "documents",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "document:README.md",
+   "target": "config:docker-compose.yml",
+   "kind": "documents",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "schema:prisma/schema.prisma",
+   "target": "file:server/src/db/client.ts",
+   "kind": "configures",
+   "weight": 0.7,
+   "origin": "heuristic"
+  },
+  {
+   "source": "function:apps/web/src/lib/apiClient.ts:request",
+   "target": "endpoint:GET /api/tasks",
+   "kind": "calls",
+   "weight": 0.7,
+   "origin": "llm",
+   "label": "HTTP"
+  },
+  {
+   "source": "function:apps/web/src/hooks/useAuth.ts:useAuth",
+   "target": "endpoint:POST /api/auth/login",
+   "kind": "calls",
+   "weight": 0.7,
+   "origin": "llm",
+   "label": "HTTP"
+  },
+  {
+   "source": "file:server/src/lib/logger.ts",
+   "target": "file:server/src/middleware/rateLimit.ts",
+   "kind": "similar_to",
+   "weight": 0.3,
+   "origin": "llm"
+  },
+  {
+   "source": "domain:identity",
+   "target": "flow:login",
+   "kind": "contains_flow",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "domain:work",
+   "target": "flow:move-task",
+   "kind": "contains_flow",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "domain:work",
+   "target": "flow:search",
+   "kind": "contains_flow",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "domain:notify",
+   "target": "flow:digest",
+   "kind": "contains_flow",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "flow:login",
+   "target": "step:login-submit",
+   "kind": "flow_step",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "flow:login",
+   "target": "step:login-verify",
+   "kind": "flow_step",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "flow:login",
+   "target": "step:login-issue",
+   "kind": "flow_step",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "flow:move-task",
+   "target": "step:move-drop",
+   "kind": "flow_step",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "flow:move-task",
+   "target": "step:move-validate",
+   "kind": "flow_step",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "flow:move-task",
+   "target": "step:move-persist",
+   "kind": "flow_step",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "flow:search",
+   "target": "step:search-query",
+   "kind": "flow_step",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "flow:digest",
+   "target": "step:digest-collect",
+   "kind": "flow_step",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "flow:digest",
+   "target": "step:digest-send",
+   "kind": "flow_step",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "domain:work",
+   "target": "domain:identity",
+   "kind": "cross_domain",
+   "weight": 0.7,
+   "origin": "static",
+   "label": "requires signed-in user"
+  },
+  {
+   "source": "domain:notify",
+   "target": "domain:work",
+   "kind": "cross_domain",
+   "weight": 0.7,
+   "origin": "static",
+   "label": "reads due tasks"
+  },
+  {
+   "source": "step:login-submit",
+   "target": "function:apps/web/src/pages/LoginPage.tsx:LoginPage",
+   "kind": "implemented_by",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "step:login-submit",
+   "target": "function:server/src/routes/auth.ts:loginHandler",
+   "kind": "implemented_by",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "step:login-verify",
+   "target": "function:server/src/services/authService.ts:verifyPassword",
+   "kind": "implemented_by",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "step:login-issue",
+   "target": "function:server/src/services/authService.ts:issueToken",
+   "kind": "implemented_by",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "step:move-drop",
+   "target": "function:apps/web/src/pages/BoardPage.tsx:BoardPage",
+   "kind": "implemented_by",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "step:move-drop",
+   "target": "function:apps/web/src/hooks/useTasks.ts:useMoveTask",
+   "kind": "implemented_by",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "step:move-validate",
+   "target": "function:server/src/services/taskService.ts:moveTask",
+   "kind": "implemented_by",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "step:move-persist",
+   "target": "function:server/src/db/taskRepo.ts:updateTaskRow",
+   "kind": "implemented_by",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "step:search-query",
+   "target": "function:server/src/routes/tasks.ts:searchTasksHandler",
+   "kind": "implemented_by",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "step:search-query",
+   "target": "function:server/src/db/taskRepo.ts:searchTasks",
+   "kind": "implemented_by",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "step:digest-collect",
+   "target": "function:server/src/db/taskRepo.ts:findTasksForUser",
+   "kind": "implemented_by",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "step:digest-send",
+   "target": "function:server/src/services/mailer.ts:sendMail",
+   "kind": "implemented_by",
+   "weight": 0.7,
+   "origin": "llm"
+  },
+  {
+   "source": "article:architecture",
+   "target": "article:auth",
+   "kind": "links_to",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "article:auth",
+   "target": "article:architecture",
+   "kind": "links_to",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "article:readme",
+   "target": "article:architecture",
+   "kind": "links_to",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "article:architecture",
+   "target": "topic:design",
+   "kind": "categorized_under",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "article:auth",
+   "target": "topic:security",
+   "kind": "categorized_under",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "article:readme",
+   "target": "topic:ops",
+   "kind": "categorized_under",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "article:auth",
+   "target": "entity:jwt",
+   "kind": "related",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "article:architecture",
+   "target": "entity:postgres",
+   "kind": "related",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "article:readme",
+   "target": "entity:postgres",
+   "kind": "related",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "article:architecture",
+   "target": "claim:stateless",
+   "kind": "cites",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "claim:stateless",
+   "target": "entity:jwt",
+   "kind": "builds_on",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "entity:jwt",
+   "target": "topic:security",
+   "kind": "categorized_under",
+   "weight": 0.7,
+   "origin": "static"
+  },
+  {
+   "source": "entity:postgres",
+   "target": "topic:ops",
+   "kind": "categorized_under",
+   "weight": 0.7,
+   "origin": "static"
+  }
+ ],
+ "layers": [
+  {
+   "id": "ui",
+   "name": "UI",
+   "description": "React pages, components and hooks rendered in the browser.",
+   "rank": 0,
+   "nodeIds": [
+    "file:apps/web/src/main.tsx",
+    "file:apps/web/src/App.tsx",
+    "file:apps/web/src/pages/LoginPage.tsx",
+    "file:apps/web/src/pages/BoardPage.tsx",
+    "file:apps/web/src/pages/SettingsPage.tsx",
+    "file:apps/web/src/components/TaskCard.tsx",
+    "file:apps/web/src/components/TaskList.tsx",
+    "file:apps/web/src/components/Avatar.tsx",
+    "file:apps/web/src/hooks/useAuth.ts",
+    "file:apps/web/src/hooks/useTasks.ts",
+    "function:apps/web/src/App.tsx:App",
+    "function:apps/web/src/pages/LoginPage.tsx:LoginPage",
+    "function:apps/web/src/pages/BoardPage.tsx:BoardPage",
+    "function:apps/web/src/pages/SettingsPage.tsx:SettingsPage",
+    "function:apps/web/src/components/TaskCard.tsx:TaskCard",
+    "function:apps/web/src/components/TaskList.tsx:TaskList",
+    "function:apps/web/src/hooks/useAuth.ts:useAuth",
+    "function:apps/web/src/hooks/useTasks.ts:useTasks",
+    "function:apps/web/src/hooks/useTasks.ts:useMoveTask"
+   ]
+  },
+  {
+   "id": "api",
+   "name": "API",
+   "description": "HTTP routes and middleware.",
+   "rank": 1,
+   "nodeIds": [
+    "file:server/src/app.ts",
+    "file:server/src/routes/auth.ts",
+    "file:server/src/routes/tasks.ts",
+    "file:server/src/routes/admin.ts",
+    "file:server/src/routes/webhooks.ts",
+    "file:server/src/routes/files.ts",
+    "file:server/src/middleware/requireAuth.ts",
+    "file:server/src/middleware/rateLimit.ts",
+    "function:server/src/app.ts:createApp",
+    "function:server/src/routes/auth.ts:loginHandler",
+    "function:server/src/routes/auth.ts:refreshHandler",
+    "function:server/src/routes/tasks.ts:listTasks",
+    "function:server/src/routes/tasks.ts:createTask",
+    "function:server/src/routes/tasks.ts:searchTasksHandler",
+    "function:server/src/routes/tasks.ts:updateTask",
+    "function:server/src/routes/admin.ts:exportBoardHandler",
+    "function:server/src/routes/webhooks.ts:registerWebhook",
+    "function:server/src/routes/webhooks.ts:pingWebhook",
+    "function:server/src/routes/files.ts:downloadFile",
+    "function:server/src/middleware/requireAuth.ts:requireAuth",
+    "function:server/src/middleware/rateLimit.ts:rateLimit",
+    "endpoint:POST /api/auth/login",
+    "endpoint:POST /api/auth/refresh",
+    "endpoint:GET /api/tasks",
+    "endpoint:POST /api/tasks",
+    "endpoint:GET /api/tasks/search",
+    "endpoint:PATCH /api/tasks/:id",
+    "endpoint:POST /api/admin/export",
+    "endpoint:POST /api/webhooks/ping",
+    "endpoint:GET /api/files/:name"
+   ]
+  },
+  {
+   "id": "service",
+   "name": "Service",
+   "description": "Business logic and background jobs.",
+   "rank": 2,
+   "nodeIds": [
+    "file:server/src/index.ts",
+    "file:server/src/services/authService.ts",
+    "file:server/src/services/taskService.ts",
+    "file:server/src/services/exportService.ts",
+    "file:server/src/services/mailer.ts",
+    "file:server/src/jobs/digestWorker.ts",
+    "function:server/src/index.ts:main",
+    "class:server/src/services/authService.ts:AuthService",
+    "function:server/src/services/authService.ts:verifyPassword",
+    "function:server/src/services/authService.ts:issueToken",
+    "function:server/src/services/authService.ts:verifyToken",
+    "class:server/src/services/taskService.ts:TaskService",
+    "function:server/src/services/taskService.ts:moveTask",
+    "function:server/src/services/taskService.ts:search",
+    "function:server/src/services/exportService.ts:exportPdf",
+    "function:server/src/services/mailer.ts:sendMail",
+    "function:server/src/jobs/digestWorker.ts:runDigest",
+    "endpoint:cron digest"
+   ]
+  },
+  {
+   "id": "data",
+   "name": "Data",
+   "description": "Persistence: Prisma client, repositories and schema.",
+   "rank": 3,
+   "nodeIds": [
+    "schema:prisma/schema.prisma",
+    "file:server/src/db/client.ts",
+    "file:server/src/db/taskRepo.ts",
+    "file:server/src/db/userRepo.ts",
+    "function:server/src/db/taskRepo.ts:searchTasks",
+    "function:server/src/db/taskRepo.ts:findTasksForUser",
+    "function:server/src/db/taskRepo.ts:updateTaskRow",
+    "function:server/src/db/userRepo.ts:findUserByEmail",
+    "table:User",
+    "table:Task",
+    "table:Webhook"
+   ]
+  },
+  {
+   "id": "utility",
+   "name": "Utility",
+   "description": "Cross-cutting helpers.",
+   "rank": 4,
+   "nodeIds": [
+    "file:apps/web/src/lib/apiClient.ts",
+    "file:server/src/lib/crypto.ts",
+    "file:server/src/lib/logger.ts",
+    "class:apps/web/src/lib/apiClient.ts:ApiClient",
+    "function:apps/web/src/lib/apiClient.ts:request",
+    "function:server/src/lib/crypto.ts:hashToken",
+    "function:server/src/lib/crypto.ts:hashPassword"
+   ]
+  },
+  {
+   "id": "infra",
+   "name": "Infra",
+   "description": "Containers, compose and CI.",
+   "rank": 5,
+   "nodeIds": [
+    "service:Dockerfile",
+    "config:docker-compose.yml",
+    "pipeline:.github/workflows/ci.yml",
+    "service:postgres"
+   ]
+  },
+  {
+   "id": "config",
+   "name": "Config",
+   "description": "Configuration and documentation.",
+   "rank": 6,
+   "nodeIds": [
+    "config:package.json",
+    "config:tsconfig.json",
+    "config:.env.example",
+    "document:README.md",
+    "document:docs/architecture.md",
+    "document:docs/auth.md",
+    "config:apps/web/vite.config.ts",
+    "config:server/src/config.ts"
+   ]
+  },
+  {
+   "id": "test",
+   "name": "Test",
+   "description": "Automated tests.",
+   "rank": 7,
+   "nodeIds": [
+    "file:server/test/tasks.test.ts",
+    "file:server/test/auth.test.ts"
+   ]
+  }
+ ],
+ "tour": [
+  {
+   "order": 1,
+   "title": "Start at the entry points",
+   "description": "The browser boots from main.tsx and the API from server/src/index.ts. Everything else hangs off these two.",
+   "nodeIds": [
+    "file:apps/web/src/main.tsx",
+    "file:server/src/index.ts"
+   ],
+   "lesson": "In a split SPA + API repo, find one entry per runtime before reading anything else."
+  },
+  {
+   "order": 2,
+   "title": "How the API is assembled",
+   "description": "createApp wires middleware and mounts each router under /api.",
+   "nodeIds": [
+    "file:server/src/app.ts",
+    "function:server/src/app.ts:createApp",
+    "file:server/src/middleware/rateLimit.ts"
+   ],
+   "lesson": "Express middleware runs in registration order; app.use before a router applies to all of its routes."
+  },
+  {
+   "order": 3,
+   "title": "Authentication",
+   "description": "Login issues a JWT; requireAuth verifies it on every guarded route.",
+   "nodeIds": [
+    "file:server/src/routes/auth.ts",
+    "file:server/src/middleware/requireAuth.ts",
+    "file:server/src/services/authService.ts"
+   ]
+  },
+  {
+   "order": 4,
+   "title": "Tasks: route → service → repo",
+   "description": "The core feature follows a three-tier path. Note the raw SQL in taskRepo.searchTasks.",
+   "nodeIds": [
+    "file:server/src/routes/tasks.ts",
+    "file:server/src/services/taskService.ts",
+    "file:server/src/db/taskRepo.ts"
+   ],
+   "lesson": "Prisma's $queryRawUnsafe skips parameterization; prefer the tagged $queryRaw template."
+  },
+  {
+   "order": 5,
+   "title": "The board UI",
+   "description": "BoardPage loads tasks with useTasks and renders TaskList columns of TaskCards.",
+   "nodeIds": [
+    "file:apps/web/src/pages/BoardPage.tsx",
+    "file:apps/web/src/hooks/useTasks.ts",
+    "file:apps/web/src/components/TaskList.tsx",
+    "file:apps/web/src/components/TaskCard.tsx"
+   ]
+  },
+  {
+   "order": 6,
+   "title": "Shipping it",
+   "description": "The Dockerfile builds both halves; compose adds Postgres; CI runs tests and builds the image.",
+   "nodeIds": [
+    "service:Dockerfile",
+    "config:docker-compose.yml",
+    "pipeline:.github/workflows/ci.yml"
+   ]
+  }
+ ],
+ "security": {
+  "generatedAt": "2026-09-29T17:42:10.000Z",
+  "rulesVersion": "lens-rules/2026.09",
+  "entryPoints": [
+   "endpoint:POST /api/auth/login",
+   "endpoint:POST /api/auth/refresh",
+   "endpoint:GET /api/tasks",
+   "endpoint:POST /api/tasks",
+   "endpoint:GET /api/tasks/search",
+   "endpoint:PATCH /api/tasks/:id",
+   "endpoint:POST /api/admin/export",
+   "endpoint:POST /api/webhooks/ping",
+   "endpoint:GET /api/files/:name",
+   "endpoint:cron digest"
+  ],
+  "findings": [
+   {
+    "id": "LNS-001",
+    "rule": "cmd-exec/child-process-template",
+    "title": "Shell command built from request data",
+    "category": "command-exec",
+    "cwe": "CWE-78",
+    "severity": "critical",
+    "confidence": "high",
+    "path": "server/src/services/exportService.ts",
+    "line": 31,
+    "nodeId": "function:server/src/services/exportService.ts:exportPdf",
+    "message": "exec() receives a string interpolating boardName from the request body.",
+    "snippet": "exec(`wkhtmltopdf ${tmp} /tmp/${boardName}.pdf`)",
+    "tainted": true,
+    "reachableFrom": [
+     "endpoint:POST /api/admin/export"
+    ],
+    "status": "confirmed",
+    "triageNote": "Endpoint is also unguarded. Use execFile with an argument array."
+   },
+   {
+    "id": "LNS-002",
+    "rule": "sqli/raw-query-unsafe",
+    "title": "SQL built with string interpolation",
+    "category": "injection",
+    "cwe": "CWE-89",
+    "severity": "high",
+    "confidence": "high",
+    "path": "server/src/db/taskRepo.ts",
+    "line": 52,
+    "nodeId": "function:server/src/db/taskRepo.ts:searchTasks",
+    "message": "$queryRawUnsafe called with a template containing the search term.",
+    "snippet": "prisma.$queryRawUnsafe(`SELECT * FROM \"Task\" WHERE title ILIKE '%${q}%'`)",
+    "tainted": true,
+    "reachableFrom": [
+     "endpoint:GET /api/tasks/search"
+    ],
+    "status": "open"
+   },
+   {
+    "id": "LNS-003",
+    "rule": "path-traversal/fs-join-param",
+    "title": "File path joined from route parameter",
+    "category": "path-traversal",
+    "cwe": "CWE-22",
+    "severity": "high",
+    "confidence": "medium",
+    "path": "server/src/routes/files.ts",
+    "line": 15,
+    "nodeId": "function:server/src/routes/files.ts:downloadFile",
+    "message": "path.join(uploadsDir, req.params.name) without normalization check.",
+    "snippet": "res.sendFile(path.join(cfg.uploadsDir, req.params.name))",
+    "tainted": true,
+    "reachableFrom": [
+     "endpoint:GET /api/files/:name"
+    ],
+    "status": "open"
+   },
+   {
+    "id": "LNS-004",
+    "rule": "ssrf/fetch-user-url",
+    "title": "Outbound request to user-supplied URL",
+    "category": "ssrf",
+    "cwe": "CWE-918",
+    "severity": "high",
+    "confidence": "medium",
+    "path": "server/src/routes/webhooks.ts",
+    "line": 52,
+    "nodeId": "function:server/src/routes/webhooks.ts:pingWebhook",
+    "message": "fetch() targets a stored webhook URL with no allowlist or private-range block.",
+    "snippet": "await fetch(hook.url, { method: 'POST', body })",
+    "tainted": false,
+    "reachableFrom": [
+     "endpoint:POST /api/webhooks/ping"
+    ],
+    "status": "open"
+   },
+   {
+    "id": "LNS-005",
+    "rule": "secrets/hardcoded-fallback",
+    "title": "Hardcoded JWT secret fallback",
+    "category": "secrets",
+    "cwe": "CWE-798",
+    "severity": "medium",
+    "confidence": "high",
+    "path": "server/src/config.ts",
+    "line": 12,
+    "nodeId": "config:server/src/config.ts",
+    "message": "JWT_SECRET falls back to a literal when the env var is missing.",
+    "snippet": "jwtSecret: process.env.JWT_SECRET ?? 'dev-****'",
+    "tainted": false,
+    "reachableFrom": [],
+    "status": "open"
+   },
+   {
+    "id": "LNS-006",
+    "rule": "crypto/weak-hash",
+    "title": "MD5 used to hash API tokens",
+    "category": "crypto",
+    "cwe": "CWE-328",
+    "severity": "medium",
+    "confidence": "high",
+    "path": "server/src/lib/crypto.ts",
+    "line": 8,
+    "nodeId": "function:server/src/lib/crypto.ts:hashToken",
+    "message": "createHash('md5') is not collision resistant.",
+    "snippet": "createHash('md5').update(token).digest('hex')",
+    "tainted": false,
+    "reachableFrom": [
+     "endpoint:POST /api/auth/login",
+     "endpoint:POST /api/auth/refresh"
+    ],
+    "status": "accepted",
+    "triageNote": "Tokens are random 256-bit; tracked for migration to SHA-256."
+   },
+   {
+    "id": "LNS-007",
+    "rule": "xss/dangerously-set-inner-html",
+    "title": "dangerouslySetInnerHTML with task description",
+    "category": "xss",
+    "cwe": "CWE-79",
+    "severity": "medium",
+    "confidence": "low",
+    "path": "apps/web/src/components/TaskCard.tsx",
+    "line": 41,
+    "nodeId": "function:apps/web/src/components/TaskCard.tsx:TaskCard",
+    "message": "HTML description rendered without visible sanitization.",
+    "snippet": "<div dangerouslySetInnerHTML={{ __html: task.descriptionHtml }} />",
+    "tainted": false,
+    "reachableFrom": [],
+    "status": "false_positive",
+    "triageNote": "Descriptions are sanitized with DOMPurify on write in createTask."
+   },
+   {
+    "id": "LNS-008",
+    "rule": "mass-assignment/spread-body",
+    "title": "Request body spread into update",
+    "category": "mass-assignment",
+    "cwe": "CWE-915",
+    "severity": "low",
+    "confidence": "medium",
+    "path": "server/src/routes/tasks.ts",
+    "line": 118,
+    "nodeId": "function:server/src/routes/tasks.ts:updateTask",
+    "message": "{ ...req.body } passed to updateTaskRow allows setting ownerId.",
+    "snippet": "await updateTaskRow(id, { ...req.body })",
+    "tainted": true,
+    "reachableFrom": [
+     "endpoint:PATCH /api/tasks/:id"
+    ],
+    "status": "open"
+   },
+   {
+    "id": "LNS-009",
+    "rule": "config/rate-limit-memory",
+    "title": "In-memory rate limiter resets per instance",
+    "category": "config",
+    "severity": "info",
+    "confidence": "low",
+    "path": "server/src/middleware/rateLimit.ts",
+    "line": 9,
+    "nodeId": "function:server/src/middleware/rateLimit.ts:rateLimit",
+    "message": "Limits are per-process; multiple replicas multiply the allowance.",
+    "tainted": false,
+    "reachableFrom": [],
+    "status": "open"
+   }
+  ],
+  "exposure": [
+   {
+    "findingId": "LNS-001",
+    "entryId": "endpoint:POST /api/admin/export",
+    "path": [
+     "endpoint:POST /api/admin/export",
+     "function:server/src/routes/admin.ts:exportBoardHandler",
+     "function:server/src/services/exportService.ts:exportPdf"
+    ]
+   },
+   {
+    "findingId": "LNS-002",
+    "entryId": "endpoint:GET /api/tasks/search",
+    "path": [
+     "endpoint:GET /api/tasks/search",
+     "function:server/src/routes/tasks.ts:searchTasksHandler",
+     "function:server/src/services/taskService.ts:search",
+     "function:server/src/db/taskRepo.ts:searchTasks"
+    ]
+   },
+   {
+    "findingId": "LNS-003",
+    "entryId": "endpoint:GET /api/files/:name",
+    "path": [
+     "endpoint:GET /api/files/:name",
+     "function:server/src/routes/files.ts:downloadFile"
+    ]
+   },
+   {
+    "findingId": "LNS-004",
+    "entryId": "endpoint:POST /api/webhooks/ping",
+    "path": [
+     "endpoint:POST /api/webhooks/ping",
+     "function:server/src/routes/webhooks.ts:pingWebhook"
+    ]
+   },
+   {
+    "findingId": "LNS-006",
+    "entryId": "endpoint:POST /api/auth/login",
+    "path": [
+     "endpoint:POST /api/auth/login",
+     "function:server/src/routes/auth.ts:loginHandler",
+     "function:server/src/services/authService.ts:issueToken",
+     "function:server/src/lib/crypto.ts:hashToken"
+    ]
+   },
+   {
+    "findingId": "LNS-006",
+    "entryId": "endpoint:POST /api/auth/refresh",
+    "path": [
+     "endpoint:POST /api/auth/refresh",
+     "function:server/src/routes/auth.ts:refreshHandler",
+     "function:server/src/services/authService.ts:issueToken",
+     "function:server/src/lib/crypto.ts:hashToken"
+    ]
+   },
+   {
+    "findingId": "LNS-008",
+    "entryId": "endpoint:PATCH /api/tasks/:id",
+    "path": [
+     "endpoint:PATCH /api/tasks/:id",
+     "function:server/src/routes/tasks.ts:updateTask"
+    ]
+   }
+  ],
+  "summary": {
+   "bySeverity": {
+    "critical": 1,
+    "high": 3,
+    "medium": 3,
+    "low": 1,
+    "info": 1
+   },
+   "unguardedEndpoints": 1,
+   "guardedEndpoints": 6,
+   "publicEndpoints": 2,
+   "riskScore": 71
+  }
+ },
+ "stats": {
+  "files": 44,
+  "nodes": 124,
+  "edges": 215,
+  "loc": 2857,
+  "byKind": {
+   "config": 6,
+   "document": 3,
+   "service": 2,
+   "pipeline": 1,
+   "schema": 1,
+   "file": 32,
+   "function": 38,
+   "class": 3,
+   "table": 3,
+   "endpoint": 10,
+   "domain": 3,
+   "flow": 4,
+   "step": 9,
+   "article": 3,
+   "topic": 3,
+   "entity": 2,
+   "claim": 1
+  },
+  "enrichedNodes": 117
+ }
+}

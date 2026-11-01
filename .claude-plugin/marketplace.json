@@ -1,0 +1,6 @@
+{
+  "name": "lens",
+  "owner": { "name": "Will Foti" },
+  "metadata": { "description": "Lens: codebase knowledge graphs with a security view." },
+  "plugins": [{ "name": "lens", "source": "./" }]
+}

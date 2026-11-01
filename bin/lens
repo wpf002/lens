@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Lens launcher. Builds on first use, then runs the CLI.
+set -euo pipefail
+SRC="${BASH_SOURCE[0]}"
+while [ -L "$SRC" ]; do DIR="$(cd -P "$(dirname "$SRC")" && pwd)"; SRC="$(readlink "$SRC")"; [[ $SRC != /* ]] && SRC="$DIR/$SRC"; done
+ROOT="$(cd -P "$(dirname "$SRC")/.." && pwd)"
+CLI="$ROOT/packages/cli/dist/index.js"
+if [ ! -f "$CLI" ] || [ ! -f "$ROOT/packages/cli/dist/dashboard.html" ]; then
+  command -v node >/dev/null || { echo "Lens needs Node.js >= 22" >&2; exit 1; }
+  if ! command -v pnpm >/dev/null; then corepack enable >/dev/null 2>&1 || npm i -g pnpm@10 >/dev/null; fi
+  echo "[lens] first run: installing and building (about a minute)…" >&2
+  (cd "$ROOT" && pnpm install --frozen-lockfile >/dev/null 2>&1 || pnpm install >/dev/null) >&2
+  (cd "$ROOT" && pnpm build >/dev/null) >&2
+fi
+exec node "$CLI" "$@"

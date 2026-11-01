@@ -1,0 +1,126 @@
+{
+ "base": "main",
+ "head": "WORKTREE",
+ "generatedAt": "2026-09-30T09:12:00.000Z",
+ "changedFiles": [
+  {
+   "path": "server/src/db/taskRepo.ts",
+   "status": "M",
+   "hunks": [
+    [
+     44,
+     60
+    ]
+   ]
+  },
+  {
+   "path": "server/src/routes/tasks.ts",
+   "status": "M",
+   "hunks": [
+    [
+     80,
+     92
+    ]
+   ]
+  },
+  {
+   "path": "apps/web/src/hooks/useTasks.ts",
+   "status": "M",
+   "hunks": [
+    [
+     10,
+     18
+    ]
+   ]
+  }
+ ],
+ "changed": [
+  "function:server/src/db/taskRepo.ts:searchTasks",
+  "function:server/src/routes/tasks.ts:searchTasksHandler",
+  "function:apps/web/src/hooks/useTasks.ts:useTasks"
+ ],
+ "impacted": [
+  {
+   "id": "file:server/src/db/taskRepo.ts",
+   "distance": 1,
+   "via": "contains"
+  },
+  {
+   "id": "file:server/src/routes/tasks.ts",
+   "distance": 1,
+   "via": "contains"
+  },
+  {
+   "id": "file:apps/web/src/hooks/useTasks.ts",
+   "distance": 1,
+   "via": "contains"
+  },
+  {
+   "id": "function:server/src/services/taskService.ts:search",
+   "distance": 1,
+   "via": "calls"
+  },
+  {
+   "id": "endpoint:GET /api/tasks/search",
+   "distance": 1,
+   "via": "routes"
+  },
+  {
+   "id": "file:server/src/services/taskService.ts",
+   "distance": 2,
+   "via": "imports"
+  },
+  {
+   "id": "function:apps/web/src/pages/BoardPage.tsx:BoardPage",
+   "distance": 1,
+   "via": "calls"
+  },
+  {
+   "id": "file:apps/web/src/pages/BoardPage.tsx",
+   "distance": 2,
+   "via": "imports"
+  },
+  {
+   "id": "file:server/src/services/exportService.ts",
+   "distance": 2,
+   "via": "imports"
+  },
+  {
+   "id": "file:server/src/jobs/digestWorker.ts",
+   "distance": 2,
+   "via": "imports"
+  },
+  {
+   "id": "file:server/test/tasks.test.ts",
+   "distance": 2,
+   "via": "tested_by"
+  },
+  {
+   "id": "file:apps/web/src/App.tsx",
+   "distance": 3,
+   "via": "imports"
+  },
+  {
+   "id": "file:server/src/app.ts",
+   "distance": 3,
+   "via": "imports"
+  }
+ ],
+ "affectedLayers": [
+  "data",
+  "api",
+  "service",
+  "ui"
+ ],
+ "affectedEndpoints": [
+  "endpoint:GET /api/tasks/search"
+ ],
+ "testsToRun": [
+  "file:server/test/tasks.test.ts"
+ ],
+ "securityRelevant": [
+  "LNS-002"
+ ],
+ "risk": "high",
+ "unknownFiles": []
+}

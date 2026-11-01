@@ -1,0 +1,10 @@
+{
+  "name": "lens",
+  "version": "0.1.0",
+  "description": "Turn any codebase into an explorable knowledge graph: dashboard, guided tour, diff impact, and a security view.",
+  "author": { "name": "Will Foti" },
+  "homepage": "https://github.com/wpf002/lens",
+  "repository": "https://github.com/wpf002/lens",
+  "license": "MIT",
+  "keywords": ["codebase-analysis", "knowledge-graph", "architecture", "security", "onboarding", "dashboard"]
+}

@@ -1,0 +1,35 @@
+{
+  "name": "@lens/core",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./browser": { "types": "./dist/browser.d.ts", "default": "./dist/browser.js" },
+    "./types": { "types": "./dist/types.d.ts", "default": "./dist/types.js" },
+    "./search": { "types": "./dist/search.d.ts", "default": "./dist/search.js" },
+    "./graph-utils": { "types": "./dist/graph-utils.d.ts", "default": "./dist/graph-utils.js" },
+    "./schema": { "types": "./dist/schema.d.ts", "default": "./dist/schema.js" }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "ignore": "^7.0.5",
+    "minisearch": "^7.2.0",
+    "tree-sitter-wasms": "0.1.13",
+    "web-tree-sitter": "0.25.10",
+    "yaml": "^2.8.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  }
+}

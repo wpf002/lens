@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.turbo/
+coverage/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+# Lens scratch output (the graph itself is meant to be committed)
+.lens/intermediate/
+.lens/tmp/
+.claude/settings.local.json
+.lens/remediation-backup/

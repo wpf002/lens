@@ -1,0 +1,22 @@
+# Example for OTHER repos: fail a PR when Lens finds new critical issues.
+# Copy to .github/workflows/ in the target repo and adjust.
+name: lens-security
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  lens:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: git clone --depth 1 https://github.com/wpf002/lens.git /tmp/lens && /tmp/lens/bin/lens --version
+      - run: /tmp/lens/bin/lens scan . --json
+      - run: /tmp/lens/bin/lens diff . --base origin/${{ github.base_ref }}
+      - name: Fail on open critical findings
+        run: |
+          n=$(/tmp/lens/bin/lens security . --json --min critical | node -e 'const j=JSON.parse(require("fs").readFileSync(0));console.log(j.findings.filter(f=>f.status==="open"||f.status==="confirmed").length)')
+          echo "open critical findings: $n"
+          test "$n" -eq 0

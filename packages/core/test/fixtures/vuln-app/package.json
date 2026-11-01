@@ -1,0 +1,1 @@
+{ "name": "vuln-app", "description": "Deliberately vulnerable fixture for Lens security tests.", "dependencies": { "express": "^4.19.0", "next": "14.2.0", "jsonwebtoken": "^9.0.0", "@prisma/client": "^5.0.0" } }
