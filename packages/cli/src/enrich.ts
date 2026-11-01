@@ -147,13 +147,13 @@ function childEnv(): NodeJS.ProcessEnv {
   return rest;
 }
 export const LOGIN_HELP = process.env.LENS_WORKSPACE
-  ? "Claude isn't configured on this server. Set ANTHROPIC_API_KEY in Railway's variables, then try again."
+  ? "Claude isn't configured on this server. Set CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY in Railway's variables, then try again."
   : "Claude Code isn't signed in on this computer. Run `claude auth login` in a terminal, then try again.";
 
 /** Fails fast with a fixable message instead of a raw OAuth error from inside the run. */
 export function checkClaudeAuth(): Promise<string | null> {
   if (process.env.LENS_CLAUDE_BIN) return Promise.resolve(null); // test double
-  if (process.env.ANTHROPIC_API_KEY) return Promise.resolve(null);
+  if (process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_CODE_OAUTH_TOKEN) return Promise.resolve(null);
   return new Promise((resolve) => {
     execFile(claudeBin(), ["auth", "status"], { timeout: 15_000 }, (err, stdout) => {
       if (err && (err as NodeJS.ErrnoException).code === "ENOENT") return resolve("Claude Code CLI (`claude`) is not installed or not on PATH.");

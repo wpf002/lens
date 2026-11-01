@@ -105,7 +105,8 @@ For Codex, Gemini CLI, Copilot, Cursor, OpenCode, Cline, Kiro, and Trae, run `./
 | Variable | Purpose |
 |---|---|
 | `LENS_TOKEN` | Login token, 24+ characters. If unset, one is generated into `/data/token` and printed once in the deploy log. |
-| `ANTHROPIC_API_KEY` | AI runs (Generate, Audit, Review, Fix). Billed to that key. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | AI runs on your Claude plan, same as local. Create with `claude setup-token`. |
+| `ANTHROPIC_API_KEY` | Alternative: AI runs billed to an API key. |
 | `GITHUB_TOKEN` | Clone private repos and push fix branches. Needs Contents read/write on those repos. |
 | `LENS_REPO` | Optional `owner/name` to open on first boot. |
 
