@@ -40,41 +40,54 @@ function Hit({ path, line, detail }: { path: string; line?: number; detail: stri
   );
 }
 
-function CheckRow({ c: raw, manual, closed }: { c: HealthCheck; manual: boolean; closed: Set<string> }) {
+function CheckRow({ c, statusOf, canFix }: { c: HealthCheck; statusOf: (id: string) => ItemStatus; canFix: boolean }) {
   const [open, setOpen] = useState(false);
-  const ids = checkHitIds(raw);
-  const hits = raw.hits.filter((_, k) => !closed.has(ids[k]!));
-  const c = { ...raw, hits, count: raw.count - (raw.hits.length - hits.length) };
+  const ids = checkHitIds(c);
+  const rows = c.hits.map((h, k) => ({ h, id: ids[k]!, st: statusOf(ids[k]!) })).sort((a, b) => Number(a.st.kind !== "open") - Number(b.st.kind !== "open"));
+  const left = c.count - rows.filter((r) => r.st.kind !== "open").length;
   return (
     <li className="border-b border-line last:border-b-0">
       <button type="button" className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left hover:bg-raised" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         {open ? <IconChevronDown size={13} className="shrink-0 text-faint" /> : <IconChevronRight size={13} className="shrink-0 text-faint" />}
         <SeverityBadge severity={c.severity as Severity} className="w-[68px] justify-center" />
-        <span className="min-w-0 flex-1 text-[13px] text-fg">{c.title}</span>
-        {manual && (
-          <span className="shrink-0 rounded border border-line px-1.5 font-mono text-[10px] text-faint" title="Needs tests or a refactor; Fix leaves these to you">
-            Manual
-          </span>
-        )}
-        <span className="font-mono text-[12px] text-muted tabular">{c.count}</span>
+        <span className={cx("min-w-0 flex-1 text-[13px]", left > 0 ? "text-fg" : "text-muted")}>{c.title}</span>
+        {left > 0 ? <span className="font-mono text-[12px] text-muted tabular">{left} Open</span> : <StatusTag st={{ kind: "fixed", label: "Closed" }} />}
       </button>
       {open && (
-        <div className="space-y-2 pb-3 pl-[118px] pr-4 text-[12px] text-muted">
-          <ul className="space-y-0.5">
-            {c.hits.map((h, i) => (
-              <li key={i}>
-                <Hit {...h} />
-              </li>
+        <div className="pb-3 pl-[118px] pr-4 text-[12px] text-muted">
+          <p className="pb-2 text-fg">
+            <span className="text-faint">Fix: </span>
+            {renderInlineCode(c.fix)}
+          </p>
+          <ul className="divide-y divide-line border-y border-line">
+            {rows.map(({ h, id, st }) => (
+              <HitRow key={id} h={h} id={id} st={st} canFix={canFix} />
             ))}
-            {c.count > c.hits.length && <li className="text-faint">+{c.count - c.hits.length} more</li>}
           </ul>
-          <div className="flex flex-wrap items-center gap-3">
-            <p className="min-w-0 flex-1 text-fg">
-              <span className="text-faint">Fix: </span>
-              {renderInlineCode(c.fix)}
-            </p>
-          </div>
+          {c.count > c.hits.length && <p className="pt-1.5 text-faint">+{c.count - c.hits.length} more after these are closed</p>}
         </div>
+      )}
+    </li>
+  );
+}
+
+function HitRow({ h, id, st, canFix }: { h: HealthCheck["hits"][number]; id: string; st: ItemStatus; canFix: boolean }) {
+  const reopen = useStore((s) => s.toggleWontFix);
+  const fixing = useStore((s) => s.enrichJob.state === "running" && s.enrichJob.task === "remediate" && s.enrichJob.checkId === id);
+  return (
+    <li className="py-1.5">
+      <div className="flex items-start gap-3">
+        <span className={cx("min-w-0 flex-1", st.kind !== "open" && "opacity-60")}>
+          <Hit {...h} />
+        </span>
+        {fixing ? <span className="shrink-0 animate-pulse text-[11.5px] font-medium text-accent">Fixing…</span> : <StatusTag st={st} />}
+      </div>
+      {st.kind === "open" && st.reason && <p className="pt-0.5 text-[11.5px] text-faint">Skipped: {renderInlineCode(st.reason)}</p>}
+      {st.kind === "open" && canFix && !fixing && <ItemActions source="health" itemId={id} stableId={id} />}
+      {st.kind === "wontfix" && (
+        <button type="button" className="text-[11.5px] text-accent hover:underline" onClick={() => void reopen(id, false)}>
+          Reopen
+        </button>
       )}
     </li>
   );
@@ -152,7 +165,10 @@ function FindingRow({ f, i, st, canFix }: { f: ReviewRecord["findings"][number];
       <button type="button" className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left hover:bg-raised" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         {open ? <IconChevronDown size={13} className="shrink-0 text-faint" /> : <IconChevronRight size={13} className="shrink-0 text-faint" />}
         <SeverityBadge severity={f.severity as Severity} className="w-[68px] justify-center" />
-        <span className={cx("min-w-0 flex-1 text-[13px]", closed ? "text-muted" : "text-fg")}>{f.title}</span>
+        <span className={cx("min-w-0 flex-1 text-[13px]", closed ? "text-muted" : "text-fg")}>
+          {f.title}
+          {st.kind === "open" && st.reason && <span className="block truncate text-[11.5px] text-faint">Skipped: {st.reason}</span>}
+        </span>
         {fixing ? <span className="shrink-0 animate-pulse text-[11.5px] font-medium text-accent">Fixing…</span> : <StatusTag st={st} />}
       </button>
       {open && (
@@ -169,7 +185,7 @@ function FindingRow({ f, i, st, canFix }: { f: ReviewRecord["findings"][number];
           )}
           {st.kind === "open" && st.reason && (
             <p className="text-fg">
-              <span className="text-faint">Last Try: </span>
+              <span className="text-faint">Skipped: </span>
               {renderInlineCode(st.reason)}
             </p>
           )}
@@ -269,13 +285,12 @@ export function HealthView() {
   const review = useStore((s) => s.review);
   const reviewFixes = useStore((s) => s.remediation.review);
   const healthFixes = useStore((s) => s.remediation.health);
-  const fixableChecks = useStore((s) => s.fixable.checks);
   const wontFixList = useStore((s) => s.wontFix);
   const push = useStore((s) => s.push);
   const [showClosed, setShowClosed] = useState(false);
   const health = model.graph.health;
 
-  const { issues, clean, counts, closed, manual, fixed, safe, wontFix } = useMemo(() => {
+  const { issues, clean, counts, manual, fixed, safe, wontFix } = useMemo(() => {
     // Review ids are positions (review-<i>), so only trust records newer than the review. Check-hit ids are content hashes.
     const closed = new Set<string>(wontFixList);
     const fixed = new Set<string>();
@@ -319,6 +334,8 @@ export function HealthView() {
     if (safe.has(id)) return { kind: "safe", reason: safe.get(id)! };
     return { kind: "open", reason: manual.get(id) };
   };
+  const hitStatus = (id: string): ItemStatus =>
+    wontFix.has(id) ? { kind: "wontfix" } : fixed.has(id) ? { kind: "fixed", label: fixedLabel } : safe.has(id) ? { kind: "safe", reason: safe.get(id)! } : { kind: "open", reason: manual.get(id) };
   const findings = (review?.findings ?? []).map((f, i) => ({ f, i, st: statusOf(f, i) })).sort((a, b) => SEV_ORDER[a.f.severity] - SEV_ORDER[b.f.severity]);
   const openFindings = findings.filter((x) => x.st.kind === "open");
   const closedFindings = findings.filter((x) => x.st.kind !== "open");
@@ -393,7 +410,7 @@ export function HealthView() {
           {issues.length ? (
             <ul>
               {issues.map((c) => (
-                <CheckRow key={c.id} c={c} manual={canReview && fixableChecks.length > 0 && !fixableChecks.includes(c.id)} closed={closed} />
+                <CheckRow key={c.id} c={c} statusOf={hitStatus} canFix={canReview} />
               ))}
             </ul>
           ) : (
