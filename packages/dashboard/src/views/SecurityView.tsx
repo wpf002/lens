@@ -234,7 +234,7 @@ export function SecurityView() {
                         )}
                       </td>
                       <td className="px-3 py-2">
-                        <span className={cx("rounded border px-1.5 py-[1px] text-[11px]", f.status === "confirmed" ? "border-[color-mix(in_srgb,var(--sev-critical)_50%,var(--border))] text-[var(--sev-critical)]" : "border-line text-muted")}>
+                        <span className={cx("rounded border px-1.5 py-[1px] text-[10.5px] font-semibold uppercase tracking-wider", f.status === "confirmed" ? "border-[color-mix(in_srgb,var(--sev-critical)_50%,var(--border))] text-[var(--sev-critical)]" : "border-line text-muted")}>
                           {f.status.replace("_", " ")}
                         </span>
                       </td>
