@@ -20,8 +20,9 @@ For each item:
 
 1. Read the code at the evidence locations and confirm the problem is still there.
 2. Decide whether it can be fixed in code within this repo. Skip it when the scanner was wrong or the code already handles it. Start that reason with `Scanner was wrong:` and say why; Lens won't offer it again.
-   - **Skip** anything that needs a secret value, a key rotation, a dashboard or hosting setting (Railway, Vercel, a cloud console), a new paid service, or a product decision. Say what the user should do instead.
-   - **Skip** fixes that need more than about 80 changed lines or touch more than 4 files. Say why, and describe the change.
+   - **Skip** anything that needs a secret value, a key rotation, a dashboard or hosting setting (Railway, Vercel, a cloud console), or a new paid service. Start that reason with `Outside code:` and say what the user should do.
+   - **Skip** only when a correct fix needs a product decision the code can't answer. Start that reason with `Decision:` followed by one short question for the owner. If the item has an `ownerNote`, that is the owner's answer; follow it.
+   - Size is never a reason to skip. Make the complete fix, however many lines or files it takes.
 3. Otherwise, write the smallest correct fix in the style of the surrounding code. Don't refactor, rename, or reformat anything else. Prefer libraries the project already uses; don't add dependencies unless the fix truly needs one (then include the manifest edit).
 
 ## Quality bar
@@ -34,7 +35,7 @@ Every fix must pass a senior engineer's code review. Before writing a fix, check
 - No placeholder logic, TODOs, mock data, or code that looks finished but isn't wired in.
 - No comments that narrate the change ("Fixed…", "Now we…"). Comment only what the code can't say.
 - Matches the file's existing naming, error style, and libraries.
-- If a correct fix needs a test, a refactor, or a design decision beyond the limits above, skip it and say what's needed.
+- If a correct fix needs a test or a refactor, include it. If it needs a design decision only the owner can make, skip it with `Decision:`.
 
 ## Output
 

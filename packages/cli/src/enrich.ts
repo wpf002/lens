@@ -84,10 +84,10 @@ export function estimateCost(task: EnrichTask, files: number): CostEstimate {
   const r = (n: number) => Math.round(n * 100) / 100;
   return { low: r(Math.max(0.05, low)), high: r(Math.max(0.2, high)), limit: r(Math.min(MAX_BUDGET_USD, Math.max(0.5, high * 2))) };
 }
-/** Fix everything: per-item cost from observed batches of 20, with a limit at 1.5x the high end. */
+/** Fix everything with no size limit per fix, with a limit at 1.5x the high end. */
 export function estimateFixAll(items: number): CostEstimate {
-  const low = Math.max(0.3, 0.08 * items);
-  const high = Math.max(0.8, 0.2 * items);
+  const low = Math.max(0.3, 0.15 * items);
+  const high = Math.max(0.8, 0.4 * items);
   return { low: Math.round(low * 100) / 100, high: Math.round(high * 100) / 100, limit: Math.round(Math.min(150, high * 1.5) * 100) / 100 };
 }
 
@@ -636,8 +636,7 @@ export class EnrichRunner {
       "If the write is refused, put the JSON in your final message inside a ```json fence instead.",
       ...(single
         ? [
-            "The owner picked this one item to fix. The 80-line / 4-file size limit does not apply; make the complete fix.",
-            "If the item has an ownerNote, it is the owner's decision on how to fix it. Follow it.",
+            "The owner picked this one item to fix. If it has an ownerNote, that is the owner's decision on how to fix it. Follow it.",
           ]
         : []),
     ].join("\n");
@@ -687,7 +686,7 @@ export class EnrichRunner {
   }
 
   /**
-   * Fix everything fixable on the Health page: batches of FIX_ALL_LIMIT until nothing is
+   * Fix everything fixable on the Health page: batches of FIX_ALL_BATCH until nothing is
    * left, applying and rescanning after each so fixed hits drop out of the next batch.
    * Stops on cancel, at the job's spending limit, or when a batch makes no progress.
    */
@@ -732,7 +731,7 @@ export class EnrichRunner {
     if (!existsSync(instructions)) throw new Error(`missing ${instructions}`);
 
     while (job.state === "running") {
-      const items = (await remediationItems(root, source, undefined, Infinity)).filter((i) => !tried.has(`${i.title}|${i.evidence[0]}`)).slice(0, FIX_ALL_LIMIT);
+      const items = (await remediationItems(root, source, undefined, Infinity)).filter((i) => !tried.has(`${i.title}|${i.evidence[0]}`)).slice(0, FIX_ALL_BATCH);
       if (!items.length) break;
       const remaining = job.budgetUsd - (job.costUsd ?? 0);
       if (remaining < 0.3) {
@@ -859,6 +858,8 @@ export const FIXABLE_CHECKS = new Set(["swallowed-errors", "debug-leftovers", "s
 export const HEALTH_BATCH = 15;
 /** "Fix Issues" on the Health page: one run over the highest-priority items. */
 export const FIX_ALL_LIMIT = 20;
+/** Items per Fix All run. Small, since fixes have no size limit. */
+const FIX_ALL_BATCH = 5;
 const SEV_RANK = { high: 0, medium: 1, low: 2 } as const;
 
 export async function remediationItems(root: string, source: RemediationSource, checkId?: string, limit = FIX_ALL_LIMIT): Promise<Array<{ id: string; title: string; evidence: string[]; fix?: string }>> {

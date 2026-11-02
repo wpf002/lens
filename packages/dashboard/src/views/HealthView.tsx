@@ -5,6 +5,8 @@ import { Evidence } from "../components/Checklist";
 import { IconChevronDown, IconChevronRight } from "../components/icons";
 import { Mascot } from "../components/Mascot";
 import { FixAllButton, Remediation, SAFE } from "../components/Remediation";
+
+const OWNER = /^(decision|outside code):/i;
 import { Button, EmptyState, SeverityBadge, Spinner, cx, renderInlineCode } from "../components/ui";
 import { useStore } from "../store";
 import { SEVERITY_COLOR } from "../utils/colors";
@@ -308,9 +310,9 @@ export function HealthView() {
       for (const x of rec.skipped) {
         if (!fresh(x.itemId)) continue;
         if (SAFE.test(x.reason)) (closed.add(x.itemId), safe.set(x.itemId, x.reason.replace(/^scanner was wrong[:.,]?\s*/i, "")));
-        else manual.set(x.itemId, x.reason);
+        // Only owner questions and outside-code steps need the owner. Other skips stay Open for Fix All to retry.
+        else if (OWNER.test(x.reason)) manual.set(x.itemId, x.reason.replace(/^decision:\s*/i, ""));
       }
-      for (const f of rec.fixes) if (f.status === "proposed" && f.invalid && fresh(f.itemId)) manual.set(f.itemId, `Couldn't apply: ${f.invalid}`);
     }
     const checks = (health?.checks ?? []).map((c) => {
       const left = checkHitIds(c).filter((id) => !closed.has(id)).length;

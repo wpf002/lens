@@ -26,7 +26,7 @@ export function FixAllButton({ source, onOpen }: { source: "audit" | "health"; o
         useStore.setState({ remediateConfirm: { source }, auditConfirm: false, reviewConfirm: false });
       }}
     >
-      <Mascot size={16} /> {aiRunning ? "Running…" : "Remediate"}
+      <Mascot size={16} /> {aiRunning ? "Running…" : "Fix All"}
     </Button>
   );
 }
