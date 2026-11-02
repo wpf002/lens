@@ -78,14 +78,26 @@ export async function listGithubRepos(): Promise<GithubRepo[]> {
   return rows.map((r) => ({ name: r.full_name, private: r.private, pushedAt: r.pushed_at }));
 }
 
-async function api(p: string, token: string): Promise<unknown> {
+async function api(p: string, token: string, method = "GET", body?: unknown): Promise<unknown> {
   const res = await fetch(`https://api.github.com${p}`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "lens" },
+    method,
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "lens", ...(body ? { "Content-Type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
   });
   if (res.status === 401) {
     if (stored?.token === token) await disconnectGithub();
     throw new Error("GitHub access was revoked. Connect GitHub again.");
   }
-  if (!res.ok) throw new Error(`GitHub API ${res.status}`);
-  return res.json();
+  if (!res.ok) {
+    const msg = ((await res.json().catch(() => null)) as { message?: string } | null)?.message;
+    throw new Error(`GitHub: ${msg ? msg.slice(0, 200) : res.status}`);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+/** Authenticated GitHub REST call for the connected account. */
+export function githubApi(p: string, method = "GET", body?: unknown): Promise<unknown> {
+  const t = githubToken();
+  if (!t) throw new Error("Connect GitHub first.");
+  return api(p, t, method, body);
 }

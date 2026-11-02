@@ -18,9 +18,9 @@ import path from "node:path";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { authorizeUrl, disconnectGithub, finishOAuth, githubLogin, githubToken, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
-import { cloneOrUpdate, fixesPatch, listRepos, parseRepo, pushFixes, pushState, reposDir } from "./cloud.js";
+import { cloneOrUpdate, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pushFixes, pushState, reposDir } from "./cloud.js";
 import { SOURCES, applyFixes, loadRemediation, undoFix, type RemediationSource } from "./remediate.js";
-import { EnrichRunner, FIXABLE_CHECKS, HEALTH_BATCH, auditPath, auditWithDecisions, saveDecision, estimateCost, fixAllPlan, remediationItems, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
+import { EnrichRunner, FIXABLE_CHECKS, HEALTH_BATCH, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, fixAllPlan, remediationItems, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import {
   buildBatches, diffImpact, isGitRepo, loadGraph, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
   type EmbeddingStore, type KnowledgeGraph,
@@ -258,8 +258,9 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
       if (req.method === "POST" && enrichMatch) {
         const task = enrichMatch[1] as EnrichTask;
         if (proj.graphFile) return send(res, 409, { error: "AI runs need a scanned project, not --graph" });
-        const body = await readBody(req, 1_000); // the server sets the limit; clients can't raise it
-        const opts = JSON.parse(body || "{}") as { source?: unknown; checkId?: unknown };
+        const body = await readBody(req, 2_000); // the server sets the limit; clients can't raise it
+        const opts = JSON.parse(body || "{}") as { source?: unknown; checkId?: unknown; note?: unknown };
+        const note = typeof opts.note === "string" && opts.note.trim() ? opts.note.trim().slice(0, 600) : undefined;
         const source: RemediationSource = SOURCES.includes(opts.source as RemediationSource) ? (opts.source as RemediationSource) : "audit";
         const checkId = typeof opts.checkId === "string" ? opts.checkId : undefined;
         const budget =
@@ -270,7 +271,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         if (enrich.running) return send(res, 409, { error: "an AI run is already in progress" });
         const authProblem = await checkClaudeAuth();
         if (authProblem) return send(res, 412, { error: authProblem });
-        return send(res, 202, enrich.start(task, proj.root, budget, { source, checkId }));
+        return send(res, 202, enrich.start(task, proj.root, budget, { source, checkId, note }));
       }
       if (req.method === "GET" && url.pathname === "/api/audit") {
         if (proj.graphFile) return send(res, 200, { audit: null });
@@ -320,7 +321,15 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
           fixableChecks: [...FIXABLE_CHECKS],
           healthBatch: HEALTH_BATCH,
           healthItems: health.items,
+          wontFix: await loadWontFix(proj.root),
         });
+      }
+      if (req.method === "POST" && url.pathname === "/api/items/wontfix") {
+        if (proj.graphFile) return send(res, 400, { error: "read-only graph" });
+        const { id, on } = JSON.parse((await readBody(req, 1_000)) || "{}") as { id?: unknown; on?: unknown };
+        if (typeof id !== "string" || !/^[\w.~-]{1,120}$/.test(id) || typeof on !== "boolean") return send(res, 400, { error: "id and on are required" });
+        await setWontFix(proj.root, id, on);
+        return send(res, 200, { wontFix: await loadWontFix(proj.root) });
       }
       if (req.method === "POST" && url.pathname === "/api/remediation/apply") {
         if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });
@@ -377,6 +386,19 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });
         if (!repoName(proj.root)) return send(res, 400, { error: "this project isn't a cloned repo" });
         return send(res, 200, await pushFixes(proj.root));
+      }
+      if (opts.cloud && req.method === "POST" && (url.pathname === "/api/project/pr" || url.pathname === "/api/project/merge")) {
+        if (!githubToken()) return send(res, 400, { error: "Connect GitHub first." });
+        if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });
+        if (!repoName(proj.root)) return send(res, 400, { error: "this project isn't a cloned repo" });
+        if (url.pathname === "/api/project/merge") {
+          const pr = await mergePullRequest(proj.root);
+          await scanAndSave(proj.root);
+          return send(res, 200, { pr });
+        }
+        const titles: string[] = [];
+        for (const src of SOURCES) for (const f of (await loadRemediation(proj.root, src))?.fixes ?? []) if (f.status === "applied") titles.push(`- ${f.title}`);
+        return send(res, 200, { pr: await createPullRequest(proj.root, `Fixes applied by Lens.\n\n${[...new Set(titles)].join("\n")}`) });
       }
       if (req.method === "POST" && url.pathname === "/api/project/pick") {
         if (opts.cloud) return send(res, 501, { error: "enter a GitHub repo instead" });

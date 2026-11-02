@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { fetchPushState, fixesPatch, pushFixesBranch, type ProposedFix, type PushState, type RemediationSource } from "../api";
+import { createPullRequest, fixesPatch, mergePullRequest, type ProposedFix, type RemediationSource } from "../api";
 import { useStore } from "../store";
 import { costRange } from "../utils/format";
 import { IconChevronDown, IconChevronRight } from "./icons";
 import { Mascot } from "./Mascot";
-import { findingItemId, type Severity } from "@lens/core/browser";
+import { checkHitIds, findingItemId, type Severity } from "@lens/core/browser";
 import { useModel } from "../views/hooks";
 import { Button, SeverityBadge, Spinner, cx, renderInlineCode } from "./ui";
 
@@ -115,28 +115,27 @@ export function Remediation({ source }: { source: Source }) {
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     } catch (e) {
-      setPush({ busy: false, error: e instanceof Error ? e.message : String(e) });
+      setPush({ busy: null, error: e instanceof Error ? e.message : String(e) });
     }
   };
-  const [push, setPush] = useState<{ busy: boolean; error?: string }>({ busy: false });
-  // Read from the server so a reload still knows the branch was pushed.
-  const [pushed, setPushed] = useState<PushState>(null);
-  const appliedCount = (mine?.fixes ?? []).filter((f) => f.status === "applied").length;
-  useEffect(() => {
-    if (canPush) void fetchPushState().then(setPushed, () => setPushed(null));
-  }, [canPush, appliedCount]);
-  const doPush = async () => {
-    setPush({ busy: true });
+  const [push, setPush] = useState<{ busy: string | null; error?: string }>({ busy: null });
+  const pushed = useStore((s) => s.push);
+  const refreshPush = useStore((s) => s.refreshPush);
+  const step = async (label: string, fn: () => Promise<unknown>, reload = false) => {
+    setPush({ busy: label });
     try {
-      await pushFixesBranch();
-      setPushed(await fetchPushState());
-      setPush({ busy: false });
+      await fn();
+      await refreshPush();
+      if (reload) await useStore.getState().refreshRemediation();
+      setPush({ busy: null });
     } catch (e) {
-      setPush({ busy: false, error: e instanceof Error ? e.message : String(e) });
+      setPush({ busy: null, error: e instanceof Error ? e.message : String(e) });
     }
   };
-  const running = job.task === "remediate" && job.source === source && job.state === "running";
-  const failed = job.task === "remediate" && job.source === source && job.state === "error";
+  // The Health panel also covers single-item runs on review findings.
+  const ours = (s?: string) => s === source || (source === "health" && s === "review");
+  const running = job.task === "remediate" && ours(job.source) && job.state === "running";
+  const failed = job.task === "remediate" && ours(job.source) && job.state === "error";
   const box = "mx-3 my-2.5 rounded-lg border border-line bg-panel-2 text-[12px]";
 
   if (running) {
@@ -214,12 +213,14 @@ export function Remediation({ source }: { source: Source }) {
   const notFixed = rec.fixes.filter((f) => f.status === "proposed" && f.invalid);
   const safe = rec.skipped.filter((x) => SAFE.test(x.reason));
   const todo = rec.skipped.filter((x) => !SAFE.test(x.reason));
-  if (!applied.length && !ready.length && !notFixed.length && !rec.skipped.length) return null;
+  if (!applied.length && !ready.length && (source === "health" || (!notFixed.length && !rec.skipped.length))) return null;
   const undoAll = async () => {
     for (const { f, src } of appliedBySource) await useStore.getState().undoFix(src, f.id);
   };
   const cost = (mine?.costUsd ?? 0) + (extra?.costUsd ?? 0);
-  const isPushed = !!pushed && !pushed.dirty;
+  const pr = pushed?.pr ?? null;
+  const merged = pr?.state === "merged" && !pushed?.dirty;
+  const inPr = pr?.state === "open";
 
   return (
     <div className={box}>
@@ -238,13 +239,21 @@ export function Remediation({ source }: { source: Source }) {
             ✓ {applied.length} Change{applied.length === 1 ? "" : "s"} · {changedFiles.length} File{changedFiles.length === 1 ? "" : "s"}
           </button>
           <span className="ml-auto flex items-center gap-3 text-[11.5px]">
-            {isPushed ? (
+            {merged ? (
+              <span className="font-medium text-guarded">Merged · #{pr.number}</span>
+            ) : inPr ? (
               <>
-                <span className="text-faint">Pushed</span>
-                {pushed?.compareUrl && (
-                  <a className="font-medium text-accent hover:underline" href={pushed.compareUrl} target="_blank" rel="noreferrer noopener">
-                    Open Pull Request
-                  </a>
+                <a className="text-muted hover:text-fg hover:underline" href={pr.url} target="_blank" rel="noreferrer noopener">
+                  Pull Request #{pr.number}
+                </a>
+                {pushed?.dirty ? (
+                  <Button size="sm" variant="accent" disabled={!!push.busy || op.busy} onClick={() => void step("Updating…", createPullRequest)}>
+                    {push.busy ?? "Update Pull Request"}
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="accent" disabled={!!push.busy || op.busy} onClick={() => void step("Merging…", mergePullRequest, true)}>
+                    {push.busy ?? "Merge"}
+                  </Button>
                 )}
               </>
             ) : (
@@ -258,8 +267,8 @@ export function Remediation({ source }: { source: Source }) {
                   </Button>
                 )}
                 {canPush && (
-                  <Button size="sm" variant="accent" disabled={push.busy || op.busy} onClick={() => void doPush()}>
-                    {push.busy ? "Pushing…" : "Push Branch"}
+                  <Button size="sm" variant="accent" disabled={!!push.busy || op.busy} onClick={() => void step("Creating…", createPullRequest)}>
+                    {push.busy ?? "Create Pull Request"}
                   </Button>
                 )}
               </>
@@ -283,7 +292,7 @@ export function Remediation({ source }: { source: Source }) {
           ))}
         </ul>
       )}
-      {(notFixed.length > 0 || todo.length > 0) && (
+      {source !== "health" && (notFixed.length > 0 || todo.length > 0) && (
         <div className="px-3 py-2">
           <button type="button" className="eyebrow flex items-center gap-1 hover:!text-fg" onClick={() => setShowManual((v) => !v)} aria-expanded={showManual}>
             {showManual ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />} Manual <span className="font-mono text-faint">{notFixed.length + todo.length}</span>
@@ -296,7 +305,7 @@ export function Remediation({ source }: { source: Source }) {
           )}
         </div>
       )}
-      {safe.length > 0 && (
+      {source !== "health" && safe.length > 0 && (
         <div className="border-t border-line px-3 py-2">
           <button type="button" className="eyebrow flex items-center gap-1 hover:!text-fg" onClick={() => setShowSafe((v) => !v)} aria-expanded={showSafe}>
             {showSafe ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />} No Fix Needed <span className="font-mono text-faint">{safe.length}</span>
@@ -345,8 +354,8 @@ function useItemInfo(): ItemInfo {
       return f && { title: f.title, severity: f.severity as Severity, where: `${f.path}${f.line ? `:${f.line}` : ""}` };
     }
     for (const c of checks) {
-      const m = id.startsWith(`${c.id}-`) ? /^\d+$/.exec(id.slice(c.id.length + 1)) : null;
-      const h = m ? c.hits[Number(m[0])] : undefined;
+      if (!id.startsWith(`${c.id}~`)) continue;
+      const h = c.hits[checkHitIds(c).indexOf(id)];
       if (h) return { title: c.title, severity: c.severity as Severity, where: `${h.path}${h.line ? `:${h.line}` : ""}` };
     }
     const f = findings.find((x) => findingItemId(x) === id);

@@ -20,6 +20,9 @@ import {
   type CostEstimate,
   type ReviewRecord,
   startAIJob,
+  fetchPushState,
+  setWontFix,
+  type PushState,
   type AuditRecord,
   type EnrichJob,
   detectMode,
@@ -134,7 +137,7 @@ export interface State {
   setFilters(patch: Partial<Filters>): void;
   resetFilters(): void;
   setSecFilter(patch: Partial<SecurityFilter>): void;
-  selectFinding(id: string | null): void;
+  selectFinding(id: string | null, opts?: { code?: boolean }): void;
   setLayerIsolate(id: string | null): void;
   setExpandedStep(id: string | null): void;
   openPathFinder(from?: string | null): void;
@@ -145,7 +148,13 @@ export interface State {
   closeCode(): void;
   toggleCodeFull(): void;
   pickProject(): Promise<void>;
-  runAI(task: NonNullable<EnrichJob["task"]>, opts?: { source?: RemediationSource; checkId?: string }): Promise<void>;
+  runAI(task: NonNullable<EnrichJob["task"]>, opts?: { source?: RemediationSource; checkId?: string; note?: string }): Promise<void>;
+  /** Health and review items closed as Won't Fix (stable ids). */
+  wontFix: string[];
+  toggleWontFix(id: string, on: boolean): Promise<void>;
+  /** Hosted: where applied fixes are (branch, pull request, merged). */
+  push: PushState;
+  refreshPush(): Promise<void>;
   cancelAI(): Promise<void>;
   watchAI(): void;
   openProject(path: string): Promise<void>;
@@ -241,6 +250,8 @@ export const useStore = create<State>((set, get) => ({
   reviewConfirm: false,
   remediation: {},
   remediationEstimates: {},
+  wontFix: [],
+  push: null,
   fixable: { checks: [], batch: 15, items: 0 },
   remediateConfirm: null,
   fixOp: { busy: false, error: null },
@@ -419,7 +430,7 @@ export const useStore = create<State>((set, get) => ({
   setSecFilter(patch) {
     set({ secFilter: { ...get().secFilter, ...patch } });
   },
-  selectFinding(id) {
+  selectFinding(id, opts) {
     const { model } = get();
     if (!id || !model) {
       set({ selectedFinding: null });
@@ -429,7 +440,7 @@ export const useStore = create<State>((set, get) => ({
     set({ selectedFinding: id, view: "security", tour: { ...get().tour, active: false } });
     if (f) {
       set({ selectedId: f.nodeId, sidebarTab: "node" });
-      get().openCode(f.path, { focusLine: f.line, lines: [f.line, f.line], title: f.title });
+      if (opts?.code !== false) get().openCode(f.path, { focusLine: f.line, lines: [f.line, f.line], title: f.title });
     }
     get().requestFocus(findingFocus(model, id));
   },
@@ -523,9 +534,27 @@ export const useStore = create<State>((set, get) => ({
   async refreshRemediation() {
     try {
       const r = await fetchRemediation();
-      set({ remediation: r.records, remediationEstimates: r.estimates, fixable: { checks: r.fixableChecks, batch: r.healthBatch, items: r.healthItems, plans: r.fixAll } });
+      set({ remediation: r.records, remediationEstimates: r.estimates, wontFix: r.wontFix ?? [], fixable: { checks: r.fixableChecks, batch: r.healthBatch, items: r.healthItems, plans: r.fixAll } });
+      void get().refreshPush();
     } catch {
       /* not served (static export) */
+    }
+  },
+  async toggleWontFix(id, on) {
+    const prev = get().wontFix;
+    set({ wontFix: on ? [...prev, id] : prev.filter((x) => x !== id) });
+    try {
+      set({ wontFix: await setWontFix(id, on) });
+    } catch (err) {
+      set({ wontFix: prev, fixOp: { busy: false, error: err instanceof Error ? err.message : String(err) } });
+    }
+  },
+  async refreshPush() {
+    if (!get().meta?.canPush) return set({ push: null });
+    try {
+      set({ push: await fetchPushState() });
+    } catch {
+      set({ push: null });
     }
   },
   async applyFixes(source, ids) {
@@ -611,7 +640,7 @@ export const useStore = create<State>((set, get) => ({
 async function switchedTo(root: string): Promise<void> {
   rememberProject(root);
   clearFileCache();
-  useStore.setState({ ...PROJECT_RESET, modal: null, projectOp: { busy: null, error: null }, enrichJob: { state: "idle" }, audit: null, review: null, remediation: {}, remediateConfirm: null });
+  useStore.setState({ ...PROJECT_RESET, modal: null, projectOp: { busy: null, error: null }, enrichJob: { state: "idle" }, audit: null, review: null, remediation: {}, wontFix: [], push: null, remediateConfirm: null });
   await useStore.getState().init();
 }
 

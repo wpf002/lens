@@ -148,7 +148,30 @@ export function effectiveAuth(n: GraphNode, triagedPublic: Set<string>): NonNull
  * hashes what stays put (rule, file, message) to keep fixes tied to the same finding.
  */
 export function findingItemId(f: Pick<Finding, "rule" | "path" | "message">): string {
+  return `finding-${fnv(`${f.rule}|${f.path}|${f.message}`)}`;
+}
+
+function fnv(s: string): string {
   let h = 0x811c9dc5;
-  for (const ch of `${f.rule}|${f.path}|${f.message}`) h = Math.imul(h ^ ch.charCodeAt(0), 0x01000193) >>> 0;
-  return `finding-${h.toString(16).padStart(8, "0")}`;
+  for (const ch of s) h = Math.imul(h ^ ch.charCodeAt(0), 0x01000193) >>> 0;
+  return h.toString(16).padStart(8, "0");
+}
+
+/**
+ * Stable remediation ids for a health check's hits, in hit order. Hashes check, file and detail
+ * (plus a counter for repeats in one file) so ids survive rescans and line shifts.
+ */
+export function checkHitIds(c: { id: string; hits: Array<{ path: string; detail: string }> }): string[] {
+  const seen = new Map<string, number>();
+  return c.hits.map((h) => {
+    const key = `${c.id}|${h.path}|${h.detail}`;
+    const n = seen.get(key) ?? 0;
+    seen.set(key, n + 1);
+    return `${c.id}~${fnv(`${key}|${n}`)}`;
+  });
+}
+
+/** Stable key for a Senior Review finding. Its `review-<i>` id is positional and changes per review. */
+export function reviewKey(f: { title: string; path: string }): string {
+  return `rv-${fnv(`${f.title}|${f.path}`)}`;
 }

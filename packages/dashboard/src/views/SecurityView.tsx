@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { findingItemId, type Finding, type Severity } from "@lens/core/browser";
 import { Checklist } from "../components/Checklist";
 import { GraphCanvas } from "../components/GraphCanvas";
@@ -11,6 +11,29 @@ import { buildSecurity, endpointCounts, filterFindings, mergeChecklist, sortFind
 import { useCompiledFilters, useModel, useOverlayInput } from "./hooks";
 
 const STATUSES: Finding["status"][] = ["open", "confirmed", "false_positive", "accepted"];
+const PUBLIC_RULES = new Set(["unauthenticated-mutation", "server-action-no-auth"]);
+/** What the status means for the owner, not the triage term. */
+function statusLabel(f: Pick<Finding, "status" | "rule">, fixed = false): string {
+  if (fixed) return "Fixed";
+  if (f.status === "accepted") return PUBLIC_RULES.has(f.rule) ? "Public Route" : "Won't Fix";
+  if (f.status === "false_positive") return "No Fix Needed";
+  return f.status === "confirmed" ? "Confirmed" : "Open";
+}
+const ROUTE = /^(GET|POST|PUT|PATCH|DELETE)\s+\S+/;
+/** Plain-language meaning per rule. Falls back to the scanner message. */
+const PLAIN: Record<string, string> = {
+  "unauthenticated-mutation": "Anyone can call this route without signing in.",
+  "server-action-no-auth": "Anyone can run this server action without signing in.",
+};
+function decision(f: Finding, fixed: boolean): { text: string; todo: string } {
+  if (fixed) return { text: "Lens fixed this. The change is in your fixes.", todo: "Nothing." };
+  if (f.status === "accepted" && PUBLIC_RULES.has(f.rule))
+    return { text: "Marked public. People use this route before they have an account, so it can't require a login.", todo: "Nothing." };
+  if (f.status === "accepted") return { text: "Marked Won't Fix.", todo: "Nothing." };
+  if (f.status === "false_positive") return { text: "Checked. The code already handles this.", todo: "Nothing." };
+  return { text: "Not fixed yet.", todo: "Run Fix All, or open the code and fix it." };
+}
+const STATUS_OPTION: Record<Finding["status"], string> = { open: "Open", confirmed: "Confirmed", false_positive: "No Fix Needed", accepted: "Won't Fix" };
 
 let lastPanel: "findings" | "checklist" = "findings";
 
@@ -21,6 +44,7 @@ export function SecurityView() {
   const setSf = useStore((s) => s.setSecFilter);
   const selected = useStore((s) => s.selectedFinding);
   const selectFinding = useStore((s) => s.selectFinding);
+  const openCode = useStore((s) => s.openCode);
   const overlay = useOverlayInput();
   const [tableOpen, setTableOpen] = useState(true);
   // Survives the remount when the graph reloads after an AI run.
@@ -38,7 +62,8 @@ export function SecurityView() {
   const sec = model.graph.security;
   const vm = useMemo(() => buildSecurity(model, cf, sf), [model, cf, sf]);
   const all = useMemo(() => sec?.findings ?? [], [sec]);
-  const rows = useMemo(() => sortFindings(filterFindings(all, sf)), [all, sf]);
+  // Open items first; closed ones (fixed, public, no fix needed) sink.
+  const rows = useMemo(() => { const done = (f: Finding) => f.status === "accepted" || f.status === "false_positive" || fixed.has(findingItemId(f)); return sortFindings(filterFindings(all, sf)).sort((a, b) => Number(done(a)) - Number(done(b))); }, [all, sf, fixed]);
   const categories = useMemo(() => [...new Set(all.map((f) => f.category))].sort(), [all]);
   const counts = useMemo(() => endpointCounts(model, checklist), [model, checklist]);
 
@@ -160,7 +185,7 @@ export function SecurityView() {
                 <option value="">All</option>
                 {STATUSES.map((s) => (
                   <option key={s} value={s}>
-                    {s.replace("_", " ")}
+                    {STATUS_OPTION[s]}
                   </option>
                 ))}
               </select>
@@ -179,12 +204,11 @@ export function SecurityView() {
         )}
         {tableOpen && panel === "findings" && (
           <div className="min-h-0 flex-1 overflow-auto">
-            <table className="w-full min-w-[760px] border-collapse text-[12px]">
+            <table className="w-full min-w-[680px] border-collapse text-[12px]">
               <thead className="sticky top-0 z-[1] bg-panel text-left">
-                <tr className="text-[10.5px] uppercase tracking-wide text-muted">
+                <tr className="text-[11px] text-muted">
                   <th className="px-3 py-1.5 font-semibold">Severity</th>
                   <th className="px-2 py-1.5 font-semibold">Finding</th>
-                  <th className="px-2 py-1.5 font-semibold">Rule</th>
                   <th className="px-2 py-1.5 font-semibold">Location</th>
                   <th className="px-2 py-1.5 text-right font-semibold" title="Entry points that reach this finding">Entry Points</th>
                   <th className="px-2 py-1.5 font-semibold" title="User-controlled input reaches this code">User Input</th>
@@ -194,60 +218,72 @@ export function SecurityView() {
               <tbody>
                 {rows.map((f) => {
                   const on = selected === f.id;
+                  const fixedNow = isFixed(f);
+                  const closed = fixedNow || f.status === "accepted" || f.status === "false_positive";
+                  const route = ROUTE.exec(f.message)?.[0];
+                  const d = decision(f, fixedNow);
                   return (
-                    <tr
-                      key={f.id}
-                      onClick={() => selectFinding(on ? null : f.id)}
-                      className={cx("cursor-pointer border-t border-line align-top hover:bg-raised", on && "bg-accent-soft hover:bg-accent-soft")}
-                    >
-                      <td className="px-3 py-2">
-                        <SeverityBadge severity={f.severity} />
-                      </td>
-                      <td className="max-w-[340px] px-2 py-2">
-                        <button
-                          type="button"
-                          className={cx("text-left font-medium hover:text-accent", f.status === "false_positive" && "text-muted line-through")}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            selectFinding(on ? null : f.id);
-                          }}
-                          aria-pressed={on}
-                        >
-                          {f.title}
-                        </button>
-                        <div className="mt-0.5 line-clamp-1 text-[11px] text-muted">{f.message}</div>
-                      </td>
-                      <td className="px-2 py-2 font-mono text-[11px] text-muted">
-                        <div className="text-fg">{f.cwe ?? "—"}</div>
-                        <div className="max-w-[180px] truncate" title={f.rule}>
-                          {f.rule}
-                        </div>
-                      </td>
-                      <td className="px-2 py-2 font-mono text-[11px]">
-                        <span className="text-muted">{f.path.split("/").slice(0, -1).join("/")}/</span>
-                        {f.path.split("/").pop()}:{f.line}
-                      </td>
-                      <td className="px-2 py-2 text-right font-mono tabular">{f.reachableFrom.length || <span className="text-faint">0</span>}</td>
-                      <td className="px-2 py-2">
-                        {f.tainted ? (
-                          <span className="inline-flex items-center gap-1 text-accent" title="User-controlled input reaches this sink">
-                            <IconDroplet size={12} /> Yes
+                    <Fragment key={f.id}>
+                      <tr
+                        onClick={() => selectFinding(on ? null : f.id, { code: false })}
+                        className={cx("cursor-pointer border-t border-line align-top hover:bg-raised", on && "bg-raised", closed && !on && "opacity-70")}
+                        aria-expanded={on}
+                      >
+                        <td className="px-3 py-2.5">
+                          <SeverityBadge severity={f.severity} />
+                        </td>
+                        <td className="max-w-[380px] px-2 py-2.5">
+                          <div className="text-[12.5px] font-medium text-fg">{route ? <span className="font-mono">{route}</span> : f.title}</div>
+                          <div className="mt-0.5 line-clamp-1 text-[11.5px] text-muted">{route ? f.title : f.message}</div>
+                        </td>
+                        <td className="px-2 py-2.5 font-mono text-[11px]" title={f.path}>
+                          <span className="text-fg">{f.path.split("/").pop()}</span>
+                          <span className="text-faint">:{f.line}</span>
+                        </td>
+                        <td className="px-2 py-2.5 text-right font-mono tabular">{f.reachableFrom.length || <span className="text-faint">0</span>}</td>
+                        <td className="px-2 py-2.5">
+                          {f.tainted ? (
+                            <span className="inline-flex items-center gap-1 text-accent" title="User-controlled input reaches this sink">
+                              <IconDroplet size={12} /> Yes
+                            </span>
+                          ) : (
+                            <span className="text-faint">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <span className={cx("inline-flex items-center gap-1.5 whitespace-nowrap text-[11.5px] font-medium", f.status === "confirmed" ? "text-[var(--sev-critical)]" : closed ? "text-guarded" : "text-fg")}>
+                            <span className={cx("h-1.5 w-1.5 rounded-full", f.status === "confirmed" ? "bg-[var(--sev-critical)]" : closed ? "bg-guarded" : "bg-[var(--sev-medium)]")} />
+                            {statusLabel(f, fixedNow)}
                           </span>
-                        ) : (
-                          <span className="text-faint">—</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        <span className={cx("rounded border px-1.5 py-[1px] text-[10.5px] font-semibold uppercase tracking-wider", f.status === "confirmed" ? "border-[color-mix(in_srgb,var(--sev-critical)_50%,var(--border))] text-[var(--sev-critical)]" : "border-line text-muted")}>
-                          {isFixed(f) ? "fixed" : f.status.replace("_", " ")}
-                        </span>
-                      </td>
-                    </tr>
+                        </td>
+                      </tr>
+                      {on && (
+                        <tr className="bg-raised">
+                          <td />
+                          <td colSpan={5} className="px-2 pb-3.5 pt-0">
+                            <dl className="grid max-w-[640px] grid-cols-[110px_1fr] gap-x-4 gap-y-1.5 text-[12.5px]">
+                              <dt className="text-muted">Issue</dt>
+                              <dd className="text-fg">{PLAIN[f.rule] ?? f.message}</dd>
+                              <dt className="text-muted">Decision</dt>
+                              <dd className="text-fg">{d.text}</dd>
+                              <dt className="text-muted">Next Step</dt>
+                              <dd className={d.todo === "Nothing." ? "text-guarded" : "text-fg"}>{d.todo}</dd>
+                            </dl>
+                            <div className="mt-2.5 flex items-center gap-3 text-[11.5px]">
+                              <button type="button" className="font-medium text-accent hover:underline" onClick={() => openCode(f.path, { focusLine: f.line, lines: [f.line, f.line], title: f.title })}>
+                                View Code
+                              </button>
+                              <span className="font-mono text-faint">{f.path}:{f.line}{f.cwe ? ` · ${f.cwe}` : ""}</span>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   );
                 })}
                 {!rows.length && (
                   <tr>
-                    <td colSpan={7} className="px-3 py-6 text-center text-muted">
+                    <td colSpan={6} className="px-3 py-6 text-center text-muted">
                       No findings match these filters.
                     </td>
                   </tr>

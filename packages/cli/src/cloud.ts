@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { createHmac, randomBytes } from "node:crypto";
-import { githubToken } from "./github.js";
+import { githubApi, githubToken } from "./github.js";
 
 export interface RepoRef {
   owner: string;
@@ -96,6 +96,7 @@ export async function pushFixes(root: string): Promise<{ branch: string; compare
     const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
     const next = `lens/fixes-${stamp}-${randomBytes(2).toString("hex")}`;
     await git(root, ["config", "lens.base", branch]);
+    await git(root, ["config", "--unset", "lens.merged"]).catch(() => undefined);
     await git(root, ["checkout", "-b", next]);
     branch = next;
   }
@@ -109,14 +110,73 @@ export async function pushFixes(root: string): Promise<{ branch: string; compare
   return { branch, compareUrl: r ? `https://github.com/${r.owner}/${r.name}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}?expand=1` : null, files };
 }
 
-/** The fixes branch the working copy is on, and whether it has unpushed changes. */
-export async function pushState(root: string): Promise<{ branch: string; dirty: boolean; compareUrl: string | null } | null> {
-  const branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "");
-  if (!branch.startsWith("lens/fixes-")) return null;
-  const dirty = !!(await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"]).catch(() => ""));
-  const base = (await git(root, ["config", "--get", "lens.base"]).catch(() => "")) || "main";
+export interface PullRequest {
+  number: number;
+  url: string;
+  state: "open" | "merged" | "closed";
+}
+export interface PushInfo {
+  /** The `lens/fixes-*` branch, or null once merged. */
+  branch: string | null;
+  dirty: boolean;
+  pr: PullRequest | null;
+}
+
+async function repoOf(root: string): Promise<RepoRef> {
   const r = parseRepo(await git(root, ["remote", "get-url", "origin"]).catch(() => ""));
-  return { branch, dirty, compareUrl: r ? `https://github.com/${r.owner}/${r.name}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}?expand=1` : null };
+  if (!r) throw new Error("This project isn't a GitHub repo.");
+  return r;
+}
+
+async function findPr(r: RepoRef, branch: string): Promise<PullRequest | null> {
+  const rows = (await githubApi(`/repos/${r.owner}/${r.name}/pulls?state=all&head=${encodeURIComponent(`${r.owner}:${branch}`)}`)) as Array<{ number: number; html_url: string; state: string; merged_at: string | null }>;
+  const p = rows[0];
+  return p ? { number: p.number, url: p.html_url, state: p.merged_at ? "merged" : p.state === "open" ? "open" : "closed" } : null;
+}
+
+/** Where the fixes are: unpushed, pushed, in an open pull request, or merged. */
+export async function pushState(root: string): Promise<PushInfo | null> {
+  const branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "");
+  const dirty = !!(await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"]).catch(() => ""));
+  if (!branch.startsWith("lens/fixes-")) {
+    const merged = await git(root, ["config", "--get", "lens.merged"]).catch(() => "");
+    const [n, url] = merged.split(" ");
+    return n && url ? { branch: null, dirty, pr: { number: Number(n), url, state: "merged" } } : null;
+  }
+  const pushed = !!(await git(root, ["rev-parse", "--verify", "-q", `origin/${branch}`]).catch(() => ""));
+  const pr = pushed && githubToken() ? await findPr(await repoOf(root), branch).catch(() => null) : null;
+  return { branch, dirty, pr };
+}
+
+/** Push any new fixes, then open a pull request into the base branch. */
+export async function createPullRequest(root: string, body: string): Promise<PullRequest> {
+  const st = await pushState(root);
+  if (!st?.branch || st.dirty) await pushFixes(root);
+  const branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  const r = await repoOf(root);
+  const existing = await findPr(r, branch);
+  if (existing?.state === "open") return existing;
+  const base = (await git(root, ["config", "--get", "lens.base"]).catch(() => "")) || "main";
+  const p = (await githubApi(`/repos/${r.owner}/${r.name}/pulls`, "POST", { title: "Lens fixes", head: branch, base, body: body.slice(0, 60_000) })) as { number: number; html_url: string };
+  return { number: p.number, url: p.html_url, state: "open" };
+}
+
+/** Squash-merge the open pull request, then move the working copy back to the updated base branch. */
+export async function mergePullRequest(root: string): Promise<PullRequest> {
+  const branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (!branch.startsWith("lens/fixes-")) throw new Error("No fixes branch to merge.");
+  if (await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"])) throw new Error("There are fixes not in the pull request yet. Update it first.");
+  const r = await repoOf(root);
+  const pr = await findPr(r, branch);
+  if (!pr || pr.state !== "open") throw new Error("There's no open pull request for these fixes.");
+  await githubApi(`/repos/${r.owner}/${r.name}/pulls/${pr.number}/merge`, "PUT", { merge_method: "squash" });
+  await githubApi(`/repos/${r.owner}/${r.name}/git/refs/heads/${branch.split("/").map(encodeURIComponent).join("/")}`, "DELETE").catch(() => undefined);
+  const base = (await git(root, ["config", "--get", "lens.base"]).catch(() => "")) || "main";
+  await git(root, ["checkout", base]);
+  await git(root, ["pull", "--ff-only", "--no-tags", "origin", base]);
+  await git(root, ["branch", "-D", branch]).catch(() => undefined);
+  await git(root, ["config", "lens.merged", `${pr.number} ${pr.url}`]);
+  return { ...pr, state: "merged" };
 }
 
 /** Repos already on the volume, as `owner/name`. */

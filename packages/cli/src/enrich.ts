@@ -12,7 +12,7 @@ import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyFixes, buildRecord, loadRemediation, remediationPath, type RemediationSource } from "./remediate.js";
-import { AuditVerdictsSchema, PatchValidationError, RemediationSchema, ReviewFindingsSchema, type ReviewFindings, applyPatch, buildBatches, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts } from "@lens/core";
+import { AuditVerdictsSchema, PatchValidationError, RemediationSchema, ReviewFindingsSchema, type ReviewFindings, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts } from "@lens/core";
 
 export type EnrichTask = "domain" | "audit" | "summaries" | "review" | "remediate";
 
@@ -108,6 +108,18 @@ export async function saveDecision(root: string, id: string, status: Decision | 
   if (status) all[id] = status;
   else delete all[id];
   await writeJsonAtomic(decisionsPath(root), all, true);
+}
+const wontFixPath = (root: string) => path.join(paths(root).dir, "wont-fix.json");
+/** Health and review items the owner closed as Won't Fix, keyed by stable id (check-hit id or reviewKey). */
+export async function loadWontFix(root: string): Promise<string[]> {
+  const v = await readJson<unknown>(wontFixPath(root)).catch(() => null);
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+}
+export async function setWontFix(root: string, id: string, on: boolean) {
+  const all = new Set(await loadWontFix(root));
+  if (on) all.add(id);
+  else all.delete(id);
+  await writeJsonAtomic(wontFixPath(root), [...all].slice(-2000), true);
 }
 /** The audit record with the owner's decisions laid over it. */
 export async function auditWithDecisions(root: string): Promise<(AuditRecord & { items: Array<AuditRecord["items"][number] & { by?: "you" }> }) | null> {
@@ -217,12 +229,12 @@ export class EnrichRunner {
     return this.job?.state === "running";
   }
 
-  start(task: EnrichTask, root: string, budgetUsd: number, opts: { source?: RemediationSource; checkId?: string } = {}): EnrichJob {
+  start(task: EnrichTask, root: string, budgetUsd: number, opts: { source?: RemediationSource; checkId?: string; note?: string } = {}): EnrichJob {
     if (this.running) throw new Error("an AI run is already in progress");
     const job: EnrichJob = { task, root, state: "running", startedAt: Date.now(), budgetUsd, progress: ["Preparing context"], ...(task === "remediate" ? { source: opts.source ?? "audit", checkId: opts.checkId } : {}) };
     this.job = job;
     console.log(`[ai] start ${task}${job.source ? `/${job.source}` : ""} in ${path.basename(root)}, limit $${budgetUsd}`);
-    (task === "audit" ? this.runAudit(job) : task === "summaries" ? this.runSummaries(job) : task === "review" ? this.runReview(job) : task === "remediate" ? this.runRemediate(job, opts.source ?? "audit", opts.checkId) : this.runDomain(job)).catch((e: unknown) => this.finish(job, "error", (e as Error).message));
+    (task === "audit" ? this.runAudit(job) : task === "summaries" ? this.runSummaries(job) : task === "review" ? this.runReview(job) : task === "remediate" ? this.runRemediate(job, opts.source ?? "audit", opts.checkId, opts.note) : this.runDomain(job)).catch((e: unknown) => this.finish(job, "error", (e as Error).message));
     return job;
   }
 
@@ -600,10 +612,12 @@ export class EnrichRunner {
   }
 
   /** Draft fixes as exact text replacements. Writes only its proposal file; the user approves edits. */
-  private async runRemediate(job: EnrichJob, source: RemediationSource, checkId?: string) {
+  private async runRemediate(job: EnrichJob, source: RemediationSource, checkId?: string, note?: string) {
     if (!checkId && source !== "review") return this.runFixAll(job, source);
     const { root } = job;
-    const items = await remediationItems(root, source, checkId);
+    // One item the owner picked: no size limit, and their note rides along as data.
+    const single = !!checkId && (/^review-\d+$/.test(checkId) || checkId.includes("~"));
+    const items = (await remediationItems(root, source, checkId)).map((i) => (single && note ? { ...i, ownerNote: note.slice(0, 600) } : i));
     if (!items.length) throw new Error(source === "audit" ? "nothing in the checklist is failing" : source === "health" ? "that check has nothing to fix" : "the review has no high or medium findings");
     const dir = paths(root).intermediate;
     await fs.mkdir(dir, { recursive: true });
@@ -620,6 +634,12 @@ export class EnrichRunner {
       `Output path: ${outPath}`,
       "Do not edit project files. Write only the output file.",
       "If the write is refused, put the JSON in your final message inside a ```json fence instead.",
+      ...(single
+        ? [
+            "The owner picked this one item to fix. The 80-line / 4-file size limit does not apply; make the complete fix.",
+            "If the item has an ownerNote, it is the owner's decision on how to fix it. Follow it.",
+          ]
+        : []),
     ].join("\n");
     const { code, stderr, resultError, resultText } = await this.runClaude(job, prompt, ["Read", "Grep", "Glob", "Edit(./.lens/intermediate/remediation.json)"], MODEL_ARGS);
     if (job.state !== "running") return;
@@ -635,8 +655,23 @@ export class EnrichRunner {
     const parsed = RemediationSchema.safeParse(raw);
     if (!parsed.success) throw new Error(`proposed fixes failed validation:\n${formatZodError(parsed.error)}`);
     this.push(job, "Checking each edit against the code");
-    const record = buildRecord(root, source, parsed.data, job.costUsd, checkId);
-    await writeJsonAtomic(remediationPath(root, source), record, true);
+    const record = buildRecord(root, source, parsed.data, job.costUsd, checkId, `s${Date.now().toString(36)}`);
+    // Keep earlier results (and their Undo edits); this run replaces only its own items.
+    const prior = await loadRemediation(root, source);
+    const review = source === "review" ? await readJson<ReviewRecord>(reviewPath(root)) : null;
+    const keepPrior = prior && !prior.legacyIds && (!review || prior.generatedAt >= review.generatedAt);
+    if (keepPrior) {
+      const mine = new Set(items.map((i) => i.id));
+      const merged = {
+        ...record,
+        checkId: prior.checkId === checkId ? checkId : undefined,
+        costUsd: (prior.costUsd ?? 0) + (job.costUsd ?? 0),
+        fixes: [...prior.fixes.filter((f) => !mine.has(f.itemId) || f.status === "applied"), ...record.fixes],
+        skipped: [...prior.skipped.filter((x) => !mine.has(x.itemId)), ...record.skipped],
+        edits: { ...prior.edits, ...record.edits },
+      };
+      await writeJsonAtomic(remediationPath(root, source), merged, true);
+    } else await writeJsonAtomic(remediationPath(root, source), record, true);
     await fs.rm(outPath, { force: true });
     // Fix means fix: apply every edit that passed validation. Each file is backed up first, so Undo restores it.
     const valid = record.fixes.filter((f) => !f.invalid).map((f) => f.id);
@@ -680,14 +715,15 @@ export class EnrichRunner {
     const tried = new Set<string>();
     const runTag = Date.now().toString(36);
     // Keep earlier applied fixes (for Undo and the FIXED badge) and skips that found the code already safe.
-    // Health items are numbered per review and per scan, so only audit items (stable ids) carry over.
-    const prior = source === "audit" ? await loadRemediation(root, source) : null;
-    const kept = (prior?.fixes ?? []).filter((f) => f.status === "applied");
+    // Review ids (review-<i>) renumber per review, so only stable ids carry over.
+    const prior = await loadRemediation(root, source);
+    const stable = (id: string) => !id.startsWith("review-");
+    const kept = (prior?.fixes ?? []).filter((f) => f.status === "applied" && stable(f.itemId));
     const merged: Awaited<ReturnType<typeof buildRecord>> = {
       generatedAt: new Date().toISOString(),
       source,
       fixes: kept,
-      skipped: (prior?.skipped ?? []).filter((x) => ALREADY_SAFE.test(x.reason)),
+      skipped: (prior?.skipped ?? []).filter((x) => ALREADY_SAFE.test(x.reason) && stable(x.itemId)),
       edits: Object.fromEntries(kept.map((f) => [f.id, prior?.edits?.[f.id] ?? []])),
     };
     const dir = paths(root).intermediate;
@@ -831,38 +867,58 @@ export async function remediationItems(root: string, source: RemediationSource, 
     // ids keep the finding's position in the review so the dashboard can mark it fixed.
     // checkId "review-<n>" narrows the run to one finding (any severity).
     const only = checkId ? Number(/^review-(\d+)$/.exec(checkId)?.[1] ?? -1) : null;
+    const skip = new Set(await loadWontFix(root));
     return (rec?.findings ?? [])
       .map((f, i) => ({ f, i }))
-      .filter(({ f, i }) => (only === null ? f.severity !== "low" : i === only))
+      .filter(({ f, i }) => (only === null ? f.severity !== "low" && !skip.has(reviewKey(f)) : i === only))
       .map(({ f, i }) => ({ id: `review-${i}`, title: f.title, evidence: [`${f.path}${f.line ? `:${f.line}` : ""} ${f.detail}`], fix: f.fix }));
   }
   if (source === "health" && !checkId) {
     // Review findings not fixed yet, then the worst fixable automatic-check hits, up to FIX_ALL_LIMIT.
     const applied = new Set<string>();
-    for (const s of ["review", "health"] as const) for (const f of (await loadRemediation(root, s))?.fixes ?? []) if (f.status === "applied") applied.add(f.itemId);
+    for (const s of ["review", "health"] as const) {
+      const r = await loadRemediation(root, s);
+      for (const f of r?.fixes ?? []) if (f.status === "applied") applied.add(f.itemId);
+      for (const x of r?.skipped ?? []) if (ALREADY_SAFE.test(x.reason)) applied.add(x.itemId);
+    }
+    const wontFix = new Set(await loadWontFix(root));
     const out: Array<{ id: string; title: string; evidence: string[]; fix?: string }> = [];
     const rec = await readJson<ReviewRecord>(reviewPath(root));
     (rec?.findings ?? [])
       .map((f, i) => ({ f, i }))
-      .filter(({ i }) => !applied.has(`review-${i}`))
+      .filter(({ f, i }) => !applied.has(`review-${i}`) && !wontFix.has(reviewKey(f)))
       .sort((a, b) => SEV_RANK[a.f.severity] - SEV_RANK[b.f.severity])
       .forEach(({ f, i }) => out.push({ id: `review-${i}`, title: f.title, evidence: [`${f.path}${f.line ? `:${f.line}` : ""} ${f.detail}`], fix: f.fix }));
     const g = await loadGraph(root);
     const checks = (g?.health?.checks ?? []).filter((c) => FIXABLE_CHECKS.has(c.id) && c.count > 0).sort((a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity] || b.count - a.count);
     // Round-robin across checks so one noisy check doesn't take every slot.
-    for (let k = 0; out.length < limit && checks.some((c) => c.hits[k]); k++)
-      for (const c of checks) {
-        const h = c.hits[k];
-        if (!h || out.length >= limit) continue;
-        out.push({ id: `${c.id}-${k}`, title: c.title, evidence: [`${h.path}${h.line ? `:${h.line}` : ""} ${h.detail}`], fix: c.fix });
+    const open = checks.map((c) => {
+      const ids = checkHitIds(c);
+      return { c, hits: c.hits.map((h, k) => ({ h, id: ids[k]! })).filter((x) => !applied.has(x.id) && !wontFix.has(x.id)) };
+    });
+    for (let k = 0; out.length < limit && open.some((x) => x.hits[k]); k++)
+      for (const { c, hits } of open) {
+        const x = hits[k];
+        if (!x || out.length >= limit) continue;
+        out.push({ id: x.id, title: c.title, evidence: [`${x.h.path}${x.h.line ? `:${x.h.line}` : ""} ${x.h.detail}`], fix: c.fix });
       }
     return out.slice(0, limit);
+  }
+  if (source === "health" && checkId?.includes("~")) {
+    // One hit, picked by the owner. Any check, not just the batch-fixable ones.
+    const g = await loadGraph(root);
+    const check = g?.health?.checks.find((c) => c.id === checkId.split("~")[0]);
+    if (!check) return [];
+    const k = checkHitIds(check).indexOf(checkId);
+    const h = check.hits[k];
+    return h ? [{ id: checkId, title: check.title, evidence: [`${h.path}${h.line ? `:${h.line}` : ""} ${h.detail}`], fix: check.fix }] : [];
   }
   if (source === "health") {
     const g = await loadGraph(root);
     const check = g?.health?.checks.find((c) => c.id === checkId);
     if (!check || !FIXABLE_CHECKS.has(check.id)) return [];
-    return check.hits.slice(0, HEALTH_BATCH).map((h, i) => ({ id: `${check.id}-${i}`, title: check.title, evidence: [`${h.path}${h.line ? `:${h.line}` : ""} ${h.detail}`], fix: check.fix }));
+    const ids = checkHitIds(check);
+    return check.hits.slice(0, HEALTH_BATCH).map((h, i) => ({ id: ids[i]!, title: check.title, evidence: [`${h.path}${h.line ? `:${h.line}` : ""} ${h.detail}`], fix: check.fix }));
   }
   const g = await loadGraph(root);
   const audit = await auditWithDecisions(root);

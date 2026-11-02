@@ -223,12 +223,12 @@ export function openProjectPath(path: string): Promise<OpenResult> {
   });
 }
 
-export function startAIJob(task: NonNullable<EnrichJob["task"]>, opts: { source?: RemediationSource; checkId?: string } = {}): Promise<EnrichJob> {
+export function startAIJob(task: NonNullable<EnrichJob["task"]>, opts: { source?: RemediationSource; checkId?: string; note?: string } = {}): Promise<EnrichJob> {
   return request(`/api/enrich/${task}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts) });
 }
 export type FixAllPlans = Record<"audit" | "health", { items: number; first: "audit" | "review" | null }>;
 export const fetchRemediation = () =>
-  request<{ records: Record<RemediationSource, RemediationRecord | null>; estimates: Record<RemediationSource, CostEstimate>; fixAll: FixAllPlans; fixableChecks: string[]; healthBatch: number; healthItems: number }>("/api/remediation");
+  request<{ records: Record<RemediationSource, RemediationRecord | null>; estimates: Record<RemediationSource, CostEstimate>; fixAll: FixAllPlans; fixableChecks: string[]; healthBatch: number; healthItems: number; wontFix?: string[] }>("/api/remediation");
 export const applyRemediation = (source: RemediationSource, ids: string[]) =>
   request<{ applied: string[]; failed: Array<{ id: string; error: string }> }>("/api/remediation/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source, ids }) });
 export const undoRemediation = (source: RemediationSource, id: string) =>
@@ -267,7 +267,12 @@ export function listCloudRepos(): Promise<{ repos: string[] }> {
   return request("/api/project/repos");
 }
 
-export type PushState = { branch: string; dirty: boolean; compareUrl: string | null } | null;
+export type PullRequest = { number: number; url: string; state: "open" | "merged" | "closed" };
+export type PushState = { branch: string | null; dirty: boolean; pr: PullRequest | null } | null;
+export const createPullRequest = () => request<{ pr: PullRequest }>("/api/project/pr", { method: "POST" }).then((r) => r.pr);
+export const mergePullRequest = () => request<{ pr: PullRequest }>("/api/project/merge", { method: "POST" }).then((r) => r.pr);
+export const setWontFix = (id: string, on: boolean) =>
+  request<{ wontFix: string[] }>("/api/items/wontfix", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, on }) }).then((r) => r.wontFix);
 export const fetchPushState = () => request<{ state: PushState }>("/api/project/push").then((r) => r.state);
 
 /** Hosted server: commit applied fixes to a `lens/fixes-*` branch and push it. */

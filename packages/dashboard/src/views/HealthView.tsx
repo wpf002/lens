@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { HealthCheck, Severity } from "@lens/core/browser";
+import { checkHitIds, reviewKey, type HealthCheck, type Severity } from "@lens/core/browser";
 import type { ReviewRecord } from "../api";
 import { Evidence } from "../components/Checklist";
 import { IconChevronDown, IconChevronRight } from "../components/icons";
@@ -42,7 +42,8 @@ function Hit({ path, line, detail }: { path: string; line?: number; detail: stri
 
 function CheckRow({ c: raw, manual, closed }: { c: HealthCheck; manual: boolean; closed: Set<string> }) {
   const [open, setOpen] = useState(false);
-  const hits = raw.hits.filter((_, k) => !closed.has(`${raw.id}-${k}`));
+  const ids = checkHitIds(raw);
+  const hits = raw.hits.filter((_, k) => !closed.has(ids[k]!));
   const c = { ...raw, hits, count: raw.count - (raw.hits.length - hits.length) };
   return (
     <li className="border-b border-line last:border-b-0">
@@ -79,17 +80,79 @@ function CheckRow({ c: raw, manual, closed }: { c: HealthCheck; manual: boolean;
   );
 }
 
-function FindingRow({ f, fixed, manual }: { f: ReviewRecord["findings"][number]; fixed: boolean; manual?: string }) {
-  const [open, setOpen] = useState(f.severity === "high" && !fixed);
+type ItemStatus = { kind: "open"; reason?: string } | { kind: "fixed"; label: string } | { kind: "safe"; reason: string } | { kind: "wontfix" };
+
+function StatusTag({ st }: { st: ItemStatus }) {
+  const label = st.kind === "fixed" ? st.label : st.kind === "safe" ? "No Fix Needed" : st.kind === "wontfix" ? "Won't Fix" : "Open";
+  const tone = st.kind === "open" ? "text-fg" : st.kind === "wontfix" ? "text-muted" : "text-guarded";
+  const dot = st.kind === "open" ? "bg-[var(--sev-medium)]" : st.kind === "wontfix" ? "bg-faint" : "bg-guarded";
+  return (
+    <span className={cx("inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11.5px] font-medium", tone)}>
+      <span className={cx("h-1.5 w-1.5 rounded-full", dot)} />
+      {label}
+    </span>
+  );
+}
+
+/** Fix one item with Claude (no size limit, optional decision note), or close it as Won't Fix. */
+function ItemActions({ source, itemId, stableId }: { source: "review" | "health"; itemId: string; stableId: string }) {
+  const job = useStore((s) => s.enrichJob);
+  const run = useStore((s) => s.runAI);
+  const wontFix = useStore((s) => s.toggleWontFix);
+  const [asking, setAsking] = useState(false);
+  const [note, setNote] = useState("");
+  const busy = job.state === "running";
+  if (asking)
+    return (
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        <input
+          autoFocus
+          maxLength={600}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="Decision For Claude (Optional)"
+          className="h-7 min-w-[220px] flex-1 rounded border border-line bg-panel px-2 text-[12px] text-fg placeholder:text-faint"
+        />
+        <span className="text-[11px] text-faint">~$0.40–1</span>
+        <Button size="sm" variant="ghost" onClick={() => setAsking(false)}>
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          variant="accent"
+          disabled={busy}
+          onClick={() => {
+            setAsking(false);
+            void run("remediate", { source, checkId: itemId, note: note.trim() || undefined });
+          }}
+        >
+          Fix
+        </Button>
+      </div>
+    );
+  return (
+    <div className="flex items-center gap-2 pt-1">
+      <Button size="sm" variant="accent" disabled={busy} onClick={() => setAsking(true)}>
+        Fix
+      </Button>
+      <Button size="sm" variant="ghost" onClick={() => void wontFix(stableId, true)}>
+        Won't Fix
+      </Button>
+    </div>
+  );
+}
+
+function FindingRow({ f, i, st, canFix }: { f: ReviewRecord["findings"][number]; i: number; st: ItemStatus; canFix: boolean }) {
+  const [open, setOpen] = useState(false);
+  const reopen = useStore((s) => s.toggleWontFix);
+  const closed = st.kind !== "open";
   return (
     <li className="border-b border-line last:border-b-0">
       <button type="button" className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left hover:bg-raised" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         {open ? <IconChevronDown size={13} className="shrink-0 text-faint" /> : <IconChevronRight size={13} className="shrink-0 text-faint" />}
         <SeverityBadge severity={f.severity as Severity} className="w-[68px] justify-center" />
-        <span className={cx("min-w-0 flex-1 text-[13px]", fixed ? "text-muted line-through" : "text-fg")}>{f.title}</span>
-        {fixed && <span className="shrink-0 rounded border border-guarded/40 px-1.5 font-mono text-[10px] text-guarded">Fixed</span>}
-        {manual && <span className="shrink-0 rounded border border-line px-1.5 font-mono text-[10px] text-faint">Manual</span>}
-        <span className="hidden shrink-0 font-mono text-[11px] text-faint md:block">{f.category.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}</span>
+        <span className={cx("min-w-0 flex-1 text-[13px]", closed ? "text-muted" : "text-fg")}>{f.title}</span>
+        <StatusTag st={st} />
       </button>
       {open && (
         <div className="space-y-1.5 pb-3 pl-[118px] pr-4 text-[12px] text-muted">
@@ -97,19 +160,24 @@ function FindingRow({ f, fixed, manual }: { f: ReviewRecord["findings"][number];
             <Hit path={f.path} line={f.line} detail="" />
           </p>
           <p>{renderInlineCode(f.detail)}</p>
-          <div className="flex flex-wrap items-center gap-3">
-            {f.fix && (
-              <p className="min-w-0 flex-1 text-fg">
-                <span className="text-faint">Fix: </span>
-                {renderInlineCode(f.fix)}
-              </p>
-            )}
-          </div>
-          {manual && (
+          {f.fix && st.kind === "open" && (
             <p className="text-fg">
-              <span className="text-faint">Not Fixed: </span>
-              {renderInlineCode(manual)}
+              <span className="text-faint">Fix: </span>
+              {renderInlineCode(f.fix)}
             </p>
+          )}
+          {st.kind === "open" && st.reason && (
+            <p className="text-fg">
+              <span className="text-faint">Last Try: </span>
+              {renderInlineCode(st.reason)}
+            </p>
+          )}
+          {st.kind === "safe" && <p className="text-fg">{renderInlineCode(st.reason)}</p>}
+          {st.kind === "open" && canFix && <ItemActions source="review" itemId={`review-${i}`} stableId={reviewKey(f)} />}
+          {st.kind === "wontfix" && (
+            <button type="button" className="text-[11.5px] text-accent hover:underline" onClick={() => void reopen(reviewKey(f), false)}>
+              Reopen
+            </button>
           )}
         </div>
       )}
@@ -201,26 +269,31 @@ export function HealthView() {
   const reviewFixes = useStore((s) => s.remediation.review);
   const healthFixes = useStore((s) => s.remediation.health);
   const fixableChecks = useStore((s) => s.fixable.checks);
+  const wontFixList = useStore((s) => s.wontFix);
+  const push = useStore((s) => s.push);
+  const [showClosed, setShowClosed] = useState(false);
   const health = model.graph.health;
 
-  const scanAt = model.graph.security?.generatedAt;
-  const { issues, clean, counts, closed, manual } = useMemo(() => {
-    // Item ids are positions (review-<i>, <check>-<k>), so only trust records newer than what they index.
-    const closed = new Set<string>();
+  const { issues, clean, counts, closed, manual, fixed, safe, wontFix } = useMemo(() => {
+    // Review ids are positions (review-<i>), so only trust records newer than the review. Check-hit ids are content hashes.
+    const closed = new Set<string>(wontFixList);
+    const fixed = new Set<string>();
+    const safe = new Map<string, string>();
+    const wontFix = new Set(wontFixList);
     const manual = new Map<string, string>();
     for (const rec of [reviewFixes, healthFixes]) {
       if (!rec) continue;
-      const fresh = (id: string) => (id.startsWith("review-") ? !review || rec.generatedAt >= review.generatedAt : !scanAt || rec.generatedAt >= scanAt);
-      for (const f of rec.fixes) if (f.status === "applied" && fresh(f.itemId)) closed.add(f.itemId);
+      const fresh = (id: string) => !id.startsWith("review-") || !review || rec.generatedAt >= review.generatedAt;
+      for (const f of rec.fixes) if (f.status === "applied" && fresh(f.itemId)) (closed.add(f.itemId), fixed.add(f.itemId));
       for (const x of rec.skipped) {
         if (!fresh(x.itemId)) continue;
-        if (SAFE.test(x.reason)) closed.add(x.itemId);
+        if (SAFE.test(x.reason)) (closed.add(x.itemId), safe.set(x.itemId, x.reason.replace(/^scanner was wrong[:.,]?\s*/i, "")));
         else manual.set(x.itemId, x.reason);
       }
       for (const f of rec.fixes) if (f.status === "proposed" && f.invalid && fresh(f.itemId)) manual.set(f.itemId, `Couldn't apply: ${f.invalid}`);
     }
     const checks = (health?.checks ?? []).map((c) => {
-      const left = c.hits.filter((_, k) => !closed.has(`${c.id}-${k}`)).length;
+      const left = checkHitIds(c).filter((id) => !closed.has(id)).length;
       return { c, count: c.count - (c.hits.length - left) };
     });
     const issues = checks.filter((x) => x.count > 0).map((x) => x.c).sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity] || b.count - a.count);
@@ -228,20 +301,26 @@ export function HealthView() {
     const counts = { high: 0, medium: 0, low: 0 };
     for (const x of checks) if (x.count > 0) counts[x.c.severity] += x.count;
     (review?.findings ?? []).forEach((f, i) => {
-      if (!closed.has(`review-${i}`)) counts[f.severity] += 1;
+      if (!closed.has(`review-${i}`) && !wontFix.has(reviewKey(f))) counts[f.severity] += 1;
     });
-    return { issues, clean, counts, closed, manual };
-  }, [health, review, reviewFixes, healthFixes, scanAt]);
+    return { issues, clean, counts, closed, manual, fixed, safe, wontFix };
+  }, [health, review, reviewFixes, healthFixes, wontFixList]);
 
   if (!health) {
     return <EmptyState title="No health report" body="Rescan this project with the current version of Lens to run the code health checks." />;
   }
   const score = health.score;
-  // Fixed and no-fix-needed findings drop out; the fixes panel keeps the record.
-  const findings = (review?.findings ?? [])
-    .map((f, i) => ({ f, i, fixed: false, manual: manual.get(`review-${i}`) }))
-    .filter((x) => !closed.has(`review-${x.i}`))
-    .sort((a, b) => SEV_ORDER[a.f.severity] - SEV_ORDER[b.f.severity]);
+  const fixedLabel = push?.pr?.state === "merged" && !push.dirty ? "Merged" : push?.pr?.state === "open" ? `In PR #${push.pr.number}` : "Fixed";
+  const statusOf = (f: ReviewRecord["findings"][number], i: number): ItemStatus => {
+    const id = `review-${i}`;
+    if (wontFix.has(reviewKey(f))) return { kind: "wontfix" };
+    if (fixed.has(id)) return { kind: "fixed", label: fixedLabel };
+    if (safe.has(id)) return { kind: "safe", reason: safe.get(id)! };
+    return { kind: "open", reason: manual.get(id) };
+  };
+  const findings = (review?.findings ?? []).map((f, i) => ({ f, i, st: statusOf(f, i) })).sort((a, b) => SEV_ORDER[a.f.severity] - SEV_ORDER[b.f.severity]);
+  const openFindings = findings.filter((x) => x.st.kind === "open");
+  const closedFindings = findings.filter((x) => x.st.kind !== "open");
   const canReview = mode === "server" && !!meta?.canEnrich;
 
   return (
@@ -280,12 +359,32 @@ export function HealthView() {
         </div>
         {findings.length > 0 && (
           <section className="mt-3">
-            <h3 className="eyebrow border-b border-line px-4 py-1.5">Senior Review</h3>
+            <h3 className="eyebrow flex items-center gap-3 border-b border-line px-4 py-1.5">
+              Senior Review
+              <span className="font-mono normal-case tracking-normal text-faint">
+                {openFindings.length} Open · {closedFindings.length} Closed
+              </span>
+            </h3>
             <ul>
-              {findings.map(({ f, i, fixed, manual }) => (
-                <FindingRow key={i} f={f} fixed={fixed} manual={manual} />
+              {openFindings.map(({ f, i, st }) => (
+                <FindingRow key={i} f={f} i={i} st={st} canFix={canReview} />
               ))}
             </ul>
+            {!openFindings.length && <p className="px-4 py-3 text-[12.5px] text-guarded">All closed.</p>}
+            {closedFindings.length > 0 && (
+              <>
+                <button type="button" className="eyebrow flex w-full items-center gap-1 border-t border-line px-4 py-2 hover:!text-fg" onClick={() => setShowClosed((v) => !v)} aria-expanded={showClosed}>
+                  {showClosed ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />} Closed <span className="font-mono text-faint">{closedFindings.length}</span>
+                </button>
+                {showClosed && (
+                  <ul className="border-t border-line">
+                    {closedFindings.map(({ f, i, st }) => (
+                      <FindingRow key={i} f={f} i={i} st={st} canFix={canReview} />
+                    ))}
+                  </ul>
+                )}
+              </>
+            )}
           </section>
         )}
         <section className="mt-3">
