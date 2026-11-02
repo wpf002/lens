@@ -17,7 +17,7 @@ import { promises as fs, statSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { cloneOrUpdate, listRepos, parseRepo, pushFixes, reposDir } from "./cloud.js";
+import { cloneOrUpdate, fixesPatch, listRepos, parseRepo, pushFixes, reposDir } from "./cloud.js";
 import { SOURCES, applyFixes, loadRemediation, undoFix, type RemediationSource } from "./remediate.js";
 import { EnrichRunner, FIXABLE_CHECKS, HEALTH_BATCH, auditPath, estimateCost, estimateFixAll, fixableCount, remediationItems, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import {
@@ -172,7 +172,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
 
       if (req.method === "GET" && url.pathname === "/api/meta") {
         const { graph } = await getGraph();
-        return send(res, 200, { project: graph.project, hasEmbeddings: !!proj.embeddings, git: proj.git, root: proj.root, canPick: !opts.cloud && process.platform === "darwin", cloud: !!opts.cloud, repo: repoName(proj.root), canEnrich: !proj.graphFile, enrichEstimates: estimatesFor(graph) });
+        return send(res, 200, { project: graph.project, hasEmbeddings: !!proj.embeddings, git: proj.git, root: proj.root, canPick: !opts.cloud && process.platform === "darwin", cloud: !!opts.cloud, canPush: !!opts.cloud && !!process.env.GITHUB_TOKEN, repo: repoName(proj.root), canEnrich: !proj.graphFile, enrichEstimates: estimatesFor(graph) });
       }
       if (req.method === "GET" && url.pathname === "/api/graph") {
         const { graph } = await getGraph();
@@ -287,7 +287,14 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
       if (opts.cloud && req.method === "GET" && url.pathname === "/api/project/repos") {
         return send(res, 200, { repos: await listRepos(opts.cloud.workspace) });
       }
+      if (opts.cloud && req.method === "GET" && url.pathname === "/api/project/patch") {
+        if (!repoName(proj.root)) return send(res, 400, { error: "this project isn't a cloned repo" });
+        const patch = await fixesPatch(proj.root);
+        if (!patch) return send(res, 400, { error: "No changes to download." });
+        return send(res, 200, { name: `${repoName(proj.root)!.replace("/", "-")}-lens-fixes.patch`, patch });
+      }
       if (opts.cloud && req.method === "POST" && url.pathname === "/api/project/push") {
+        if (!process.env.GITHUB_TOKEN) return send(res, 400, { error: "pushing needs GITHUB_TOKEN; use Download Patch" });
         if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });
         if (!repoName(proj.root)) return send(res, 400, { error: "this project isn't a cloned repo" });
         return send(res, 200, await pushFixes(proj.root));

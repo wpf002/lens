@@ -107,10 +107,10 @@ For Codex, Gemini CLI, Copilot, Cursor, OpenCode, Cline, Kiro, and Trae, run `./
 | `LENS_TOKEN` | Login token, 24+ characters. If unset, one is generated into `/data/token` and printed once in the deploy log. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | AI runs on your Claude plan, same as local. Create with `claude setup-token`. |
 | `ANTHROPIC_API_KEY` | Alternative: AI runs billed to an API key. |
-| `GITHUB_TOKEN` | Clone private repos and push fix branches. Needs Contents read/write on those repos. |
+| `GITHUB_TOKEN` | Optional. Clone private repos and push fix branches. Without it, Lens opens public repos and fixes download as a patch. |
 | `LENS_REPO` | Optional `owner/name` to open on first boot. |
 
-Open Project takes `owner/name` or a GitHub URL and clones it into `/data/repos`. After Fix, **Push Branch** commits the changes to a `lens/fixes-*` branch and links to a pull request. Lens never pushes to the default branch.
+Open Project takes `owner/name` or a GitHub URL and clones it into `/data/repos`. After Fix, **Download Patch** saves the changes as a `.patch` file; run `git apply <file>` in your checkout. With `GITHUB_TOKEN` set, **Push Branch** pushes them to a `lens/fixes-*` branch instead (never the default branch).
 
 ## CLI
 

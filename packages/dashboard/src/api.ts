@@ -20,6 +20,8 @@ export interface Meta {
   canPick?: boolean;
   /** Hosted server: projects are GitHub repos and fixes leave as a pushed branch. */
   cloud?: boolean;
+  /** Hosted server has a GitHub token and can push fix branches. */
+  canPush?: boolean;
   /** `owner/name` of the repo being shown (hosted server only). */
   repo?: string | null;
   /** The server can run Claude Code to enrich the graph. */
@@ -262,4 +264,9 @@ export function listCloudRepos(): Promise<{ repos: string[] }> {
 /** Hosted server: commit applied fixes to a `lens/fixes-*` branch and push it. */
 export function pushFixesBranch(): Promise<{ branch: string; compareUrl: string | null; files: number }> {
   return request("/api/project/push", { method: "POST" });
+}
+
+/** Hosted server: applied fixes as a git patch. */
+export function fixesPatch(): Promise<{ name: string; patch: string }> {
+  return request("/api/project/patch");
 }

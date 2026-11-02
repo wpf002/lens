@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { pushFixesBranch, type ProposedFix, type RemediationSource } from "../api";
+import { fixesPatch, pushFixesBranch, type ProposedFix, type RemediationSource } from "../api";
 import { useStore } from "../store";
 import { costRange } from "../utils/format";
 import { IconChevronDown, IconChevronRight } from "./icons";
@@ -90,6 +90,19 @@ export function Remediation({ source }: { source: Source }) {
   const [showChanges, setShowChanges] = useState(false);
   const [showManual, setShowManual] = useState(false);
   const cloud = useStore((s) => !!s.meta?.cloud);
+  const canPush = useStore((s) => !!s.meta?.canPush);
+  const downloadPatch = async () => {
+    try {
+      const { name, patch } = await fixesPatch();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([patch], { type: "text/x-patch" }));
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } catch (e) {
+      setPush({ busy: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  };
   const [push, setPush] = useState<{ busy: boolean; error?: string; url?: string | null; branch?: string; count?: number }>({ busy: false });
   const doPush = async (count: number) => {
     setPush({ busy: true });
@@ -195,7 +208,12 @@ export function Remediation({ source }: { source: Source }) {
             <button type="button" className="text-muted hover:text-fg hover:underline disabled:opacity-50" disabled={op.busy} onClick={() => void undoAll()}>
               Undo
             </button>
-            {cloud &&
+            {cloud && !canPush && (
+              <Button size="sm" variant="accent" disabled={op.busy} onClick={() => void downloadPatch()}>
+                Download Patch
+              </Button>
+            )}
+            {canPush &&
               (push.branch && push.count === applied.length ? (
                 push.url ? (
                   <a className="font-medium text-accent hover:underline" href={push.url} target="_blank" rel="noreferrer noopener">

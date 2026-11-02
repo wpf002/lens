@@ -59,7 +59,7 @@ function scrub(msg: string): string {
   if (/Authentication failed|could not read Username|Repository not found|403/i.test(out)) {
     out = process.env.GITHUB_TOKEN
       ? "GitHub refused access. Check that GITHUB_TOKEN can read (and push to) this repo."
-      : "Repo not found or private. Set GITHUB_TOKEN in Railway to open private repos.";
+      : "Repo not found or private. Hosted Lens opens public repos; run Lens locally for private ones.";
   }
   return out.slice(0, 300);
 }
@@ -118,4 +118,11 @@ export async function listRepos(workspace: string): Promise<string[]> {
     }
   }
   return out.sort();
+}
+
+/** Unified diff of every change in the working tree, new files included. */
+export async function fixesPatch(root: string): Promise<string> {
+  await git(root, ["add", "-A", "-N", "--", "."]).catch(() => undefined);
+  await git(root, ["reset", "-q", "--", ".lens"]).catch(() => undefined);
+  return git(root, ["diff", "--binary", "HEAD", "--", ".", ":(exclude).lens"]);
 }
