@@ -200,6 +200,7 @@ export class EnrichRunner {
     if (this.running) throw new Error("an AI run is already in progress");
     const job: EnrichJob = { task, root, state: "running", startedAt: Date.now(), budgetUsd, progress: ["Preparing context"], ...(task === "remediate" ? { source: opts.source ?? "audit", checkId: opts.checkId } : {}) };
     this.job = job;
+    console.log(`[ai] start ${task}${job.source ? `/${job.source}` : ""} in ${path.basename(root)}, limit $${budgetUsd}`);
     (task === "audit" ? this.runAudit(job) : task === "summaries" ? this.runSummaries(job) : task === "review" ? this.runReview(job) : task === "remediate" ? this.runRemediate(job, opts.source ?? "audit", opts.checkId) : this.runDomain(job)).catch((e: unknown) => this.finish(job, "error", (e as Error).message));
     return job;
   }
@@ -213,6 +214,8 @@ export class EnrichRunner {
   private finish(job: EnrichJob, state: EnrichJob["state"], error?: string) {
     if (job.state !== "running") return;
     job.state = state;
+    const secs = Math.round((Date.now() - job.startedAt) / 1000);
+    console.log(`[ai] ${state} ${job.task} after ${secs}s, $${(job.costUsd ?? 0).toFixed(2)}${error ? `: ${error.slice(0, 300)}` : ""}`);
     job.finishedAt = Date.now();
     if (error && state !== "done") job.error = friendlyError(error).slice(0, 400);
     this.child = null;
