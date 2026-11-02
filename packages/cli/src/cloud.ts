@@ -109,6 +109,16 @@ export async function pushFixes(root: string): Promise<{ branch: string; compare
   return { branch, compareUrl: r ? `https://github.com/${r.owner}/${r.name}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}?expand=1` : null, files };
 }
 
+/** The fixes branch the working copy is on, and whether it has unpushed changes. */
+export async function pushState(root: string): Promise<{ branch: string; dirty: boolean; compareUrl: string | null } | null> {
+  const branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "");
+  if (!branch.startsWith("lens/fixes-")) return null;
+  const dirty = !!(await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"]).catch(() => ""));
+  const base = (await git(root, ["config", "--get", "lens.base"]).catch(() => "")) || "main";
+  const r = parseRepo(await git(root, ["remote", "get-url", "origin"]).catch(() => ""));
+  return { branch, dirty, compareUrl: r ? `https://github.com/${r.owner}/${r.name}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}?expand=1` : null };
+}
+
 /** Repos already on the volume, as `owner/name`. */
 export async function listRepos(workspace: string): Promise<string[]> {
   const out: string[] = [];

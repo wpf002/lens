@@ -18,7 +18,7 @@ import path from "node:path";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { authorizeUrl, disconnectGithub, finishOAuth, githubLogin, githubToken, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
-import { cloneOrUpdate, fixesPatch, listRepos, parseRepo, pushFixes, reposDir } from "./cloud.js";
+import { cloneOrUpdate, fixesPatch, listRepos, parseRepo, pushFixes, pushState, reposDir } from "./cloud.js";
 import { SOURCES, applyFixes, loadRemediation, undoFix, type RemediationSource } from "./remediate.js";
 import { EnrichRunner, FIXABLE_CHECKS, HEALTH_BATCH, auditPath, auditWithDecisions, saveDecision, estimateCost, fixAllPlan, remediationItems, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import {
@@ -368,6 +368,9 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         const patch = await fixesPatch(proj.root);
         if (!patch) return send(res, 400, { error: "No changes to download." });
         return send(res, 200, { name: `${repoName(proj.root)!.replace("/", "-")}-lens-fixes.patch`, patch });
+      }
+      if (opts.cloud && req.method === "GET" && url.pathname === "/api/project/push") {
+        return send(res, 200, { state: repoName(proj.root) ? await pushState(proj.root) : null });
       }
       if (opts.cloud && req.method === "POST" && url.pathname === "/api/project/push") {
         if (!githubToken()) return send(res, 400, { error: "Connect GitHub to push, or use Download Patch." });

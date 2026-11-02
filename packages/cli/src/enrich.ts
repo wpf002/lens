@@ -12,7 +12,7 @@ import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyFixes, buildRecord, loadRemediation, remediationPath, type RemediationSource } from "./remediate.js";
-import { AuditVerdictsSchema, PatchValidationError, RemediationSchema, ReviewFindingsSchema, type ReviewFindings, applyPatch, buildBatches, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts } from "@lens/core";
+import { AuditVerdictsSchema, PatchValidationError, RemediationSchema, ReviewFindingsSchema, type ReviewFindings, applyPatch, buildBatches, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts } from "@lens/core";
 
 export type EnrichTask = "domain" | "audit" | "summaries" | "review" | "remediate";
 
@@ -680,7 +680,8 @@ export class EnrichRunner {
     const tried = new Set<string>();
     const runTag = Date.now().toString(36);
     // Keep earlier applied fixes (for Undo and the FIXED badge) and skips that found the code already safe.
-    const prior = await loadRemediation(root, source);
+    // Health items are numbered per review and per scan, so only audit items (stable ids) carry over.
+    const prior = source === "audit" ? await loadRemediation(root, source) : null;
     const kept = (prior?.fixes ?? []).filter((f) => f.status === "applied");
     const merged: Awaited<ReturnType<typeof buildRecord>> = {
       generatedAt: new Date().toISOString(),
@@ -872,7 +873,7 @@ export async function remediationItems(root: string, source: RemediationSource, 
   const findings = (g?.security?.findings ?? [])
     .filter((f) => f.status !== "false_positive" && f.severity in FINDING_RANK)
     .sort((a, b) => FINDING_RANK[a.severity]! - FINDING_RANK[b.severity]!)
-    .map((f) => ({ id: `finding-${f.id}`.slice(0, 80), title: f.title, evidence: [`${f.path}:${f.line} ${f.message}`], fix: f.status === "accepted" ? acceptedFix(f.rule) : undefined }));
+    .map((f) => ({ id: findingItemId(f), title: f.title, evidence: [`${f.path}:${f.line} ${f.message}`], fix: f.status === "accepted" ? acceptedFix(f.rule) : undefined }));
   const checks = (g?.security?.checklist ?? [])
     .filter((c) => c.status !== "manual" && c.source !== "manual")
     .map((c) => {

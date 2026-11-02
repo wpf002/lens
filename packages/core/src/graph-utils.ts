@@ -142,3 +142,13 @@ export function effectiveAuth(n: GraphNode, triagedPublic: Set<string>): NonNull
   const auth = n.endpoint?.auth;
   return auth === "unguarded" && triagedPublic.has(`${n.path}:${n.lines?.[0]}`) ? "public" : auth;
 }
+
+/**
+ * Remediation id for a finding. Finding ids are renumbered on every scan, so this
+ * hashes what stays put (rule, file, message) to keep fixes tied to the same finding.
+ */
+export function findingItemId(f: Pick<Finding, "rule" | "path" | "message">): string {
+  let h = 0x811c9dc5;
+  for (const ch of `${f.rule}|${f.path}|${f.message}`) h = Math.imul(h ^ ch.charCodeAt(0), 0x01000193) >>> 0;
+  return `finding-${h.toString(16).padStart(8, "0")}`;
+}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fixesPatch, pushFixesBranch, type ProposedFix, type RemediationSource } from "../api";
+import { fetchPushState, fixesPatch, pushFixesBranch, type ProposedFix, type PushState, type RemediationSource } from "../api";
 import { useStore } from "../store";
 import { costRange } from "../utils/format";
 import { IconChevronDown, IconChevronRight } from "./icons";
@@ -115,12 +115,19 @@ export function Remediation({ source }: { source: Source }) {
       setPush({ busy: false, error: e instanceof Error ? e.message : String(e) });
     }
   };
-  const [push, setPush] = useState<{ busy: boolean; error?: string; url?: string | null; branch?: string; count?: number }>({ busy: false });
-  const doPush = async (count: number) => {
+  const [push, setPush] = useState<{ busy: boolean; error?: string }>({ busy: false });
+  // Read from the server so a reload still knows the branch was pushed.
+  const [pushed, setPushed] = useState<PushState>(null);
+  const appliedCount = (mine?.fixes ?? []).filter((f) => f.status === "applied").length;
+  useEffect(() => {
+    if (canPush) void fetchPushState().then(setPushed, () => setPushed(null));
+  }, [canPush, appliedCount]);
+  const doPush = async () => {
     setPush({ busy: true });
     try {
-      const r = await pushFixesBranch();
-      setPush({ busy: false, url: r.compareUrl, branch: r.branch, count });
+      await pushFixesBranch();
+      setPushed(await fetchPushState());
+      setPush({ busy: false });
     } catch (e) {
       setPush({ busy: false, error: e instanceof Error ? e.message : String(e) });
     }
@@ -143,7 +150,7 @@ export function Remediation({ source }: { source: Source }) {
                 {job.costUsd ? <span className="text-faint"> · ${job.costUsd.toFixed(2)}</span> : null}
               </>
             ) : job.progress?.some((p) => p.startsWith("Auditing")) ? "Auditing…" : job.progress?.some((p) => p.startsWith("Reviewing")) ? "Reviewing…" : "Fixing…"}
-            {(job.progress ?? []).at(-1) && <span className="text-faint"> · {(job.progress ?? []).at(-1)}</span>}
+            {(job.progress ?? []).at(-1) && <span className="ml-2 text-faint">{(job.progress ?? []).at(-1)}</span>}
           </span>
           <Elapsed since={job.step?.startedAt ?? job.startedAt} typicalMs={job.step?.typicalMs} />
           <Button size="sm" variant="ghost" onClick={() => void cancel()}>
@@ -209,6 +216,7 @@ export function Remediation({ source }: { source: Source }) {
     for (const { f, src } of appliedBySource) await useStore.getState().undoFix(src, f.id);
   };
   const cost = (mine?.costUsd ?? 0) + (extra?.costUsd ?? 0);
+  const isPushed = !!pushed && !pushed.dirty;
 
   return (
     <div className={box}>
@@ -227,28 +235,32 @@ export function Remediation({ source }: { source: Source }) {
             ✓ {applied.length} Change{applied.length === 1 ? "" : "s"} · {changedFiles.length} File{changedFiles.length === 1 ? "" : "s"}
           </button>
           <span className="ml-auto flex items-center gap-3 text-[11.5px]">
-            <button type="button" className="text-muted hover:text-fg hover:underline disabled:opacity-50" disabled={op.busy} onClick={() => void undoAll()}>
-              Undo
-            </button>
-            {cloud && !canPush && (
-              <Button size="sm" variant="accent" disabled={op.busy} onClick={() => void downloadPatch()}>
-                Download Patch
-              </Button>
-            )}
-            {canPush &&
-              (push.branch && push.count === applied.length ? (
-                push.url ? (
-                  <a className="font-medium text-accent hover:underline" href={push.url} target="_blank" rel="noreferrer noopener">
+            {isPushed ? (
+              <>
+                <span className="text-faint">Pushed</span>
+                {pushed?.compareUrl && (
+                  <a className="font-medium text-accent hover:underline" href={pushed.compareUrl} target="_blank" rel="noreferrer noopener">
                     Open Pull Request
                   </a>
-                ) : (
-                  <span className="font-mono text-[11px] text-faint">{push.branch}</span>
-                )
-              ) : (
-                <Button size="sm" variant="accent" disabled={push.busy || op.busy} onClick={() => void doPush(applied.length)}>
-                  {push.busy ? "Pushing…" : "Push Branch"}
-                </Button>
-              ))}
+                )}
+              </>
+            ) : (
+              <>
+                <button type="button" className="text-muted hover:text-fg hover:underline disabled:opacity-50" disabled={op.busy} onClick={() => void undoAll()}>
+                  Undo
+                </button>
+                {cloud && !canPush && (
+                  <Button size="sm" variant="accent" disabled={op.busy} onClick={() => void downloadPatch()}>
+                    Download Patch
+                  </Button>
+                )}
+                {canPush && (
+                  <Button size="sm" variant="accent" disabled={push.busy || op.busy} onClick={() => void doPush()}>
+                    {push.busy ? "Pushing…" : "Push Branch"}
+                  </Button>
+                )}
+              </>
+            )}
           </span>
         </div>
       )}
@@ -271,7 +283,7 @@ export function Remediation({ source }: { source: Source }) {
       {(notFixed.length > 0 || todo.length > 0) && (
         <div className="px-3 py-2">
           <button type="button" className="eyebrow flex items-center gap-1 hover:!text-fg" onClick={() => setShowManual((v) => !v)} aria-expanded={showManual}>
-            {showManual ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />} Do Yourself · {notFixed.length + todo.length}
+            {showManual ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />} Manual <span className="font-mono text-faint">{notFixed.length + todo.length}</span>
           </button>
           {showManual && <ul className="mt-1 space-y-1 text-muted">
             {notFixed.map((f) => (
@@ -288,7 +300,7 @@ export function Remediation({ source }: { source: Source }) {
       {safe.length > 0 && (
         <div className="border-t border-line px-3 py-2">
           <button type="button" className="eyebrow flex items-center gap-1 hover:!text-fg" onClick={() => setShowSafe((v) => !v)} aria-expanded={showSafe}>
-            {showSafe ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />} Already Safe · {safe.length}
+            {showSafe ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />} No Fix Needed <span className="font-mono text-faint">{safe.length}</span>
           </button>
           {showSafe && <ul className="mt-1 space-y-1 text-muted">
             {safe.map((x, i) => (

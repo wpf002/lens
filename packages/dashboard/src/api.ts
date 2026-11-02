@@ -267,6 +267,9 @@ export function listCloudRepos(): Promise<{ repos: string[] }> {
   return request("/api/project/repos");
 }
 
+export type PushState = { branch: string; dirty: boolean; compareUrl: string | null } | null;
+export const fetchPushState = () => request<{ state: PushState }>("/api/project/push").then((r) => r.state);
+
 /** Hosted server: commit applied fixes to a `lens/fixes-*` branch and push it. */
 export function pushFixesBranch(): Promise<{ branch: string; compareUrl: string | null; files: number }> {
   return request("/api/project/push", { method: "POST" });

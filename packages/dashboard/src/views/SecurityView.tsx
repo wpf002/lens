@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { Finding, Severity } from "@lens/core/browser";
+import { findingItemId, type Finding, type Severity } from "@lens/core/browser";
 import { Checklist } from "../components/Checklist";
 import { GraphCanvas } from "../components/GraphCanvas";
 import { IconChevronDown, IconChevronUp, IconDroplet, IconShield } from "../components/icons";
@@ -34,7 +34,7 @@ export function SecurityView() {
   const checklist = useMemo(() => mergeChecklist(model.graph.security?.checklist ?? [], audit), [model, audit]);
   const gaps = checklist.filter((c) => c.status === "fail").length;
   const fixed = useMemo(() => new Set((remediation?.fixes ?? []).filter((f) => f.status === "applied").map((f) => f.itemId)), [remediation]);
-  const isFixed = (f: Finding) => fixed.has(`finding-${f.id}`.slice(0, 80));
+  const isFixed = (f: Finding) => fixed.has(findingItemId(f));
   const sec = model.graph.security;
   const vm = useMemo(() => buildSecurity(model, cf, sf), [model, cf, sf]);
   const all = useMemo(() => sec?.findings ?? [], [sec]);
