@@ -37,7 +37,7 @@ export interface AuditRecord {
   costUsd?: number;
   summary?: string;
   report: string;
-  items: Array<{ id: string; status: "pass" | "fail" | "unverified" | "na"; evidence: string[]; fix?: string }>;
+  items: Array<{ id: string; status: "pass" | "fail" | "unverified" | "na"; evidence: string[]; fix?: string; by?: "you" }>;
 }
 
 export interface EnrichJob {
@@ -235,6 +235,8 @@ export const undoRemediation = (source: RemediationSource, id: string) =>
   request<{ ok: true }>("/api/remediation/undo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source, id }) });
 export const fetchReview = () => request<{ review: ReviewRecord | null }>("/api/review").then((r) => r.review);
 export const fetchAudit = () => request<{ audit: AuditRecord | null }>("/api/audit").then((r) => r.audit);
+export const decideCheck = (id: string, status: "pass" | "fail" | "na" | null) =>
+  request<{ audit: AuditRecord | null }>("/api/checklist/decide", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, status }) }).then((r) => r.audit);
 export const fetchEnrichStatus = () => request<EnrichJob>("/api/enrich/status");
 export const cancelEnrichJob = () => request<EnrichJob>("/api/enrich/cancel", { method: "POST" });
 

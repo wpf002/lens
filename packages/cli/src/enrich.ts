@@ -97,6 +97,27 @@ export const REVIEW_REPORT = "CODE_REVIEW.md";
 export const reviewPath = (root: string) => path.join(paths(root).dir, "review.json");
 export const AUDIT_REPORT = "SECURITY_AUDIT.md";
 export const auditPath = (root: string) => path.join(paths(root).dir, "audit.json");
+const decisionsPath = (root: string) => path.join(paths(root).dir, "checklist-decisions.json");
+export type Decision = "pass" | "fail" | "na";
+/** Checklist items the owner marked by hand. They override the scanner and the AI audit. */
+export async function loadDecisions(root: string): Promise<Record<string, Decision>> {
+  return (await readJson<Record<string, Decision>>(decisionsPath(root)).catch(() => null)) ?? {};
+}
+export async function saveDecision(root: string, id: string, status: Decision | null) {
+  const all = await loadDecisions(root);
+  if (status) all[id] = status;
+  else delete all[id];
+  await writeJsonAtomic(decisionsPath(root), all, true);
+}
+/** The audit record with the owner's decisions laid over it. */
+export async function auditWithDecisions(root: string): Promise<(AuditRecord & { items: Array<AuditRecord["items"][number] & { by?: "you" }> }) | null> {
+  const audit = await readJson<AuditRecord>(auditPath(root));
+  const decisions = await loadDecisions(root);
+  if (!audit && !Object.keys(decisions).length) return null;
+  const items: Array<AuditRecord["items"][number] & { by?: "you" }> = (audit?.items ?? []).filter((i) => !(i.id in decisions));
+  for (const [id, status] of Object.entries(decisions)) items.push({ id, status, evidence: ["Marked by you."], by: "you" });
+  return { generatedAt: audit?.generatedAt ?? "", costUsd: audit?.costUsd, summary: audit?.summary, report: audit?.report ?? "", items };
+}
 const runTimesPath = (root: string) => path.join(paths(root).dir, "run-times.json");
 type RunTimes = Partial<Record<"audit" | "review", number[]>>;
 
@@ -741,6 +762,13 @@ export class EnrichRunner {
  * Fix All on one page: the report to run first (when it hasn't been run), items to fix
  * now, and the expected cost of both. Items found by that first run aren't counted yet.
  */
+/** Accepted findings stay as designed; Fix hardens them instead. */
+function acceptedFix(rule: string): string {
+  return rule === "unauthenticated-mutation" || rule === "server-action-no-auth"
+    ? "This route is public by design. Do not add login. Harden it: per-IP rate limiting, strict input validation, and for confirm/unsubscribe/share links a signed, expiring token instead of a guessable id. Skip if the project already does this."
+    : "Triaged as accepted risk. Reduce it where that's possible without changing behavior; skip if it isn't.";
+}
+
 export async function fixAllPlan(root: string, source: "audit" | "health"): Promise<{ first: "audit" | "review" | null; firstLimit: number; items: number; estimate: CostEstimate }> {
   const g = await loadGraph(root);
   const files = g?.nodes.filter((n) => n.kind === "file" && n.path).length ?? 0;
@@ -823,14 +851,14 @@ export async function remediationItems(root: string, source: RemediationSource, 
     return check.hits.slice(0, HEALTH_BATCH).map((h, i) => ({ id: `${check.id}-${i}`, title: check.title, evidence: [`${h.path}${h.line ? `:${h.line}` : ""} ${h.detail}`], fix: check.fix }));
   }
   const g = await loadGraph(root);
-  const audit = await readJson<AuditRecord>(auditPath(root));
+  const audit = await auditWithDecisions(root);
   const ai = new Map((audit?.items ?? []).map((i) => [i.id, i]));
   const applied = new Set(((await loadRemediation(root, "audit"))?.fixes ?? []).filter((f) => f.status === "applied").map((f) => f.itemId));
   const FINDING_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2 };
   const findings = (g?.security?.findings ?? [])
-    .filter((f) => f.status !== "false_positive" && f.status !== "accepted" && f.severity in FINDING_RANK)
+    .filter((f) => f.status !== "false_positive" && f.severity in FINDING_RANK)
     .sort((a, b) => FINDING_RANK[a.severity]! - FINDING_RANK[b.severity]!)
-    .map((f) => ({ id: `finding-${f.id}`.slice(0, 80), title: f.title, evidence: [`${f.path}:${f.line} ${f.message}`], fix: undefined as string | undefined }));
+    .map((f) => ({ id: `finding-${f.id}`.slice(0, 80), title: f.title, evidence: [`${f.path}:${f.line} ${f.message}`], fix: f.status === "accepted" ? acceptedFix(f.rule) : undefined }));
   const checks = (g?.security?.checklist ?? [])
     .filter((c) => c.status !== "manual" && c.source !== "manual")
     .map((c) => {

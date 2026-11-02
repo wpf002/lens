@@ -1,5 +1,5 @@
 /** Graph traversal helpers. Browser-safe. */
-import type { EdgeKind, GraphEdge, GraphNode, KnowledgeGraph } from "./types.js";
+import type { EdgeKind, Finding, GraphEdge, GraphNode, KnowledgeGraph } from "./types.js";
 
 export interface GraphIndex {
   nodes: Map<string, GraphNode>;
@@ -128,4 +128,17 @@ export function ancestorsOfDir(dir: string): string[] {
   if (!dir) return [];
   const parts = dir.split("/");
   return parts.map((_, i) => parts.slice(0, i + 1).join("/"));
+}
+
+const NO_AUTH_RULES = new Set(["unauthenticated-mutation", "server-action-no-auth"]);
+
+/** `path:line` of endpoints whose missing-auth finding was triaged as public by design. */
+export function publicByTriage(findings: Finding[]): Set<string> {
+  return new Set(findings.filter((f) => NO_AUTH_RULES.has(f.rule) && (f.status === "accepted" || f.status === "false_positive")).map((f) => `${f.path}:${f.line}`));
+}
+
+/** An unguarded endpoint that triage marked public by design counts as public. */
+export function effectiveAuth(n: GraphNode, triagedPublic: Set<string>): NonNullable<GraphNode["endpoint"]>["auth"] | undefined {
+  const auth = n.endpoint?.auth;
+  return auth === "unguarded" && triagedPublic.has(`${n.path}:${n.lines?.[0]}`) ? "public" : auth;
 }

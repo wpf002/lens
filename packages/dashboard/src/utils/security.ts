@@ -1,4 +1,5 @@
-import type { EndpointMeta, Finding, GraphNode, Severity } from "@lens/core/browser";
+import { effectiveAuth, publicByTriage, type ChecklistItem, type EndpointMeta, type Finding, type GraphNode, type Severity } from "@lens/core/browser";
+import type { AuditRecord } from "../api";
 import type { VEdge, VNode, ViewModel } from "../types";
 import { SEVERITY_RANK, layerColor } from "./colors";
 import type { CompiledFilters } from "./filters";
@@ -48,9 +49,31 @@ export function endpointsOf(model: GraphModel): GraphNode[] {
   return [...ids].map((id) => model.idx.nodes.get(id)).filter((n): n is GraphNode => !!n);
 }
 
-export function endpointCounts(model: GraphModel) {
+export type MergedCheck = ChecklistItem & { ai?: boolean; by?: "you" };
+
+/** Scanner checklist with AI audit verdicts and the owner's own decisions laid over it. */
+export function mergeChecklist(base: ChecklistItem[], audit: AuditRecord | null): MergedCheck[] {
+  const ai = new Map((audit?.items ?? []).map((i) => [i.id, i]));
+  return base.map((c) => {
+    const v = ai.get(c.id);
+    // The audit can't settle manual items; only the owner can.
+    if (!v || (c.status === "manual" && v.by !== "you")) return c;
+    return { ...c, status: v.status, evidence: v.evidence.length ? v.evidence : c.evidence, fix: v.fix ?? (v.status === "fail" ? c.fix : undefined), ai: v.by !== "you", by: v.by };
+  });
+}
+
+/**
+ * Unguarded routes whose missing-auth finding was triaged as accepted count as public.
+ * When the auth check passed (audit or owner), the remaining unguarded routes are public too.
+ */
+export function endpointCounts(model: GraphModel, checks: MergedCheck[] = []) {
   const c = { guarded: 0, unguarded: 0, public: 0, unknown: 0 };
-  for (const n of endpointsOf(model)) c[n.endpoint?.auth ?? "unknown"]++;
+  const triaged = publicByTriage(model.graph.security?.findings ?? []);
+  const authOk = checks.some((x) => x.id === "t1-auth" && (x.status === "pass" || x.status === "clear" || x.status === "na"));
+  for (const n of endpointsOf(model)) {
+    const a = effectiveAuth(n, triaged) ?? "unknown";
+    c[a === "unguarded" && authOk ? "public" : a]++;
+  }
   return c;
 }
 

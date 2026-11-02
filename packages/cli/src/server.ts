@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { authorizeUrl, disconnectGithub, finishOAuth, githubLogin, githubToken, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
 import { cloneOrUpdate, fixesPatch, listRepos, parseRepo, pushFixes, reposDir } from "./cloud.js";
 import { SOURCES, applyFixes, loadRemediation, undoFix, type RemediationSource } from "./remediate.js";
-import { EnrichRunner, FIXABLE_CHECKS, HEALTH_BATCH, auditPath, estimateCost, fixAllPlan, remediationItems, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
+import { EnrichRunner, FIXABLE_CHECKS, HEALTH_BATCH, auditPath, auditWithDecisions, saveDecision, estimateCost, fixAllPlan, remediationItems, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import {
   buildBatches, diffImpact, isGitRepo, loadGraph, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
   type EmbeddingStore, type KnowledgeGraph,
@@ -274,8 +274,22 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
       }
       if (req.method === "GET" && url.pathname === "/api/audit") {
         if (proj.graphFile) return send(res, 200, { audit: null });
-        const audit = await readJson<AuditRecord>(auditPath(proj.root));
-        return send(res, 200, { audit });
+        return send(res, 200, { audit: await auditWithDecisions(proj.root) });
+      }
+      if (req.method === "POST" && url.pathname === "/api/checklist/decide") {
+        if (proj.graphFile) return send(res, 400, { error: "read-only graph" });
+        let body: { id?: unknown; status?: unknown } = {};
+        try {
+          body = JSON.parse((await readBody(req, 1_000)) || "{}") as typeof body;
+        } catch {
+          return send(res, 400, { error: "bad JSON" });
+        }
+        const graph = await loadGraph(proj.root);
+        const known = new Set((graph?.security?.checklist ?? []).map((c) => c.id));
+        if (typeof body.id !== "string" || !known.has(body.id)) return send(res, 400, { error: "unknown checklist item" });
+        if (body.status !== null && body.status !== "pass" && body.status !== "fail" && body.status !== "na") return send(res, 400, { error: "status must be pass, fail, na or null" });
+        await saveDecision(proj.root, body.id, body.status as "pass" | "fail" | "na" | null);
+        return send(res, 200, { audit: await auditWithDecisions(proj.root) });
       }
       if (req.method === "GET" && url.pathname === "/api/review") {
         if (proj.graphFile) return send(res, 200, { review: null });

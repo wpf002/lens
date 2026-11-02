@@ -7,7 +7,7 @@ import { EmptyState, SeverityBadge, cx } from "../components/ui";
 import { FixAllButton } from "../components/Remediation";
 import { useStore } from "../store";
 import { AUTH_COLOR, SEVERITIES, SEVERITY_COLOR } from "../utils/colors";
-import { buildSecurity, endpointCounts, filterFindings, sortFindings } from "../utils/security";
+import { buildSecurity, endpointCounts, filterFindings, mergeChecklist, sortFindings } from "../utils/security";
 import { useCompiledFilters, useModel, useOverlayInput } from "./hooks";
 
 const STATUSES: Finding["status"][] = ["open", "confirmed", "false_positive", "accepted"];
@@ -29,14 +29,18 @@ export function SecurityView() {
     lastPanel = p;
     setPanelState(p);
   };
-  const checklist = model.graph.security?.checklist ?? [];
+  const audit = useStore((s) => s.audit);
+  const remediation = useStore((s) => s.remediation.audit);
+  const checklist = useMemo(() => mergeChecklist(model.graph.security?.checklist ?? [], audit), [model, audit]);
   const gaps = checklist.filter((c) => c.status === "fail").length;
+  const fixed = useMemo(() => new Set((remediation?.fixes ?? []).filter((f) => f.status === "applied").map((f) => f.itemId)), [remediation]);
+  const isFixed = (f: Finding) => fixed.has(`finding-${f.id}`.slice(0, 80));
   const sec = model.graph.security;
   const vm = useMemo(() => buildSecurity(model, cf, sf), [model, cf, sf]);
   const all = useMemo(() => sec?.findings ?? [], [sec]);
   const rows = useMemo(() => sortFindings(filterFindings(all, sf)), [all, sf]);
   const categories = useMemo(() => [...new Set(all.map((f) => f.category))].sort(), [all]);
-  const counts = useMemo(() => endpointCounts(model), [model]);
+  const counts = useMemo(() => endpointCounts(model, checklist), [model, checklist]);
 
   if (!sec) {
     return (
@@ -122,7 +126,7 @@ export function SecurityView() {
             <button type="button" role="tab" aria-selected={panel === "findings"} className={cx("flex items-center gap-1.5 rounded px-2 py-1", panel === "findings" ? "bg-raised" : "hover:bg-raised")} onClick={() => (setPanel("findings"), setTableOpen(true))}>
               <span className={cx("eyebrow", panel === "findings" && "!text-fg")}>Findings</span>
               <span className="font-mono text-[11px] text-muted">
-                {rows.length}/{all.length}
+                {all.filter((f) => f.status !== "false_positive" && f.status !== "accepted" && !isFixed(f)).length}
               </span>
             </button>
             <button type="button" role="tab" aria-selected={panel === "checklist"} className={cx("flex items-center gap-1.5 rounded px-2 py-1", panel === "checklist" ? "bg-raised" : "hover:bg-raised")} onClick={() => (setPanel("checklist"), setTableOpen(true))}>
@@ -182,7 +186,7 @@ export function SecurityView() {
                   <th className="px-2 py-1.5 font-semibold">Finding</th>
                   <th className="px-2 py-1.5 font-semibold">Rule</th>
                   <th className="px-2 py-1.5 font-semibold">Location</th>
-                  <th className="px-2 py-1.5 text-right font-semibold" title="Entry points that reach this finding">Reach</th>
+                  <th className="px-2 py-1.5 text-right font-semibold" title="Entry points that reach this finding">Entry Points</th>
                   <th className="px-2 py-1.5 font-semibold" title="User-controlled input reaches this code">User Input</th>
                   <th className="px-3 py-1.5 font-semibold">Status</th>
                 </tr>
@@ -235,7 +239,7 @@ export function SecurityView() {
                       </td>
                       <td className="px-3 py-2">
                         <span className={cx("rounded border px-1.5 py-[1px] text-[10.5px] font-semibold uppercase tracking-wider", f.status === "confirmed" ? "border-[color-mix(in_srgb,var(--sev-critical)_50%,var(--border))] text-[var(--sev-critical)]" : "border-line text-muted")}>
-                          {f.status.replace("_", " ")}
+                          {isFixed(f) ? "fixed" : f.status.replace("_", " ")}
                         </span>
                       </td>
                     </tr>

@@ -2,7 +2,7 @@
 import type { Finding, GraphNode, KnowledgeGraph, SecurityReport, Severity, ExposurePath } from "../types.js";
 import type { SymbolInfo } from "../extract.js";
 import type { EntryPoint } from "./entrypoints.js";
-import { indexGraph } from "../graph-utils.js";
+import { effectiveAuth, indexGraph, publicByTriage } from "../graph-utils.js";
 import {
   GENERIC_SECRET_RE, RULES, RULES_VERSION, SECRET_PATTERNS, isPlaceholder, isPlaceholderDbUrl, redact, shannonEntropy, taintRegexFor,
 } from "./rules.js";
@@ -291,6 +291,7 @@ export function finalizeSecurity({ graph, raw, locate, previous }: FinalizeInput
 }
 
 export function summarize(findings: Finding[], endpoints: GraphNode[]): SecurityReport["summary"] {
+  const triagedPublic = publicByTriage(findings);
   const bySeverity: Record<Severity, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   let w = 0;
   for (const f of findings) {
@@ -300,9 +301,9 @@ export function summarize(findings: Finding[], endpoints: GraphNode[]): Security
   }
   return {
     bySeverity,
-    unguardedEndpoints: endpoints.filter((e) => e.endpoint?.auth === "unguarded").length,
+    unguardedEndpoints: endpoints.filter((e) => effectiveAuth(e, triagedPublic) === "unguarded").length,
     guardedEndpoints: endpoints.filter((e) => e.endpoint?.auth === "guarded").length,
-    publicEndpoints: endpoints.filter((e) => e.endpoint?.auth === "public").length,
+    publicEndpoints: endpoints.filter((e) => effectiveAuth(e, triagedPublic) === "public").length,
     riskScore: Math.round(100 * (1 - Math.exp(-w / 80))),
   };
 }
@@ -311,3 +312,4 @@ export function summarize(findings: Finding[], endpoints: GraphNode[]): Security
 export function fingerprint(f: Pick<Finding, "rule" | "path" | "snippet" | "line">): string {
   return `${f.rule}|${f.path}|${(f.snippet ?? String(f.line)).replace(/\s+/g, "")}`;
 }
+

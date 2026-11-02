@@ -1,5 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
-import type { ChecklistItem, CheckStatus } from "@lens/core/browser";
+import type { CheckStatus } from "@lens/core/browser";
+import { decideCheck } from "../api";
+import { mergeChecklist, type MergedCheck } from "../utils/security";
 import { useStore } from "../store";
 import { useModel } from "../views/hooks";
 import { AuditAI } from "./AuditAI";
@@ -51,7 +53,7 @@ export function Evidence({ text }: { text: string }) {
   );
 }
 
-type Merged = ChecklistItem & { ai?: boolean };
+type Merged = MergedCheck;
 
 function Row({ item, extra }: { item: Merged; extra?: ReactNode }) {
   const [open, setOpen] = useState(item.status === "fail");
@@ -64,6 +66,11 @@ function Row({ item, extra }: { item: Merged; extra?: ReactNode }) {
         {item.ai && (
           <span className="shrink-0 rounded border border-accent/40 px-1 font-mono text-[9.5px] text-accent" title="Status from the AI audit">
             AI
+          </span>
+        )}
+        {item.by === "you" && (
+          <span className="shrink-0 rounded border border-line px-1 font-mono text-[9.5px] text-muted" title="Marked by you">
+            YOU
           </span>
         )}
         {!open && <span className="hidden min-w-0 max-w-[40%] truncate text-[11.5px] text-faint md:block">{item.evidence[0]}</span>}
@@ -84,24 +91,66 @@ function Row({ item, extra }: { item: Merged; extra?: ReactNode }) {
             </p>
           )}
           {extra}
+          {(decidable(item) || item.by === "you") && <Decide item={item} />}
         </div>
       )}
     </li>
   );
 }
 
+const decidable = (i: Merged) => i.status === "unverified" || i.status === "manual";
+
+const CHOICES = [
+  { status: "pass", label: "Pass" },
+  { status: "fail", label: "Fail" },
+  { status: "na", label: "N/A" },
+] as const;
+
+/** Lets the owner settle items the scanner and the AI can't verify. */
+function Decide({ item }: { item: Merged }) {
+  const mode = useStore((s) => s.mode);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  if (mode !== "server") return null;
+  const choose = async (status: "pass" | "fail" | "na" | null) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      useStore.setState({ audit: await decideCheck(item.id, status) });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+      <span className="text-faint">Mark As</span>
+      {CHOICES.map((c) => (
+        <button
+          key={c.status}
+          type="button"
+          disabled={busy}
+          onClick={() => void choose(c.status)}
+          className={cx("rounded border px-2 py-0.5 text-[11.5px] disabled:opacity-50", item.by === "you" && item.status === c.status ? "border-accent text-accent" : "border-line text-fg hover:bg-raised")}
+        >
+          {c.label}
+        </button>
+      ))}
+      {item.by === "you" && (
+        <button type="button" disabled={busy} onClick={() => void choose(null)} className="px-1 text-[11.5px] text-muted hover:text-fg disabled:opacity-50">
+          Reset
+        </button>
+      )}
+      {err && <span className="text-critical">{err}</span>}
+    </div>
+  );
+}
+
 export function Checklist() {
   const model = useModel();
   const audit = useStore((s) => s.audit);
-  const items: Merged[] = useMemo(() => {
-    const base = model.graph.security?.checklist ?? [];
-    const ai = new Map((audit?.items ?? []).map((i) => [i.id, i]));
-    // The audit confirms or overturns scanner results; manual items stay the owner's.
-    return base.map((c) => {
-      const v = ai.get(c.id);
-      return v && c.status !== "manual" ? { ...c, status: v.status, evidence: v.evidence.length ? v.evidence : c.evidence, fix: v.fix ?? (v.status === "fail" ? c.fix : undefined), ai: true } : c;
-    });
-  }, [model, audit]);
+  const items: Merged[] = useMemo(() => mergeChecklist(model.graph.security?.checklist ?? [], audit), [model, audit]);
   const counts = useMemo(() => {
     const c = new Map<CheckStatus, number>();
     for (const i of items) c.set(i.status, (c.get(i.status) ?? 0) + 1);
