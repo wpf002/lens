@@ -21,6 +21,6 @@ Email wfoti71992@gmail.com with details and a reproduction. Please don't open a 
 
 - Sign-in checks `LENS_USERNAME` and `LENS_PASSWORD` (constant-time compare of SHA-256 digests, 750 ms delay on a failure) and returns a random per-boot session token that every other `/api` call needs. The loopback Host check is off because Railway's proxy sets the Host header.
 - Projects can only be GitHub repos cloned into `/data/repos`. Opening arbitrary server paths is refused.
-- `GITHUB_TOKEN` goes to git as a per-command auth header and is never written to `.git/config`. It's scrubbed from error messages and removed from the environment of Claude runs.
+- Connect GitHub uses an OAuth App with a single-use `state` that expires after 10 minutes. The access GitHub returns is stored in `/data/github.json` (mode 600), goes to git only as a per-command auth header (never `.git/config`), is scrubbed from error messages, and isn't visible to Claude runs; neither is the client secret.
 - Fixes are pushed only to new `lens/fixes-*` branches.
 

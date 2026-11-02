@@ -20,7 +20,9 @@ export interface Meta {
   canPick?: boolean;
   /** Hosted server: projects are GitHub repos and fixes leave as a pushed branch. */
   cloud?: boolean;
-  /** Hosted server has a GitHub token and can push fix branches. */
+  /** Hosted server: GitHub sign-in state. */
+  github?: { available: boolean; login: string | null };
+  /** Hosted server can push fix branches. */
   canPush?: boolean;
   /** `owner/name` of the repo being shown (hosted server only). */
   repo?: string | null;
@@ -292,4 +294,24 @@ export async function signIn(username: string, password: string): Promise<string
   const body = (await res.json().catch(() => ({}))) as { token?: string; error?: string };
   if (!res.ok || !body.token) throw new Error(body.error ?? "Sign-in failed.");
   return body.token;
+}
+
+export interface GithubRepo {
+  name: string;
+  private: boolean;
+  pushedAt: string;
+}
+
+/** Hosted server: the GitHub authorize URL to send the browser to. */
+export function githubConnectUrl(): Promise<{ url: string }> {
+  return request("/api/github/connect");
+}
+
+export function githubDisconnect(): Promise<{ ok: true }> {
+  return request("/api/github/disconnect", { method: "POST" });
+}
+
+/** Hosted server: repos the connected GitHub account can read. */
+export function githubRepos(): Promise<{ repos: GithubRepo[] }> {
+  return request("/api/github/repos");
 }

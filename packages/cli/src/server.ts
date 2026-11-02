@@ -17,6 +17,7 @@ import { promises as fs, statSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { authorizeUrl, disconnectGithub, finishOAuth, githubLogin, githubToken, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
 import { cloneOrUpdate, fixesPatch, listRepos, parseRepo, pushFixes, reposDir } from "./cloud.js";
 import { SOURCES, applyFixes, loadRemediation, undoFix, type RemediationSource } from "./remediate.js";
 import { EnrichRunner, FIXABLE_CHECKS, HEALTH_BATCH, auditPath, estimateCost, estimateFixAll, fixableCount, remediationItems, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
@@ -150,6 +151,15 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
     res.end(data);
   };
 
+  if (opts.cloud) await loadGithub(opts.cloud.workspace);
+  /** OAuth callback on this host, as the browser sees it behind Railway's proxy. */
+  const callbackUrl = (req: http.IncomingMessage) => {
+    const first = (h: string | string[] | undefined) => (Array.isArray(h) ? h[0] : h)?.split(",")[0]?.trim();
+    const proto = first(req.headers["x-forwarded-proto"]) ?? "http";
+    const host = first(req.headers["x-forwarded-host"]) ?? req.headers.host ?? "localhost";
+    return `${proto}://${host}/github/callback`;
+  };
+
   const authed = (req: http.IncomingMessage) => {
     const h = req.headers["x-lens-token"];
     const v = Buffer.from(Array.isArray(h) ? h[0] ?? "" : h ?? "");
@@ -163,6 +173,15 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
       const url = new URL(req.url ?? "/", "http://localhost");
       if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) return send(res, 200, html, "text/html; charset=utf-8");
       if (req.method === "GET" && url.pathname === "/favicon.ico") return send(res, 204, "");
+      if (opts.cloud && req.method === "GET" && url.pathname === "/github/callback") {
+        try {
+          await finishOAuth(url.searchParams.get("code") ?? "", url.searchParams.get("state") ?? "", callbackUrl(req));
+        } catch (e) {
+          return send(res, 400, `GitHub sign-in failed: ${(e as Error).message}\n`, "text/plain; charset=utf-8");
+        }
+        res.writeHead(302, { location: "/" });
+        return res.end();
+      }
       if (!url.pathname.startsWith("/api/")) return send(res, 404, { error: "not found" });
       if (req.method === "GET" && url.pathname === "/api/auth") return send(res, 200, { login: !!opts.cloud });
       if (opts.cloud && req.method === "POST" && url.pathname === "/api/login") {
@@ -192,7 +211,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
 
       if (req.method === "GET" && url.pathname === "/api/meta") {
         const { graph } = await getGraph();
-        return send(res, 200, { project: graph.project, hasEmbeddings: !!proj.embeddings, git: proj.git, root: proj.root, canPick: !opts.cloud && process.platform === "darwin", cloud: !!opts.cloud, canPush: !!opts.cloud && !!process.env.GITHUB_TOKEN, repo: repoName(proj.root), canEnrich: !proj.graphFile, enrichEstimates: estimatesFor(graph) });
+        return send(res, 200, { project: graph.project, hasEmbeddings: !!proj.embeddings, git: proj.git, root: proj.root, canPick: !opts.cloud && process.platform === "darwin", cloud: !!opts.cloud, canPush: !!opts.cloud && !!githubToken(), github: opts.cloud ? { available: oauthAvailable(), login: githubLogin() } : undefined, repo: repoName(proj.root), canEnrich: !proj.graphFile, enrichEstimates: estimatesFor(graph) });
       }
       if (req.method === "GET" && url.pathname === "/api/graph") {
         const { graph } = await getGraph();
@@ -304,6 +323,21 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         enrich.cancel();
         return send(res, 200, enrich.job ?? { state: "idle" });
       }
+      if (opts.cloud && req.method === "GET" && url.pathname === "/api/github/connect") {
+        if (!oauthAvailable()) return send(res, 400, { error: "Add GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in Railway." });
+        return send(res, 200, { url: authorizeUrl(callbackUrl(req)) });
+      }
+      if (opts.cloud && req.method === "POST" && url.pathname === "/api/github/disconnect") {
+        await disconnectGithub();
+        return send(res, 200, { ok: true });
+      }
+      if (opts.cloud && req.method === "GET" && url.pathname === "/api/github/repos") {
+        try {
+          return send(res, 200, { repos: await listGithubRepos() });
+        } catch (e) {
+          return send(res, 502, { error: (e as Error).message });
+        }
+      }
       if (opts.cloud && req.method === "GET" && url.pathname === "/api/project/repos") {
         return send(res, 200, { repos: await listRepos(opts.cloud.workspace) });
       }
@@ -314,7 +348,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         return send(res, 200, { name: `${repoName(proj.root)!.replace("/", "-")}-lens-fixes.patch`, patch });
       }
       if (opts.cloud && req.method === "POST" && url.pathname === "/api/project/push") {
-        if (!process.env.GITHUB_TOKEN) return send(res, 400, { error: "pushing needs GITHUB_TOKEN; use Download Patch" });
+        if (!githubToken()) return send(res, 400, { error: "Connect GitHub to push, or use Download Patch." });
         if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });
         if (!repoName(proj.root)) return send(res, 400, { error: "this project isn't a cloned repo" });
         return send(res, 200, await pushFixes(proj.root));

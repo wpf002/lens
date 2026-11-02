@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { listCloudRepos } from "../api";
+import { githubConnectUrl, githubDisconnect, githubRepos, listCloudRepos, type GithubRepo } from "../api";
 import { recentProjects, useStore } from "../store";
 import { IconFolder } from "./icons";
 import { Mascot } from "./Mascot";
@@ -20,6 +20,27 @@ export function ProjectModal() {
   useEffect(() => {
     if (cloud) listCloudRepos().then((r) => setRepos(r.repos), () => setRepos([]));
   }, [cloud]);
+  const gh = meta?.github;
+  const [ghLogin, setGhLogin] = useState<string | null>(gh?.login ?? null);
+  const [ghRepos, setGhRepos] = useState<GithubRepo[]>([]);
+  const [ghError, setGhError] = useState<string | null>(null);
+  useEffect(() => {
+    if (cloud && ghLogin) githubRepos().then((r) => setGhRepos(r.repos), (e: Error) => setGhError(e.message));
+  }, [cloud, ghLogin]);
+  const connect = async () => {
+    try {
+      window.location.href = (await githubConnectUrl()).url;
+    } catch (e) {
+      setGhError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const disconnect = async () => {
+    await githubDisconnect().catch(() => undefined);
+    setGhLogin(null);
+    setGhRepos([]);
+  };
+  const q = typed.trim().toLowerCase();
+  const ghShown = ghRepos.filter((r) => r.name !== meta?.repo && (!q || r.name.toLowerCase().includes(q))).slice(0, 8);
   const recents = cloud ? repos.filter((r) => r !== meta?.repo) : recentProjects().filter((r) => r !== meta?.root);
   const busy = op.busy !== null;
   const close = () => useStore.getState().setModal(null);
@@ -48,6 +69,25 @@ export function ProjectModal() {
         </div>
       ) : (
         <>
+          {cloud && gh?.available && (
+            <div className="mb-3 flex items-center justify-between gap-2">
+              {ghLogin ? (
+                <>
+                  <span className="text-[12px] text-muted">
+                    GitHub <span className="font-mono text-fg">@{ghLogin}</span>
+                  </span>
+                  <Button size="sm" onClick={() => void disconnect()}>
+                    Disconnect
+                  </Button>
+                </>
+              ) : (
+                <Button variant="accent" className="h-10 w-full text-[13px]" onClick={() => void connect()}>
+                  Connect GitHub
+                </Button>
+              )}
+            </div>
+          )}
+
           {meta?.canPick !== false && (
             <Button variant="accent" className="h-10 w-full text-[13px]" autoFocus onClick={() => void pick()}>
               <IconFolder size={16} /> Choose a Folder…
@@ -73,6 +113,26 @@ export function ProjectModal() {
             <p className="mt-3 rounded-md border border-critical/40 bg-critical/10 px-2.5 py-2 text-[12px] text-fg" role="alert">
               {op.error}
             </p>
+          )}
+
+          {ghError && <p className="mt-3 text-[12px] text-critical">{ghError}</p>}
+
+          {ghShown.length > 0 && (
+            <div className="mt-5">
+              <div className="eyebrow mb-1.5">Your Repos</div>
+              <ul className="divide-y divide-line rounded-md border border-line">
+                {ghShown.map((r) => (
+                  <li key={r.name}>
+                    <button type="button" className="flex w-full items-center gap-2 px-2.5 py-2 text-left hover:bg-raised" onClick={() => void open(r.name)}>
+                      <IconFolder size={14} className="shrink-0 text-accent" />
+                      <span className="shrink-0 whitespace-nowrap text-[12.5px] text-fg">{r.name.split("/").pop()}</span>
+                      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint">{r.name}</span>
+                      {r.private && <span className="shrink-0 text-[10.5px] uppercase tracking-wide text-faint">Private</span>}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
 
           {recents.length > 0 && (

@@ -7,6 +7,7 @@ import { execFile } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { githubToken } from "./github.js";
 
 export interface RepoRef {
   owner: string;
@@ -30,7 +31,7 @@ export const reposDir = (workspace: string) => path.join(workspace, "repos");
 export const repoDir = (workspace: string, r: RepoRef) => path.join(reposDir(workspace), r.owner, r.name);
 
 function authArgs(): string[] {
-  const t = process.env.GITHUB_TOKEN;
+  const t = githubToken();
   if (!t) return [];
   const basic = Buffer.from(`x-access-token:${t}`).toString("base64");
   return ["-c", `http.https://github.com/.extraheader=Authorization: Basic ${basic}`];
@@ -53,13 +54,13 @@ function git(cwd: string, args: string[], timeout = 5 * 60_000): Promise<string>
 /** Keep tokens out of error messages that reach the browser. */
 function scrub(msg: string): string {
   let out = msg;
-  const t = process.env.GITHUB_TOKEN;
+  const t = githubToken();
   if (t) out = out.split(t).join("***");
   out = out.replace(/Basic [A-Za-z0-9+/=]+/g, "Basic ***");
   if (/Authentication failed|could not read Username|Repository not found|403/i.test(out)) {
-    out = process.env.GITHUB_TOKEN
-      ? "GitHub refused access. Check that GITHUB_TOKEN can read (and push to) this repo."
-      : "Repo not found or private. Hosted Lens opens public repos; run Lens locally for private ones.";
+    out = t
+      ? "GitHub refused access to this repo, or it doesn't exist."
+      : "Repo not found or private. Connect GitHub to open private repos.";
   }
   return out.slice(0, 300);
 }

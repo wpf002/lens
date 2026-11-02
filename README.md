@@ -108,10 +108,11 @@ For Codex, Gemini CLI, Copilot, Cursor, OpenCode, Cline, Kiro, and Trae, run `./
 | `LENS_PASSWORD` | Sign-in password, 12+ characters. Without both, nobody can sign in. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | AI runs on your Claude plan, same as local. Create with `claude setup-token`. |
 | `ANTHROPIC_API_KEY` | Alternative: AI runs billed to an API key. |
-| `GITHUB_TOKEN` | Optional. Clone private repos and push fix branches. Without it, Lens opens public repos and fixes download as a patch. |
+| `GITHUB_CLIENT_ID` | From a GitHub OAuth App (Settings → Developer settings → OAuth Apps). Callback URL: `https://<your-host>/github/callback`. |
+| `GITHUB_CLIENT_SECRET` | Same OAuth App. With both set, Open Project shows **Connect GitHub**. |
 | `LENS_REPO` | Optional `owner/name` to open on first boot. |
 
-Open Project takes `owner/name` or a GitHub URL and clones it into `/data/repos`. After Fix, **Download Patch** saves the changes as a `.patch` file; run `git apply <file>` in your checkout. With `GITHUB_TOKEN` set, **Push Branch** pushes them to a `lens/fixes-*` branch instead (never the default branch).
+Open Project takes `owner/name` or a GitHub URL and clones it into `/data/repos`. After Fix, **Download Patch** saves the changes as a `.patch` file; run `git apply <file>` in your checkout. After **Connect GitHub**, private repos open too, and **Push Branch** pushes fixes to a `lens/fixes-*` branch instead (never the default branch).
 
 ## CLI
 
