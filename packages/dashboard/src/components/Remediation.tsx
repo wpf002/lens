@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { fixesPatch, pushFixesBranch, type ProposedFix, type RemediationSource } from "../api";
 import { useStore } from "../store";
 import { costRange } from "../utils/format";
@@ -128,24 +128,37 @@ export function Remediation({ source }: { source: Source }) {
   const failed = job.task === "remediate" && job.source === source && job.state === "error";
   const box = "mx-3 my-2.5 rounded-lg border border-line bg-panel-2 text-[12px]";
 
-  if (running)
+  if (running) {
+    const fa = job.fixAll;
+    const pct = fa && fa.total ? Math.min(100, Math.round((Math.min(fa.attempted, fa.total) / fa.total) * 100)) : null;
     return (
-      <div className={cx(box, "flex items-center gap-2 px-3 py-2.5 text-[12.5px] text-fg")} role="status">
-        <Spinner size={14} />
-        {job.fixAll ? (
-          <span>
-            Fixing… <span className="font-mono tabular">{Math.min(job.fixAll.attempted, job.fixAll.total)} of {job.fixAll.total}</span> · {job.fixAll.fixed} fixed
-            {job.costUsd ? <span className="text-faint"> · ${job.costUsd.toFixed(2)}</span> : null}
-          </span>
-        ) : (
-          job.progress?.some((p) => p.startsWith("Auditing")) ? "Auditing…" : job.progress?.some((p) => p.startsWith("Reviewing")) ? "Reviewing…" : "Fixing…"
-        )}
-        <span className="truncate font-mono text-[11px] text-faint">{(job.progress ?? []).at(-1)}</span>
-        <Button size="sm" variant="ghost" className="ml-auto" onClick={() => void cancel()}>
-          Cancel
-        </Button>
+      <div className={cx(box, "overflow-hidden text-[12.5px] text-fg")} role="status">
+        <div className="flex items-center gap-2 px-3 pb-2 pt-2.5">
+          <Spinner size={14} />
+          {fa ? (
+            <span>
+              Fixing… <span className="font-mono tabular">{Math.min(fa.attempted, fa.total)} of {fa.total}</span> · {fa.fixed} fixed
+              {job.costUsd ? <span className="text-faint"> · ${job.costUsd.toFixed(2)}</span> : null}
+            </span>
+          ) : (
+            job.progress?.some((p) => p.startsWith("Auditing")) ? "Auditing…" : job.progress?.some((p) => p.startsWith("Reviewing")) ? "Reviewing…" : "Fixing…"
+          )}
+          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint">{(job.progress ?? []).at(-1)}</span>
+          <Elapsed since={job.startedAt} />
+          <Button size="sm" variant="ghost" onClick={() => void cancel()}>
+            Cancel
+          </Button>
+        </div>
+        <div className="relative h-[3px] bg-line">
+          {pct === null ? (
+            <div className="lens-scanbar !absolute !inset-0 !h-full !w-full !rounded-none !bg-transparent" />
+          ) : (
+            <div className="h-full bg-accent transition-[width] duration-500" style={{ width: `${pct}%` }} />
+          )}
+        </div>
       </div>
     );
+  }
 
   if (confirm) {
     const fixAll = source !== "review" && !confirm.checkId;
@@ -273,4 +286,15 @@ export function Remediation({ source }: { source: Source }) {
       )}
     </div>
   );
+}
+
+function Elapsed({ since }: { since?: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  if (!since) return null;
+  const sec = Math.max(0, Math.floor((now - since) / 1000));
+  return <span className="font-mono text-[11px] tabular text-faint">{Math.floor(sec / 60)}:{String(sec % 60).padStart(2, "0")}</span>;
 }
