@@ -147,15 +147,15 @@ export function Remediation({ source }: { source: Source }) {
       <div className={cx(box, "overflow-hidden text-[12.5px] text-fg")} role="status">
         <div className="flex items-center gap-2 px-3 pb-2 pt-2.5">
           <Spinner size={14} />
-          <span className="min-w-0 flex-1 truncate">
+          <span className="shrink-0 font-medium">
             {fa ? (
               <>
-                Fixing… <span className="font-mono tabular">{Math.min(fa.attempted, fa.total)} of {fa.total}</span> · {fa.fixed} fixed
-                {job.costUsd ? <span className="text-faint"> · ${job.costUsd.toFixed(2)}</span> : null}
+                Fixing <span className="font-mono tabular">{Math.min(fa.attempted, fa.total)}/{fa.total}</span>
+                <span className="font-normal text-muted"> · {fa.fixed} Fixed{job.costUsd ? ` · $${job.costUsd.toFixed(2)}` : ""}</span>
               </>
-            ) : job.progress?.some((p) => p.startsWith("Auditing")) ? "Auditing…" : job.progress?.some((p) => p.startsWith("Reviewing")) ? "Reviewing…" : "Fixing…"}
-            {(job.progress ?? []).at(-1) && <span className="ml-2 text-faint">{(job.progress ?? []).at(-1)}</span>}
+            ) : job.progress?.some((p) => p.startsWith("Auditing")) ? "Auditing" : job.progress?.some((p) => p.startsWith("Reviewing")) ? "Reviewing" : "Fixing"}
           </span>
+          <span className="min-w-0 flex-1 truncate text-[11.5px] text-faint">{(job.progress ?? []).at(-1)}</span>
           <Elapsed since={job.step?.startedAt ?? job.startedAt} typicalMs={job.step?.typicalMs} />
           <Button size="sm" variant="ghost" onClick={() => void cancel()}>
             Cancel
@@ -335,7 +335,7 @@ function Elapsed({ since, typicalMs }: { since?: number; typicalMs?: number }) {
   return (
     <span className="whitespace-nowrap font-mono text-[11px] tabular text-faint">
       {Math.floor(sec / 60)}:{String(sec % 60).padStart(2, "0")}
-      {typical && <span className="font-sans"> · usually ~{typical} min</span>}
+      {typical && <> / ~{typical}:00</>}
     </span>
   );
 }

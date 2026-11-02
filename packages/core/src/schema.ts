@@ -223,7 +223,8 @@ export const ReviewFindingsSchema = z.object({
   findings: z.array(z.object({
     title: clip(140),
     severity: z.enum(["high", "medium", "low"]),
-    category: z.enum(["design", "over-engineering", "duplication", "errors", "consistency", "ai-habits", "tests", "performance", "naming"]),
+    // An unknown category shouldn't throw away the whole review.
+    category: z.enum(["design", "over-engineering", "duplication", "errors", "consistency", "ai-habits", "tests", "performance", "naming"]).catch("design"),
     path: z.string().max(400),
     line: z.number().int().positive().optional(),
     detail: clip(600),

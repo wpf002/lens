@@ -166,9 +166,9 @@ function describeTool(name: string, input: Record<string, unknown>, root: string
     case "Read":
       return `Reading ${rel(input.file_path)}`;
     case "Grep":
-      return `Searching for "${String(input.pattern ?? "").slice(0, 60)}"`;
+      return input.path ? `Searching ${rel(input.path)}` : "Searching the code";
     case "Glob":
-      return `Listing ${String(input.pattern ?? "")}`;
+      return "Listing files";
     case "Write":
     case "Edit": {
       const f = String(input.file_path ?? "");
