@@ -144,7 +144,7 @@ export function Remediation({ source }: { source: Source }) {
             job.progress?.some((p) => p.startsWith("Auditing")) ? "Auditing…" : job.progress?.some((p) => p.startsWith("Reviewing")) ? "Reviewing…" : "Fixing…"
           )}
           <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint">{(job.progress ?? []).at(-1)}</span>
-          <Elapsed since={job.startedAt} />
+          <Elapsed since={job.step?.startedAt ?? job.startedAt} typicalMs={job.step?.typicalMs} />
           <Button size="sm" variant="ghost" onClick={() => void cancel()}>
             Cancel
           </Button>
@@ -288,7 +288,7 @@ export function Remediation({ source }: { source: Source }) {
   );
 }
 
-function Elapsed({ since }: { since?: number }) {
+function Elapsed({ since, typicalMs }: { since?: number; typicalMs?: number }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -296,5 +296,11 @@ function Elapsed({ since }: { since?: number }) {
   }, []);
   if (!since) return null;
   const sec = Math.max(0, Math.floor((now - since) / 1000));
-  return <span className="font-mono text-[11px] tabular text-faint">{Math.floor(sec / 60)}:{String(sec % 60).padStart(2, "0")}</span>;
+  const typical = typicalMs ? Math.max(1, Math.round(typicalMs / 60_000)) : null;
+  return (
+    <span className="whitespace-nowrap font-mono text-[11px] tabular text-faint">
+      {Math.floor(sec / 60)}:{String(sec % 60).padStart(2, "0")}
+      {typical && <span className="font-sans"> · usually ~{typical} min</span>}
+    </span>
+  );
 }

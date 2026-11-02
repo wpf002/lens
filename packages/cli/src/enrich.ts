@@ -57,6 +57,8 @@ export interface EnrichJob {
   /** Which report a remediate run works from (and, for "health", which check). */
   source?: RemediationSource;
   checkId?: string;
+  /** The audit or review currently running, with its usual duration from past runs. */
+  step?: { kind: "audit" | "review"; startedAt: number; typicalMs?: number };
 }
 
 export const DEFAULT_BUDGET_USD = 2;
@@ -95,6 +97,21 @@ export const REVIEW_REPORT = "CODE_REVIEW.md";
 export const reviewPath = (root: string) => path.join(paths(root).dir, "review.json");
 export const AUDIT_REPORT = "SECURITY_AUDIT.md";
 export const auditPath = (root: string) => path.join(paths(root).dir, "audit.json");
+const runTimesPath = (root: string) => path.join(paths(root).dir, "run-times.json");
+type RunTimes = Partial<Record<"audit" | "review", number[]>>;
+
+/** Median of the last five successful runs of this kind, or undefined before the first. */
+async function typicalDuration(root: string, kind: "audit" | "review"): Promise<number | undefined> {
+  const times = ((await readJson<RunTimes>(runTimesPath(root)).catch(() => null)) ?? {})[kind] ?? [];
+  if (!times.length) return undefined;
+  const sorted = [...times].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+async function recordDuration(root: string, kind: "audit" | "review", ms: number) {
+  const all = (await readJson<RunTimes>(runTimesPath(root)).catch(() => null)) ?? {};
+  all[kind] = [...(all[kind] ?? []), Math.round(ms)].slice(-5);
+  await writeJsonAtomic(runTimesPath(root), all, true);
+}
 export const MAX_BUDGET_USD = 20;
 const TIMEOUT_MS = 20 * 60_000;
 
@@ -316,7 +333,17 @@ export class EnrichRunner {
   }
 
   private async runAudit(job: EnrichJob) {
-    if (await this.auditStep(job)) this.finish(job, "done");
+    if (await this.timed(job, "audit")) this.finish(job, "done");
+  }
+
+  /** Runs an audit or review step and records how long it took. */
+  private async timed(job: EnrichJob, kind: "audit" | "review"): Promise<boolean> {
+    const step = { kind, startedAt: Date.now(), typicalMs: await typicalDuration(job.root, kind) };
+    job.step = step;
+    const ok = kind === "audit" ? await this.auditStep(job) : await this.reviewStep(job);
+    job.step = undefined;
+    if (ok) await recordDuration(job.root, kind, Date.now() - step.startedAt).catch(() => undefined);
+    return ok;
   }
 
   /** Runs the audit and saves it. False when the job stopped (cancel, timeout). */
@@ -468,7 +495,7 @@ export class EnrichRunner {
 
   /** Read-only senior-engineer review: CODE_REVIEW.md plus validated findings for the Health view. */
   private async runReview(job: EnrichJob) {
-    if (await this.reviewStep(job)) this.finish(job, "done");
+    if (await this.timed(job, "review")) this.finish(job, "done");
   }
 
   /** Runs the review and saves it. False when the job stopped. */
@@ -613,7 +640,7 @@ export class EnrichRunner {
       const saved = job.budgetUsd;
       job.budgetUsd = Math.min(saved, plan.firstLimit);
       this.push(job, plan.first === "audit" ? "Auditing the code" : "Reviewing the code");
-      const ok = plan.first === "audit" ? await this.auditStep(job) : await this.reviewStep(job);
+      const ok = await this.timed(job, plan.first);
       job.budgetUsd = saved;
       if (!ok) return;
       job.audit = undefined;
