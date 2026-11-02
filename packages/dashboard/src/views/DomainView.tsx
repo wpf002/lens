@@ -39,9 +39,20 @@ export function DomainView() {
     <div className="relative h-full w-full">
       <GraphCanvas vm={vm} overlay={overlay} onNodeClick={onClick} fitKey={`domain:${expandedStep ?? ""}`} />
       {vm.nodes.length > 0 && (
-        <div className="pointer-events-none absolute left-3 top-3 z-10 rounded-md border border-line bg-panel px-2.5 py-1.5 text-[11.5px] text-muted">
-          Business area → flow → step. Click a step to reveal the code that implements it.
-          {job.state === "done" && job.costUsd !== undefined && <span className="ml-2 text-faint">· Claude run cost ${job.costUsd.toFixed(2)}</span>}
+        <div className="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-3 rounded-lg border border-line bg-panel/90 px-3 py-2 text-[11px] shadow-sm backdrop-blur-sm">
+          <ol className="flex items-center gap-1.5 font-medium text-fg">
+            {["Area", "Flow", "Step"].map((label, i) => (
+              <li key={label} className="flex items-center gap-1.5">
+                {i > 0 && <span className="text-faint">›</span>}
+                <span className="rounded border border-line bg-panel-2 px-1.5 py-0.5">{label}</span>
+              </li>
+            ))}
+          </ol>
+          <span className="h-4 w-px bg-line" />
+          <span className="text-muted">Click a Step to Open Its Code</span>
+          {job.state === "done" && job.costUsd !== undefined && (
+            <span className="rounded bg-panel-2 px-1.5 py-0.5 tabular-nums text-faint">${job.costUsd.toFixed(2)}</span>
+          )}
         </div>
       )}
     </div>
