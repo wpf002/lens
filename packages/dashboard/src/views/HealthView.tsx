@@ -145,6 +145,7 @@ function ItemActions({ source, itemId, stableId }: { source: "review" | "health"
 function FindingRow({ f, i, st, canFix }: { f: ReviewRecord["findings"][number]; i: number; st: ItemStatus; canFix: boolean }) {
   const [open, setOpen] = useState(false);
   const reopen = useStore((s) => s.toggleWontFix);
+  const fixing = useStore((s) => s.enrichJob.state === "running" && s.enrichJob.task === "remediate" && s.enrichJob.checkId === `review-${i}`);
   const closed = st.kind !== "open";
   return (
     <li className="border-b border-line last:border-b-0">
@@ -152,7 +153,7 @@ function FindingRow({ f, i, st, canFix }: { f: ReviewRecord["findings"][number];
         {open ? <IconChevronDown size={13} className="shrink-0 text-faint" /> : <IconChevronRight size={13} className="shrink-0 text-faint" />}
         <SeverityBadge severity={f.severity as Severity} className="w-[68px] justify-center" />
         <span className={cx("min-w-0 flex-1 text-[13px]", closed ? "text-muted" : "text-fg")}>{f.title}</span>
-        <StatusTag st={st} />
+        {fixing ? <span className="shrink-0 animate-pulse text-[11.5px] font-medium text-accent">Fixing…</span> : <StatusTag st={st} />}
       </button>
       {open && (
         <div className="space-y-1.5 pb-3 pl-[118px] pr-4 text-[12px] text-muted">
@@ -173,7 +174,7 @@ function FindingRow({ f, i, st, canFix }: { f: ReviewRecord["findings"][number];
             </p>
           )}
           {st.kind === "safe" && <p className="text-fg">{renderInlineCode(st.reason)}</p>}
-          {st.kind === "open" && canFix && <ItemActions source="review" itemId={`review-${i}`} stableId={reviewKey(f)} />}
+          {st.kind === "open" && canFix && !fixing && <ItemActions source="review" itemId={`review-${i}`} stableId={reviewKey(f)} />}
           {st.kind === "wontfix" && (
             <button type="button" className="text-[11.5px] text-accent hover:underline" onClick={() => void reopen(reviewKey(f), false)}>
               Reopen

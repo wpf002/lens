@@ -155,6 +155,8 @@ export interface State {
   /** Hosted: where applied fixes are (branch, pull request, merged). */
   push: PushState;
   refreshPush(): Promise<void>;
+  /** Re-fetch graph, remediation and pull request state after the repo changed. */
+  reloadProject(): Promise<void>;
   cancelAI(): Promise<void>;
   watchAI(): void;
   openProject(path: string): Promise<void>;
@@ -548,6 +550,10 @@ export const useStore = create<State>((set, get) => ({
     } catch (err) {
       set({ wontFix: prev, fixOp: { busy: false, error: err instanceof Error ? err.message : String(err) } });
     }
+  },
+  async reloadProject() {
+    await reloadGraph();
+    await get().refreshRemediation();
   },
   async refreshPush() {
     if (!get().meta?.canPush) return set({ push: null });

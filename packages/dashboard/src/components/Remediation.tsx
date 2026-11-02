@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { createPullRequest, fixesPatch, mergePullRequest, type ProposedFix, type RemediationSource } from "../api";
+import { createPullRequest, fixesPatch, mergePullRequest, type ProposedFix, type RemediationSource, type PullRequest } from "../api";
 import { useStore } from "../store";
 import { costRange } from "../utils/format";
 import { IconChevronDown, IconChevronRight } from "./icons";
@@ -121,12 +121,14 @@ export function Remediation({ source }: { source: Source }) {
   const [push, setPush] = useState<{ busy: string | null; error?: string }>({ busy: null });
   const pushed = useStore((s) => s.push);
   const refreshPush = useStore((s) => s.refreshPush);
-  const step = async (label: string, fn: () => Promise<unknown>, reload = false) => {
+  const step = async (label: string, fn: () => Promise<PullRequest>, reload = false) => {
     setPush({ busy: label });
     try {
-      await fn();
-      await refreshPush();
-      if (reload) await useStore.getState().refreshRemediation();
+      const pr = await fn();
+      // Show the result right away; the refetch below only adds detail.
+      useStore.setState((st) => ({ push: { branch: st.push?.branch ?? null, dirty: false, pr } }));
+      if (reload) await useStore.getState().reloadProject();
+      else await refreshPush();
       setPush({ busy: null });
     } catch (e) {
       setPush({ busy: null, error: e instanceof Error ? e.message : String(e) });
