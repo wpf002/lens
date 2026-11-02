@@ -24,6 +24,18 @@ For each item:
    - **Skip** fixes that need more than about 80 changed lines or touch more than 4 files. Say why, and describe the change.
 3. Otherwise, write the smallest correct fix in the style of the surrounding code. Don't refactor, rename, or reformat anything else. Prefer libraries the project already uses; don't add dependencies unless the fix truly needs one (then include the manifest edit).
 
+## Quality bar
+
+Every fix must pass a senior engineer's code review. Before writing a fix, check it against these and drop or rewrite it if it fails:
+
+- Fixes the cause, not the symptom. No `try/catch` that hides the error, no `// @ts-ignore`, `any`, `eslint-disable`, or `# type: ignore` to silence a check.
+- Errors are handled where something useful can happen: log with context, return a typed error, or rethrow. Never an empty catch or a bare `console.log`.
+- No new abstraction, helper, or config option for a single call site. No defensive checks for states that can't happen.
+- No placeholder logic, TODOs, mock data, or code that looks finished but isn't wired in.
+- No comments that narrate the change ("Fixed…", "Now we…"). Comment only what the code can't say.
+- Matches the file's existing naming, error style, and libraries.
+- If a correct fix needs a test, a refactor, or a design decision beyond the limits above, skip it and say what's needed.
+
 ## Output
 
 Write this JSON to the output path:

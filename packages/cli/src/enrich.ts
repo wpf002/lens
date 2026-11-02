@@ -7,7 +7,7 @@
  * Cost control: every run passes --max-budget-usd, and the actual cost from the
  * final stream-json result is reported back to the dashboard.
  */
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -714,13 +714,25 @@ export class EnrichRunner {
 export async function fixAllPlan(root: string, source: "audit" | "health"): Promise<{ first: "audit" | "review" | null; firstLimit: number; items: number; estimate: CostEstimate }> {
   const g = await loadGraph(root);
   const files = g?.nodes.filter((n) => n.kind === "file" && n.path).length ?? 0;
-  const first = source === "audit" ? (existsSync(auditPath(root)) ? null : "audit") : existsSync(reviewPath(root)) ? null : "review";
+  // Run the audit or review again when it's missing or older than the latest commit.
+  const report = source === "audit" ? auditPath(root) : reviewPath(root);
+  const at = Date.parse((await readJson<{ generatedAt?: string }>(report))?.generatedAt ?? "") || 0;
+  const first = at && at >= headCommitTime(root) ? null : source === "audit" ? "audit" : "review";
   const pre = first ? estimateCost(first, files) : { low: 0, high: 0, limit: 0 };
   const items = await fixableCount(root, source);
   // Before the first run, assume about ten more items will turn up.
   const fix = estimateFixAll(Math.max(1, items + (first ? 10 : 0)));
   const r = (n: number) => Math.round(n * 100) / 100;
   return { first, firstLimit: pre.limit, items, estimate: { low: r(pre.low + fix.low), high: r(pre.high + fix.high), limit: r(Math.min(150, pre.limit + fix.limit)) } };
+}
+
+/** Last commit time in ms, or 0 outside a git repo. */
+function headCommitTime(root: string): number {
+  try {
+    return Number(execFileSync("git", ["log", "-1", "--format=%ct"], { cwd: root, encoding: "utf8", timeout: 10_000 }).trim()) * 1000 || 0;
+  } catch {
+    return 0;
+  }
 }
 
 /** Everything Fix All can work on for a page. */
