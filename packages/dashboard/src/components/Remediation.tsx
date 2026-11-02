@@ -4,7 +4,9 @@ import { useStore } from "../store";
 import { costRange } from "../utils/format";
 import { IconChevronDown, IconChevronRight } from "./icons";
 import { Mascot } from "./Mascot";
-import { Button, Spinner, cx, renderInlineCode } from "./ui";
+import { findingItemId, type Severity } from "@lens/core/browser";
+import { useModel } from "../views/hooks";
+import { Button, SeverityBadge, Spinner, cx, renderInlineCode } from "./ui";
 
 type Source = RemediationSource;
 
@@ -89,6 +91,7 @@ export function Remediation({ source }: { source: Source }) {
   const mine = useStore((s) => s.remediation[source] ?? null);
   // The Health page shows one Fixes panel; fold in earlier review-only runs.
   const extra = useStore((s) => (source === "health" ? s.remediation.review ?? null : null));
+  const info = useItemInfo();
   const estimates = useStore((s) => s.remediationEstimates);
   const confirm = useStore((s) => (s.remediateConfirm?.source === source ? s.remediateConfirm : null));
   const checkTitle = useStore((s) => s.model?.graph.health?.checks.find((c) => c.id === (confirm?.checkId ?? mine?.checkId))?.title);
@@ -285,16 +288,12 @@ export function Remediation({ source }: { source: Source }) {
           <button type="button" className="eyebrow flex items-center gap-1 hover:!text-fg" onClick={() => setShowManual((v) => !v)} aria-expanded={showManual}>
             {showManual ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />} Manual <span className="font-mono text-faint">{notFixed.length + todo.length}</span>
           </button>
-          {showManual && <ul className="mt-1 space-y-1 text-muted">
-            {notFixed.map((f) => (
-              <li key={f.id}>
-                <span className="text-fg">{f.title}</span> <span className="text-faint">· couldn't apply: {f.invalid}</span>
-              </li>
-            ))}
-            {todo.map((x, i) => (
-              <li key={i}>{renderInlineCode(x.reason)}</li>
-            ))}
-          </ul>}
+          {showManual && (
+            <ItemList
+              info={info}
+              items={sortBySeverity(info, [...notFixed.map((f) => ({ itemId: f.itemId, reason: `Couldn't apply: ${f.invalid}`, title: f.title })), ...todo])}
+            />
+          )}
         </div>
       )}
       {safe.length > 0 && (
@@ -302,11 +301,7 @@ export function Remediation({ source }: { source: Source }) {
           <button type="button" className="eyebrow flex items-center gap-1 hover:!text-fg" onClick={() => setShowSafe((v) => !v)} aria-expanded={showSafe}>
             {showSafe ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />} No Fix Needed <span className="font-mono text-faint">{safe.length}</span>
           </button>
-          {showSafe && <ul className="mt-1 space-y-1 text-muted">
-            {safe.map((x, i) => (
-              <li key={i}>{renderInlineCode(x.reason.replace(SAFE_PREFIX, ""))}</li>
-            ))}
-          </ul>}
+          {showSafe && <ItemList info={info} items={sortBySeverity(info, safe.map((x) => ({ ...x, reason: x.reason.replace(SAFE_PREFIX, "") })))} />}
         </div>
       )}
     </div>
@@ -314,7 +309,7 @@ export function Remediation({ source }: { source: Source }) {
 }
 
 /** Skips where the agent found the code already handles the issue. Nothing for the owner to do. */
-const SAFE = /^(scanner was wrong|already (safe|hardened|handled|fixed))\b/i;
+export const SAFE = /^(scanner was wrong|already (safe|hardened|handled|fixed))\b/i;
 const SAFE_PREFIX = /^scanner was wrong[:.,]?\s*/i;
 
 function Elapsed({ since, typicalMs }: { since?: number; typicalMs?: number }) {
@@ -331,5 +326,65 @@ function Elapsed({ since, typicalMs }: { since?: number; typicalMs?: number }) {
       {Math.floor(sec / 60)}:{String(sec % 60).padStart(2, "0")}
       {typical && <span className="font-sans"> · usually ~{typical} min</span>}
     </span>
+  );
+}
+
+type ItemInfo = (id: string) => { title: string; severity?: Severity; where?: string } | undefined;
+const SEV_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+
+/** Title and severity for a remediation item id (review-<i>, <check>-<k>, or a finding hash). */
+function useItemInfo(): ItemInfo {
+  const model = useModel();
+  const review = useStore((s) => s.review);
+  const findings = model.graph.security?.findings ?? [];
+  const checks = model.graph.health?.checks ?? [];
+  return (id) => {
+    const r = /^review-(\d+)$/.exec(id);
+    if (r) {
+      const f = review?.findings[Number(r[1])];
+      return f && { title: f.title, severity: f.severity as Severity, where: `${f.path}${f.line ? `:${f.line}` : ""}` };
+    }
+    for (const c of checks) {
+      const m = id.startsWith(`${c.id}-`) ? /^\d+$/.exec(id.slice(c.id.length + 1)) : null;
+      const h = m ? c.hits[Number(m[0])] : undefined;
+      if (h) return { title: c.title, severity: c.severity as Severity, where: `${h.path}${h.line ? `:${h.line}` : ""}` };
+    }
+    const f = findings.find((x) => findingItemId(x) === id);
+    return f && { title: f.title, severity: f.severity as Severity, where: `${f.path}:${f.line}` };
+  };
+}
+
+function sortBySeverity<T extends { itemId: string }>(info: ItemInfo, items: T[]): T[] {
+  return [...items].sort((a, b) => (SEV_RANK[info(a.itemId)?.severity ?? "info"] ?? 4) - (SEV_RANK[info(b.itemId)?.severity ?? "info"] ?? 4));
+}
+
+/** Reasons read better with a capital and with review-<n> swapped for that finding's title. */
+function tidy(info: ItemInfo, reason: string): string {
+  const s = reason.replace(/\breview-\d+\b/g, (id) => {
+    const t = info(id)?.title;
+    return t ? `"${t}"` : "a related finding";
+  });
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function ItemList({ info, items }: { info: ItemInfo; items: Array<{ itemId: string; reason: string; title?: string }> }) {
+  return (
+    <ul className="mt-2 divide-y divide-line rounded-md border border-line">
+      {items.map((x, i) => {
+        const it = info(x.itemId);
+        return (
+          <li key={i} className="grid grid-cols-[64px_1fr] gap-x-3 gap-y-0.5 px-3 py-2">
+            <span className="pt-px">{it?.severity && <SeverityBadge severity={it.severity} className="w-[60px] justify-center" />}</span>
+            <div className="min-w-0">
+              <div className="flex items-baseline gap-2">
+                <span className="min-w-0 truncate text-[12.5px] text-fg">{it?.title ?? x.title ?? x.itemId}</span>
+                {it?.where && <span className="hidden shrink-0 truncate font-mono text-[11px] text-faint sm:inline">{it.where}</span>}
+              </div>
+              <p className="text-[12px] leading-relaxed text-muted">{renderInlineCode(tidy(info, x.reason))}</p>
+            </div>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

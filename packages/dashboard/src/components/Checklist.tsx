@@ -107,6 +107,23 @@ const CHOICES = [
 ] as const;
 
 /** Lets the owner settle items the scanner and the AI can't verify. */
+/** What "Pass" means for checks Lens can't verify from the code. */
+const PASS_WHEN: Record<string, string> = {
+  "t1-git-secrets": "`gitleaks detect --log-opts=\"--all\"` reports no leaks.",
+  "t1-spend": "Each provider's billing console has a monthly limit set.",
+  "t1-env": ".env is gitignored, .env.example exists, and a gitleaks pre-commit hook runs.",
+  "t1-stripe": "Prices come from the server and access is granted only in the verified webhook.",
+  "t2-prodcreds": "Production keys live only in the host's settings, not in local files agents can read.",
+  "t2-staging": "Staging and previews use their own database and keys.",
+  "t2-storage": "Buckets are private and files are served through signed URLs.",
+  "t3-realdeps": "Every package in the manifest exists, is maintained, and is spelled right.",
+  "t3-agentcfg": "You've read CLAUDE.md, skills and MCP configs and they hold no secrets or risky commands.",
+  "t3-rls": "Clients never query the database directly, or every table has row-level security.",
+  "t3-logs": "Logs never include auth headers, cookies, tokens, passwords or personal data.",
+  "t3-auditlog": "Logins, permission changes, deletes, exports and payments are logged.",
+  "t3-backups": "Backups run and you've tested a restore.",
+};
+
 function Decide({ item }: { item: Merged }) {
   const mode = useStore((s) => s.mode);
   const [busy, setBusy] = useState(false);
@@ -124,6 +141,13 @@ function Decide({ item }: { item: Merged }) {
     }
   };
   return (
+    <>
+    {PASS_WHEN[item.id] && (
+      <p className="pt-1 text-fg">
+        <span className="text-faint">Pass When: </span>
+        {renderInlineCode(PASS_WHEN[item.id]!)}
+      </p>
+    )}
     <div className="flex flex-wrap items-center gap-1.5 pt-1">
       <span className="text-faint">Mark As</span>
       {CHOICES.map((c) => (
@@ -144,6 +168,7 @@ function Decide({ item }: { item: Merged }) {
       )}
       {err && <span className="text-critical">{err}</span>}
     </div>
+    </>
   );
 }
 

@@ -150,7 +150,7 @@ export function buildChecklist(input: ChecklistInput): ChecklistItem[] {
   }
   add({
     id: "t1-spend", tier: 1, title: "Paid AI APIs behind spend caps", status: aiDeps.length ? "manual" : "na",
-    evidence: aiDeps.length ? aiDeps.map((d) => `uses ${d}: set a monthly cap in that provider's billing settings`) : ["No paid AI SDKs detected."],
+    evidence: aiDeps.length ? aiDeps.map((d) => `Uses ${d}. Set a monthly cap in its billing console.`) : ["No paid AI SDKs detected."],
     source: "manual",
   });
   {

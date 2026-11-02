@@ -4,7 +4,7 @@ import type { ReviewRecord } from "../api";
 import { Evidence } from "../components/Checklist";
 import { IconChevronDown, IconChevronRight } from "../components/icons";
 import { Mascot } from "../components/Mascot";
-import { FixAllButton, Remediation } from "../components/Remediation";
+import { FixAllButton, Remediation, SAFE } from "../components/Remediation";
 import { Button, EmptyState, SeverityBadge, Spinner, cx, renderInlineCode } from "../components/ui";
 import { useStore } from "../store";
 import { SEVERITY_COLOR } from "../utils/colors";
@@ -40,8 +40,10 @@ function Hit({ path, line, detail }: { path: string; line?: number; detail: stri
   );
 }
 
-function CheckRow({ c, manual }: { c: HealthCheck; manual: boolean }) {
+function CheckRow({ c: raw, manual, closed }: { c: HealthCheck; manual: boolean; closed: Set<string> }) {
   const [open, setOpen] = useState(false);
+  const hits = raw.hits.filter((_, k) => !closed.has(`${raw.id}-${k}`));
+  const c = { ...raw, hits, count: raw.count - (raw.hits.length - hits.length) };
   return (
     <li className="border-b border-line last:border-b-0">
       <button type="button" className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left hover:bg-raised" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
@@ -77,7 +79,7 @@ function CheckRow({ c, manual }: { c: HealthCheck; manual: boolean }) {
   );
 }
 
-function FindingRow({ f, fixed }: { f: ReviewRecord["findings"][number]; fixed: boolean }) {
+function FindingRow({ f, fixed, manual }: { f: ReviewRecord["findings"][number]; fixed: boolean; manual?: string }) {
   const [open, setOpen] = useState(f.severity === "high" && !fixed);
   return (
     <li className="border-b border-line last:border-b-0">
@@ -86,6 +88,7 @@ function FindingRow({ f, fixed }: { f: ReviewRecord["findings"][number]; fixed: 
         <SeverityBadge severity={f.severity as Severity} className="w-[68px] justify-center" />
         <span className={cx("min-w-0 flex-1 text-[13px]", fixed ? "text-muted line-through" : "text-fg")}>{f.title}</span>
         {fixed && <span className="shrink-0 rounded border border-guarded/40 px-1.5 font-mono text-[10px] text-guarded">Fixed</span>}
+        {manual && <span className="shrink-0 rounded border border-line px-1.5 font-mono text-[10px] text-faint">Manual</span>}
         <span className="hidden shrink-0 font-mono text-[11px] text-faint md:block">{f.category.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}</span>
       </button>
       {open && (
@@ -102,6 +105,12 @@ function FindingRow({ f, fixed }: { f: ReviewRecord["findings"][number]; fixed: 
               </p>
             )}
           </div>
+          {manual && (
+            <p className="text-fg">
+              <span className="text-faint">Not Fixed: </span>
+              {renderInlineCode(manual)}
+            </p>
+          )}
         </div>
       )}
     </li>
@@ -194,29 +203,44 @@ export function HealthView() {
   const fixableChecks = useStore((s) => s.fixable.checks);
   const health = model.graph.health;
 
-  const { issues, clean, counts } = useMemo(() => {
-    const checks = health?.checks ?? [];
-    const issues = checks.filter((c) => c.count > 0).sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity] || b.count - a.count);
-    const clean = checks.filter((c) => c.count === 0);
-    const counts = { high: 0, medium: 0, low: 0 };
-    for (const c of issues) counts[c.severity] += c.count;
-    const fixed = new Set([...(reviewFixes?.fixes ?? []), ...(healthFixes?.fixes ?? [])].filter((x) => x.status === "applied").map((x) => x.itemId));
-    (review?.findings ?? []).forEach((f, i) => {
-      if (!fixed.has(`review-${i}`)) counts[f.severity] += 1;
+  const scanAt = model.graph.security?.generatedAt;
+  const { issues, clean, counts, closed, manual } = useMemo(() => {
+    // Item ids are positions (review-<i>, <check>-<k>), so only trust records newer than what they index.
+    const closed = new Set<string>();
+    const manual = new Map<string, string>();
+    for (const rec of [reviewFixes, healthFixes]) {
+      if (!rec) continue;
+      const fresh = (id: string) => (id.startsWith("review-") ? !review || rec.generatedAt >= review.generatedAt : !scanAt || rec.generatedAt >= scanAt);
+      for (const f of rec.fixes) if (f.status === "applied" && fresh(f.itemId)) closed.add(f.itemId);
+      for (const x of rec.skipped) {
+        if (!fresh(x.itemId)) continue;
+        if (SAFE.test(x.reason)) closed.add(x.itemId);
+        else manual.set(x.itemId, x.reason);
+      }
+      for (const f of rec.fixes) if (f.status === "proposed" && f.invalid && fresh(f.itemId)) manual.set(f.itemId, `Couldn't apply: ${f.invalid}`);
+    }
+    const checks = (health?.checks ?? []).map((c) => {
+      const left = c.hits.filter((_, k) => !closed.has(`${c.id}-${k}`)).length;
+      return { c, count: c.count - (c.hits.length - left) };
     });
-    return { issues, clean, counts };
-  }, [health, review, reviewFixes, healthFixes]);
+    const issues = checks.filter((x) => x.count > 0).map((x) => x.c).sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity] || b.count - a.count);
+    const clean = checks.filter((x) => x.count <= 0).map((x) => x.c);
+    const counts = { high: 0, medium: 0, low: 0 };
+    for (const x of checks) if (x.count > 0) counts[x.c.severity] += x.count;
+    (review?.findings ?? []).forEach((f, i) => {
+      if (!closed.has(`review-${i}`)) counts[f.severity] += 1;
+    });
+    return { issues, clean, counts, closed, manual };
+  }, [health, review, reviewFixes, healthFixes, scanAt]);
 
   if (!health) {
     return <EmptyState title="No health report" body="Rescan this project with the current version of Lens to run the code health checks." />;
   }
   const score = health.score;
-  // Keep each finding's index: remediation ties fixes to findings as review-<index>.
-  const fixedIdx = new Set([...(reviewFixes?.fixes ?? []), ...(healthFixes?.fixes ?? [])].filter((x) => x.status === "applied").map((x) => Number(/^review-(\d+)$/.exec(x.itemId)?.[1] ?? -1)));
-  // Fixed findings drop out of the list; the fixes panel keeps the record.
+  // Fixed and no-fix-needed findings drop out; the fixes panel keeps the record.
   const findings = (review?.findings ?? [])
-    .map((f, i) => ({ f, i, fixed: fixedIdx.has(i) }))
-    .filter((x) => !x.fixed)
+    .map((f, i) => ({ f, i, fixed: false, manual: manual.get(`review-${i}`) }))
+    .filter((x) => !closed.has(`review-${x.i}`))
     .sort((a, b) => SEV_ORDER[a.f.severity] - SEV_ORDER[b.f.severity]);
   const canReview = mode === "server" && !!meta?.canEnrich;
 
@@ -258,8 +282,8 @@ export function HealthView() {
           <section className="mt-3">
             <h3 className="eyebrow border-b border-line px-4 py-1.5">Senior Review</h3>
             <ul>
-              {findings.map(({ f, i, fixed }) => (
-                <FindingRow key={i} f={f} fixed={fixed} />
+              {findings.map(({ f, i, fixed, manual }) => (
+                <FindingRow key={i} f={f} fixed={fixed} manual={manual} />
               ))}
             </ul>
           </section>
@@ -269,7 +293,7 @@ export function HealthView() {
           {issues.length ? (
             <ul>
               {issues.map((c) => (
-                <CheckRow key={c.id} c={c} manual={canReview && fixableChecks.length > 0 && !fixableChecks.includes(c.id)} />
+                <CheckRow key={c.id} c={c} manual={canReview && fixableChecks.length > 0 && !fixableChecks.includes(c.id)} closed={closed} />
               ))}
             </ul>
           ) : (
