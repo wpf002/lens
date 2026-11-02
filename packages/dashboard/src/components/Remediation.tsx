@@ -170,7 +170,7 @@ export function Remediation({ source }: { source: Source }) {
             void run("remediate", { source, checkId: confirm.checkId });
           }}
         >
-          {fixAll ? "Fix All" : "Fix"}
+          Start
         </Button>
       </div>
     );
