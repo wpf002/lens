@@ -6,7 +6,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { githubToken } from "./github.js";
 
 export interface RepoRef {
@@ -126,4 +126,19 @@ export async function fixesPatch(root: string): Promise<string> {
   await git(root, ["add", "-A", "-N", "--", "."]).catch(() => undefined);
   await git(root, ["reset", "-q", "--", ".lens"]).catch(() => undefined);
   return git(root, ["diff", "--binary", "HEAD", "--", ".", ":(exclude).lens"]);
+}
+
+/**
+ * Sign-in token that survives restarts and deploys. A random key kept on the
+ * volume is mixed with the login, so changing the password signs everyone out.
+ */
+export async function sessionToken(workspace: string, login: { username: string; password: string }): Promise<string> {
+  const file = path.join(workspace, "session.key");
+  let key = await fs.readFile(file, "utf8").then((s) => s.trim()).catch(() => "");
+  if (key.length < 32) {
+    key = randomBytes(32).toString("base64url");
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(file, key, { mode: 0o600 });
+  }
+  return createHmac("sha256", key).update(`${login.username}\0${login.password}`).digest("base64url");
 }

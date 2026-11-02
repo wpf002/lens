@@ -13,7 +13,7 @@ import {
   EDGE_KINDS, NODE_KINDS, type EdgeKind, type KnowledgeGraph, type NodeKind, type PatchKind, type EmbeddingStore, type Severity,
 } from "@lens/core";
 import { startServer, dashboardHtmlPath } from "./server.js";
-import { cloneOrUpdate, parseRepo, reposDir } from "./cloud.js";
+import { cloneOrUpdate, parseRepo, reposDir, sessionToken } from "./cloud.js";
 import { fileURLToPath } from "node:url";
 
 const VERSION = "0.1.0";
@@ -249,7 +249,8 @@ program
     }
     if (!(await loadGraph(root))) await scanAndSave(root);
 
-    const s = await startServer({ root, port: Number(process.env.PORT ?? 8080), host: "0.0.0.0", cloud: { workspace, login } });
+    const token = login ? await sessionToken(workspace, login) : undefined;
+    const s = await startServer({ root, token, port: Number(process.env.PORT ?? 8080), host: "0.0.0.0", cloud: { workspace, login } });
     out(`${pc.bold("Lens")} listening on port ${process.env.PORT ?? 8080}, project ${root}`);
     const stop = async () => {
       await s.close();
