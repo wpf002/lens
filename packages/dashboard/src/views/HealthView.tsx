@@ -40,18 +40,21 @@ function Hit({ path, line, detail }: { path: string; line?: number; detail: stri
   );
 }
 
+const rank = (st: ItemStatus) => (st.kind !== "open" ? 2 : st.reason ? 0 : 1);
+
 function CheckRow({ c, statusOf, canFix }: { c: HealthCheck; statusOf: (id: string) => ItemStatus; canFix: boolean }) {
   const [open, setOpen] = useState(false);
   const ids = checkHitIds(c);
-  const rows = c.hits.map((h, k) => ({ h, id: ids[k]!, st: statusOf(ids[k]!) })).sort((a, b) => Number(a.st.kind !== "open") - Number(b.st.kind !== "open"));
+  const rows = c.hits.map((h, k) => ({ h, id: ids[k]!, st: statusOf(ids[k]!) })).sort((a, b) => rank(a.st) - rank(b.st));
   const left = c.count - rows.filter((r) => r.st.kind !== "open").length;
+  const asks = rows.filter((r) => r.st.kind === "open" && r.st.reason).length;
   return (
     <li className="border-b border-line last:border-b-0">
       <button type="button" className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left hover:bg-raised" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         {open ? <IconChevronDown size={13} className="shrink-0 text-faint" /> : <IconChevronRight size={13} className="shrink-0 text-faint" />}
         <SeverityBadge severity={c.severity as Severity} className="w-[68px] justify-center" />
         <span className={cx("min-w-0 flex-1 text-[13px]", left > 0 ? "text-fg" : "text-muted")}>{c.title}</span>
-        {left > 0 ? <span className="font-mono text-[12px] text-muted tabular">{left} Open</span> : <StatusTag st={{ kind: "fixed", label: "Closed" }} />}
+        {asks > 0 ? <StatusTag st={{ kind: "open", reason: "x" }} /> : left > 0 ? <span className="font-mono text-[12px] text-muted tabular">{left} Open</span> : <StatusTag st={{ kind: "fixed", label: "Closed" }} />}
       </button>
       {open && (
         <div className="pb-3 pl-[118px] pr-4 text-[12px] text-muted">
@@ -82,7 +85,7 @@ function HitRow({ h, id, st, canFix }: { h: HealthCheck["hits"][number]; id: str
         </span>
         {fixing ? <span className="shrink-0 animate-pulse text-[11.5px] font-medium text-accent">Fixing…</span> : <StatusTag st={st} />}
       </div>
-      {st.kind === "open" && st.reason && <p className="pt-0.5 text-[11.5px] text-faint">Skipped: {renderInlineCode(st.reason)}</p>}
+      {st.kind === "open" && st.reason && <p className="pt-0.5 text-[11.5px] text-muted">{renderInlineCode(st.reason)}</p>}
       {st.kind === "open" && canFix && !fixing && <ItemActions source="health" itemId={id} stableId={id} />}
       {st.kind === "wontfix" && (
         <button type="button" className="text-[11.5px] text-accent hover:underline" onClick={() => void reopen(id, false)}>
@@ -96,9 +99,10 @@ function HitRow({ h, id, st, canFix }: { h: HealthCheck["hits"][number]; id: str
 type ItemStatus = { kind: "open"; reason?: string } | { kind: "fixed"; label: string } | { kind: "safe"; reason: string } | { kind: "wontfix" };
 
 function StatusTag({ st }: { st: ItemStatus }) {
-  const label = st.kind === "fixed" ? st.label : st.kind === "safe" ? "No Fix Needed" : st.kind === "wontfix" ? "Won't Fix" : "Open";
-  const tone = st.kind === "open" ? "text-fg" : st.kind === "wontfix" ? "text-muted" : "text-guarded";
-  const dot = st.kind === "open" ? "bg-[var(--sev-medium)]" : st.kind === "wontfix" ? "bg-faint" : "bg-guarded";
+  const ask = st.kind === "open" && !!st.reason;
+  const label = st.kind === "fixed" ? st.label : st.kind === "safe" ? "No Fix Needed" : st.kind === "wontfix" ? "Won't Fix" : ask ? "Needs Decision" : "Open";
+  const tone = ask ? "text-accent" : st.kind === "open" ? "text-fg" : st.kind === "wontfix" ? "text-muted" : "text-guarded";
+  const dot = ask ? "bg-accent" : st.kind === "open" ? "bg-[var(--sev-medium)]" : st.kind === "wontfix" ? "bg-faint" : "bg-guarded";
   return (
     <span className={cx("inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11.5px] font-medium", tone)}>
       <span className={cx("h-1.5 w-1.5 rounded-full", dot)} />
@@ -167,7 +171,7 @@ function FindingRow({ f, i, st, canFix }: { f: ReviewRecord["findings"][number];
         <SeverityBadge severity={f.severity as Severity} className="w-[68px] justify-center" />
         <span className={cx("min-w-0 flex-1 text-[13px]", closed ? "text-muted" : "text-fg")}>
           {f.title}
-          {st.kind === "open" && st.reason && <span className="block truncate text-[11.5px] text-faint">Skipped: {st.reason}</span>}
+          {st.kind === "open" && st.reason && <span className="block truncate text-[11.5px] text-muted">{st.reason}</span>}
         </span>
         {fixing ? <span className="shrink-0 animate-pulse text-[11.5px] font-medium text-accent">Fixing…</span> : <StatusTag st={st} />}
       </button>
@@ -185,7 +189,7 @@ function FindingRow({ f, i, st, canFix }: { f: ReviewRecord["findings"][number];
           )}
           {st.kind === "open" && st.reason && (
             <p className="text-fg">
-              <span className="text-faint">Skipped: </span>
+              <span className="text-faint">Why: </span>
               {renderInlineCode(st.reason)}
             </p>
           )}
@@ -337,7 +341,9 @@ export function HealthView() {
   const hitStatus = (id: string): ItemStatus =>
     wontFix.has(id) ? { kind: "wontfix" } : fixed.has(id) ? { kind: "fixed", label: fixedLabel } : safe.has(id) ? { kind: "safe", reason: safe.get(id)! } : { kind: "open", reason: manual.get(id) };
   const findings = (review?.findings ?? []).map((f, i) => ({ f, i, st: statusOf(f, i) })).sort((a, b) => SEV_ORDER[a.f.severity] - SEV_ORDER[b.f.severity]);
-  const openFindings = findings.filter((x) => x.st.kind === "open");
+  const asks = (st: ItemStatus) => st.kind === "open" && !!st.reason;
+  const openFindings = findings.filter((x) => x.st.kind === "open").sort((a, b) => Number(asks(b.st)) - Number(asks(a.st)));
+  const needYou = openFindings.filter((x) => asks(x.st)).length;
   const closedFindings = findings.filter((x) => x.st.kind !== "open");
   const canReview = mode === "server" && !!meta?.canEnrich;
 
@@ -380,7 +386,8 @@ export function HealthView() {
             <h3 className="eyebrow flex items-center gap-3 border-b border-line px-4 py-1.5">
               Senior Review
               <span className="font-mono normal-case tracking-normal text-faint">
-                {openFindings.length} Open · {closedFindings.length} Closed
+                {needYou > 0 && <span className="text-accent">{needYou} Need Decision · </span>}
+                {openFindings.length - needYou} Open · {closedFindings.length} Closed
               </span>
             </h3>
             <ul>
