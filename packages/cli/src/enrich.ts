@@ -288,14 +288,16 @@ export class EnrichRunner {
       `Output: ${outPath}`,
       `Project root: ${root}`,
       `Lens CLI: ${lens} (call it unquoted, exactly as written)`,
+      "Create the output file with the Write tool. Bash only runs the Lens CLI; heredocs, cd, and redirects are blocked.",
       "Only write the output file. When the dry-run apply succeeds, stop.",
     ].join("\n");
-    const { code, stderr, resultError } = await this.runClaude(job, prompt, ["Read", "Grep", "Glob", "Edit(./.lens/intermediate/domain.json)", `Bash(${lens}:*)`], MODEL_ARGS);
+    const { code, stderr, resultError, resultText } = await this.runClaude(job, prompt, ["Read", "Grep", "Glob", "Edit(./.lens/intermediate/domain.json)", `Bash(${lens}:*)`], MODEL_ARGS);
     if (job.state !== "running") return; // cancelled or timed out
 
     const patch = await readJson<unknown>(outPath);
     if (!patch) {
-      throw new Error(resultError ?? (code ? `Claude Code exited with code ${code}: ${stderr.trim().split("\n").pop() ?? ""}` : "the agent did not write a domain map"));
+      const said = resultText.trim().split("\n")[0]?.slice(0, 200);
+      throw new Error(resultError ?? (code ? `Claude Code exited with code ${code}: ${stderr.trim().split("\n").pop() ?? ""}` : `the agent did not write a domain map${said ? `: ${said}` : ""}`));
     }
     this.push(job, "Merging into the graph");
     // Re-load: the graph may have been rescanned while the agent ran.
