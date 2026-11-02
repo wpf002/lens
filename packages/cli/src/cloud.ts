@@ -143,8 +143,8 @@ export async function pushState(root: string): Promise<PushInfo | null> {
     const [n, url] = merged.split(" ");
     return n && url ? { branch: null, dirty, pr: { number: Number(n), url, state: "merged" } } : null;
   }
-  const pushed = !!(await git(root, ["rev-parse", "--verify", "-q", `origin/${branch}`]).catch(() => ""));
-  const pr = pushed && githubToken() ? await findPr(await repoOf(root), branch).catch(() => null) : null;
+  // Shallow clones are single-branch, so there's no local origin/<branch> ref to check. Ask GitHub.
+  const pr = githubToken() ? await findPr(await repoOf(root), branch).catch(() => null) : null;
   return { branch, dirty, pr };
 }
 
