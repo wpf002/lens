@@ -16,6 +16,7 @@ import {
   undoRemediation,
   type RemediationRecord,
   type RemediationSource,
+  type FixAllPlans,
   type CostEstimate,
   type ReviewRecord,
   startAIJob,
@@ -104,7 +105,7 @@ export interface State {
   remediation: Partial<Record<RemediationSource, RemediationRecord | null>>;
   remediationEstimates: Partial<Record<RemediationSource, CostEstimate>>;
   /** Automatic checks that offer Fix with AI, and how many hits one run takes. */
-  fixable: { checks: string[]; batch: number; items: number };
+  fixable: { checks: string[]; batch: number; items: number; plans?: FixAllPlans };
   remediateConfirm: { source: RemediationSource; checkId?: string } | null;
   fixOp: { busy: boolean; error: string | null };
   refreshRemediation(): Promise<void>;
@@ -522,7 +523,7 @@ export const useStore = create<State>((set, get) => ({
   async refreshRemediation() {
     try {
       const r = await fetchRemediation();
-      set({ remediation: r.records, remediationEstimates: r.estimates, fixable: { checks: r.fixableChecks, batch: r.healthBatch, items: r.healthItems } });
+      set({ remediation: r.records, remediationEstimates: r.estimates, fixable: { checks: r.fixableChecks, batch: r.healthBatch, items: r.healthItems, plans: r.fixAll } });
     } catch {
       /* not served (static export) */
     }

@@ -3,16 +3,28 @@ import { fixesPatch, pushFixesBranch, type ProposedFix, type RemediationSource }
 import { useStore } from "../store";
 import { costRange } from "../utils/format";
 import { IconChevronDown, IconChevronRight } from "./icons";
+import { Mascot } from "./Mascot";
 import { Button, Spinner, cx, renderInlineCode } from "./ui";
 
 type Source = RemediationSource;
 
-/** Header-row button that opens the Remediate confirm for a report. */
-export function RemediateButton({ source, checkId, label = "Remediate" }: { source: Source; checkId?: string; label?: string }) {
+/** The one entry point on Security and Health: find problems if needed, then fix them. */
+export function FixAllButton({ source, onOpen }: { source: "audit" | "health"; onOpen?: () => void }) {
   const aiRunning = useStore((s) => s.enrichJob.state === "running");
+  const plan = useStore((s) => s.fixable.plans?.[source]);
+  const nothing = !!plan && !plan.items && !plan.first;
   return (
-    <Button size="sm" disabled={aiRunning} onClick={() => useStore.setState({ remediateConfirm: { source, checkId } })}>
-      {label}
+    <Button
+      size="sm"
+      variant="accent"
+      disabled={aiRunning || nothing}
+      title={nothing ? "Nothing left to fix" : undefined}
+      onClick={() => {
+        onOpen?.();
+        useStore.setState({ remediateConfirm: { source }, auditConfirm: false, reviewConfirm: false });
+      }}
+    >
+      <Mascot size={16} /> {aiRunning ? "Running…" : "Fix All"}
     </Button>
   );
 }
@@ -81,8 +93,7 @@ export function Remediation({ source }: { source: Source }) {
   const confirm = useStore((s) => (s.remediateConfirm?.source === source ? s.remediateConfirm : null));
   const checkTitle = useStore((s) => s.model?.graph.health?.checks.find((c) => c.id === (confirm?.checkId ?? mine?.checkId))?.title);
   const batch = useStore((s) => s.fixable.batch);
-  const fixAllItems = useStore((s) => s.fixable.items);
-  const openCode = useStore((s) => s.openCode);
+  const plans = useStore((s) => s.fixable.plans);
   const run = useStore((s) => s.runAI);
   const cancel = useStore((s) => s.cancelAI);
   const apply = useStore((s) => s.applyFixes);
@@ -127,7 +138,7 @@ export function Remediation({ source }: { source: Source }) {
             {job.costUsd ? <span className="text-faint"> · ${job.costUsd.toFixed(2)}</span> : null}
           </span>
         ) : (
-          "Fixing…"
+          job.progress?.some((p) => p.startsWith("Auditing")) ? "Auditing…" : job.progress?.some((p) => p.startsWith("Reviewing")) ? "Reviewing…" : "Fixing…"
         )}
         <span className="truncate font-mono text-[11px] text-faint">{(job.progress ?? []).at(-1)}</span>
         <Button size="sm" variant="ghost" className="ml-auto" onClick={() => void cancel()}>
@@ -137,12 +148,15 @@ export function Remediation({ source }: { source: Source }) {
     );
 
   if (confirm) {
-    const fixAll = source === "health" && !confirm.checkId;
-    const target = source === "audit" ? "the failing checklist items" : source === "review" ? "the open review findings" : confirm.checkId ? `up to ${batch} ${checkTitle ?? "hits"}` : `all ${fixAllItems} fixable issues, ${batch} at a time`;
+    const fixAll = source !== "review" && !confirm.checkId;
+    const plan = fixAll ? plans?.[source as "audit" | "health"] : undefined;
+    const label = plan
+      ? `${plan.first === "audit" ? "Audit, Then Fix" : plan.first === "review" ? "Review, Then Fix" : `Fix ${plan.items} Issue${plan.items === 1 ? "" : "s"}`}`
+      : source === "review" ? "Fix Review Findings" : `Fix ${batch} ${checkTitle ?? "Hits"}`;
     return (
       <div className={cx(box, "flex flex-wrap items-center gap-2 px-3 py-2.5 text-muted")}>
         <span className="min-w-0 flex-1">
-          Claude fixes {target} and Lens applies each change. Usually {costRange(estimates[source])}.{fixAll ? " Stop anytime; finished fixes stay." : ""} Everything can be undone.
+          <span className="text-fg">{label}</span> · {costRange(estimates[source])} · Undo Anytime
         </span>
         <Button size="sm" variant="ghost" onClick={() => useStore.setState({ remediateConfirm: null })}>
           Cancel
@@ -156,7 +170,7 @@ export function Remediation({ source }: { source: Source }) {
             void run("remediate", { source, checkId: confirm.checkId });
           }}
         >
-          Run
+          {fixAll ? "Fix All" : "Fix"}
         </Button>
       </div>
     );
@@ -193,18 +207,10 @@ export function Remediation({ source }: { source: Source }) {
       </div>
       {applied.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-line bg-[color-mix(in_srgb,var(--auth-guarded)_8%,transparent)] px-3 py-2 text-[12px]">
-          <span className="font-medium text-guarded">
-            ✓ {applied.length} fixed · {changedFiles.length} file{changedFiles.length === 1 ? "" : "s"} changed
-          </span>
-          {changedFiles.map((p) => (
-            <button key={p} type="button" className="font-mono text-[11px] text-accent hover:underline" onClick={() => openCode(p)}>
-              {p}
-            </button>
-          ))}
+          <button type="button" className="font-medium text-guarded hover:underline" title={changedFiles.join("\n")} onClick={() => setShowChanges((v) => !v)}>
+            ✓ {applied.length} Change{applied.length === 1 ? "" : "s"} · {changedFiles.length} File{changedFiles.length === 1 ? "" : "s"}
+          </button>
           <span className="ml-auto flex items-center gap-3 text-[11.5px]">
-            <button type="button" className="text-muted hover:text-fg hover:underline" onClick={() => setShowChanges((v) => !v)}>
-              {showChanges ? "Hide Changes" : "Show Changes"}
-            </button>
             <button type="button" className="text-muted hover:text-fg hover:underline disabled:opacity-50" disabled={op.busy} onClick={() => void undoAll()}>
               Undo
             </button>

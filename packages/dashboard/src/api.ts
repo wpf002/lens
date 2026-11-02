@@ -225,8 +225,9 @@ export function openProjectPath(path: string): Promise<OpenResult> {
 export function startAIJob(task: NonNullable<EnrichJob["task"]>, opts: { source?: RemediationSource; checkId?: string } = {}): Promise<EnrichJob> {
   return request(`/api/enrich/${task}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts) });
 }
+export type FixAllPlans = Record<"audit" | "health", { items: number; first: "audit" | "review" | null }>;
 export const fetchRemediation = () =>
-  request<{ records: Record<RemediationSource, RemediationRecord | null>; estimates: Record<RemediationSource, CostEstimate>; fixableChecks: string[]; healthBatch: number; healthItems: number }>("/api/remediation");
+  request<{ records: Record<RemediationSource, RemediationRecord | null>; estimates: Record<RemediationSource, CostEstimate>; fixAll: FixAllPlans; fixableChecks: string[]; healthBatch: number; healthItems: number }>("/api/remediation");
 export const applyRemediation = (source: RemediationSource, ids: string[]) =>
   request<{ applied: string[]; failed: Array<{ id: string; error: string }> }>("/api/remediation/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source, ids }) });
 export const undoRemediation = (source: RemediationSource, id: string) =>

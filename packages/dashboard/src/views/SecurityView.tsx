@@ -3,20 +3,14 @@ import type { Finding, Severity } from "@lens/core/browser";
 import { Checklist } from "../components/Checklist";
 import { GraphCanvas } from "../components/GraphCanvas";
 import { IconChevronDown, IconChevronUp, IconDroplet, IconShield } from "../components/icons";
-import { Mascot } from "../components/Mascot";
-import { Button, EmptyState, SeverityBadge, cx } from "../components/ui";
+import { EmptyState, SeverityBadge, cx } from "../components/ui";
+import { FixAllButton } from "../components/Remediation";
 import { useStore } from "../store";
 import { AUTH_COLOR, SEVERITIES, SEVERITY_COLOR } from "../utils/colors";
 import { buildSecurity, endpointCounts, filterFindings, sortFindings } from "../utils/security";
 import { useCompiledFilters, useModel, useOverlayInput } from "./hooks";
 
 const STATUSES: Finding["status"][] = ["open", "confirmed", "false_positive", "accepted"];
-
-/** Failing checklist items after the AI audit's verdicts, ignoring manual ones. */
-function checklistFailing(list: NonNullable<NonNullable<ReturnType<typeof useModel>["graph"]["security"]>["checklist"]>, audit: ReturnType<typeof useStore.getState>["audit"]): number {
-  const ai = new Map((audit?.items ?? []).map((i) => [i.id, i.status]));
-  return list.filter((c) => c.status !== "manual" && (ai.get(c.id) ?? c.status) === "fail").length;
-}
 
 let lastPanel: "findings" | "checklist" = "findings";
 
@@ -37,9 +31,6 @@ export function SecurityView() {
   };
   const checklist = model.graph.security?.checklist ?? [];
   const gaps = checklist.filter((c) => c.status === "fail").length;
-  const aiRunning = useStore((s) => s.enrichJob.state === "running");
-  const audit = useStore((s) => s.audit);
-  const failing = checklistFailing(checklist, audit);
   const sec = model.graph.security;
   const vm = useMemo(() => buildSecurity(model, cf, sf), [model, cf, sf]);
   const all = useMemo(() => sec?.findings ?? [], [sec]);
@@ -106,31 +97,13 @@ export function SecurityView() {
         </div>
         {checklist.length > 0 && (
           <div className="ml-auto flex items-center gap-2">
-            <Button
-              size="sm"
-              disabled={aiRunning}
-              title="Find problems: Claude audits the code against the checklist"
-              onClick={() => {
+            <FixAllButton
+              source="audit"
+              onOpen={() => {
                 setPanel("checklist");
                 setTableOpen(true);
-                useStore.setState({ auditConfirm: true, remediateConfirm: null });
               }}
-            >
-              Remediate
-            </Button>
-            <Button
-              size="sm"
-              variant="accent"
-              disabled={aiRunning || !failing}
-              title="Fix the failing checklist items"
-              onClick={() => {
-                setPanel("checklist");
-                setTableOpen(true);
-                useStore.setState({ remediateConfirm: { source: "audit" }, auditConfirm: false });
-              }}
-            >
-              <Mascot size={16} /> {aiRunning ? "Running…" : "Fix"}
-            </Button>
+            />
           </div>
         )}
       </div>

@@ -4,7 +4,7 @@ import type { ReviewRecord } from "../api";
 import { Evidence } from "../components/Checklist";
 import { IconChevronDown, IconChevronRight } from "../components/icons";
 import { Mascot } from "../components/Mascot";
-import { Remediation } from "../components/Remediation";
+import { FixAllButton, Remediation } from "../components/Remediation";
 import { Button, EmptyState, SeverityBadge, Spinner, cx, renderInlineCode } from "../components/ui";
 import { useStore } from "../store";
 import { SEVERITY_COLOR } from "../utils/colors";
@@ -191,9 +191,7 @@ export function HealthView() {
   const review = useStore((s) => s.review);
   const reviewFixes = useStore((s) => s.remediation.review);
   const healthFixes = useStore((s) => s.remediation.health);
-  const fixItems = useStore((s) => s.fixable.items);
   const fixableChecks = useStore((s) => s.fixable.checks);
-  const aiRunning = useStore((s) => s.enrichJob.state === "running");
   const health = model.graph.health;
 
   const { issues, clean, counts } = useMemo(() => {
@@ -246,12 +244,7 @@ export function HealthView() {
         </div>
         {canReview && (
           <div className="ml-auto flex items-center gap-2">
-            <Button size="sm" disabled={aiRunning} title="Find problems: Claude reviews the riskiest files" onClick={() => useStore.setState({ reviewConfirm: true, remediateConfirm: null })}>
-              Remediate
-            </Button>
-            <Button size="sm" variant="accent" disabled={aiRunning || fixItems === 0} title="Fix the highest-priority problems" onClick={() => useStore.setState({ remediateConfirm: { source: "health" }, reviewConfirm: false })}>
-              <Mascot size={16} /> {aiRunning ? "Running…" : "Fix"}
-            </Button>
+            <FixAllButton source="health" />
           </div>
         )}
       </div>

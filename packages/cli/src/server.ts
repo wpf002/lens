@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { authorizeUrl, disconnectGithub, finishOAuth, githubLogin, githubToken, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
 import { cloneOrUpdate, fixesPatch, listRepos, parseRepo, pushFixes, reposDir } from "./cloud.js";
 import { SOURCES, applyFixes, loadRemediation, undoFix, type RemediationSource } from "./remediate.js";
-import { EnrichRunner, FIXABLE_CHECKS, HEALTH_BATCH, auditPath, estimateCost, estimateFixAll, fixableCount, remediationItems, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
+import { EnrichRunner, FIXABLE_CHECKS, HEALTH_BATCH, auditPath, estimateCost, fixAllPlan, remediationItems, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import {
   buildBatches, diffImpact, isGitRepo, loadGraph, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
   type EmbeddingStore, type KnowledgeGraph,
@@ -263,8 +263,8 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         const source: RemediationSource = SOURCES.includes(opts.source as RemediationSource) ? (opts.source as RemediationSource) : "audit";
         const checkId = typeof opts.checkId === "string" ? opts.checkId : undefined;
         const budget =
-          task === "remediate" && source === "health" && !checkId
-            ? estimateFixAll(await fixableCount(proj.root)).limit
+          task === "remediate" && source !== "review" && !checkId
+            ? (await fixAllPlan(proj.root, source)).estimate.limit
             : task === "remediate"
               ? estimateCost("remediate", (await remediationItems(proj.root, source, checkId)).length).limit : estimatesFor((await getGraph()).graph)[task as Exclude<EnrichTask, "remediate">].limit;
         if (enrich.running) return send(res, 409, { error: "an AI run is already in progress" });
@@ -296,9 +296,17 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
           }
           records[s] = rec && { ...rec, edits: undefined, legacyIds: undefined };
         }
-        const estimate = async (s: RemediationSource) => estimateCost("remediate", (await remediationItems(proj.root, s)).length);
-        const healthItems = await fixableCount(proj.root);
-        return send(res, 200, { records, estimates: { audit: await estimate("audit"), review: await estimate("review"), health: estimateFixAll(Math.max(1, healthItems)) }, fixableChecks: [...FIXABLE_CHECKS], healthBatch: HEALTH_BATCH, healthItems });
+        const audit = await fixAllPlan(proj.root, "audit");
+        const health = await fixAllPlan(proj.root, "health");
+        const review = estimateCost("remediate", (await remediationItems(proj.root, "review")).length);
+        return send(res, 200, {
+          records,
+          estimates: { audit: audit.estimate, review, health: health.estimate },
+          fixAll: { audit: { items: audit.items, first: audit.first }, health: { items: health.items, first: health.first } },
+          fixableChecks: [...FIXABLE_CHECKS],
+          healthBatch: HEALTH_BATCH,
+          healthItems: health.items,
+        });
       }
       if (req.method === "POST" && url.pathname === "/api/remediation/apply") {
         if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });

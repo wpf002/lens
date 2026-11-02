@@ -316,6 +316,11 @@ export class EnrichRunner {
   }
 
   private async runAudit(job: EnrichJob) {
+    if (await this.auditStep(job)) this.finish(job, "done");
+  }
+
+  /** Runs the audit and saves it. False when the job stopped (cancel, timeout). */
+  private async auditStep(job: EnrichJob): Promise<boolean> {
     const { root } = job;
     const g = await loadGraph(root);
     const checklist = g?.security?.checklist;
@@ -351,7 +356,7 @@ export class EnrichRunner {
     // which covers the Write tool too); no Bash.
     const tools = ["Read", "Grep", "Glob", `Edit(./${AUDIT_REPORT})`, "Edit(./.lens/intermediate/audit.json)"];
     const { code, stderr, resultError, resultText } = await this.runClaude(job, prompt, tools, MODEL_ARGS);
-    if (job.state !== "running") return;
+    if (job.state !== "running") return false;
 
     // Fallback: recover output from the final message so a refused write doesn't waste a paid run.
     const fenced = (lang: string) => new RegExp("```" + lang + "\\s*\\n([\\s\\S]*?)\\n```").exec(resultText)?.[1];
@@ -379,7 +384,7 @@ export class EnrichRunner {
     // Rescan so SECURITY_AUDIT.md shows up in the graph and opens in the source viewer.
     this.push(job, "Rescanning");
     await scanAndSave(root);
-    this.finish(job, "done");
+    return true;
   }
 
   /** Claude-written summaries for every file that still has an automatic one (or a stale one). */
@@ -463,6 +468,11 @@ export class EnrichRunner {
 
   /** Read-only senior-engineer review: CODE_REVIEW.md plus validated findings for the Health view. */
   private async runReview(job: EnrichJob) {
+    if (await this.reviewStep(job)) this.finish(job, "done");
+  }
+
+  /** Runs the review and saves it. False when the job stopped. */
+  private async reviewStep(job: EnrichJob): Promise<boolean> {
     const { root } = job;
     // Remediate finds everything: refresh the automatic checks first (free), then review.
     this.push(job, "Rescanning");
@@ -511,7 +521,7 @@ export class EnrichRunner {
     ].join("\n");
     const tools = ["Read", "Grep", "Glob", `Edit(./${REVIEW_REPORT})`, "Edit(./.lens/intermediate/review.json)"];
     const { code, stderr, resultError, resultText } = await this.runClaude(job, prompt, tools, MODEL_ARGS);
-    if (job.state !== "running") return;
+    if (job.state !== "running") return false;
 
     const fenced = (lang: string) => new RegExp("```" + lang + "\\s*\\n([\\s\\S]*?)\\n```").exec(resultText)?.[1];
     if (mtime() === reportBefore) {
@@ -535,12 +545,12 @@ export class EnrichRunner {
     job.review = { findings: record.findings.length, report: REVIEW_REPORT };
     this.push(job, "Rescanning");
     await scanAndSave(root);
-    this.finish(job, "done");
+    return true;
   }
 
   /** Draft fixes as exact text replacements. Writes only its proposal file; the user approves edits. */
   private async runRemediate(job: EnrichJob, source: RemediationSource, checkId?: string) {
-    if (source === "health" && !checkId) return this.runFixAll(job);
+    if (!checkId && source !== "review") return this.runFixAll(job, source);
     const { root } = job;
     const items = await remediationItems(root, source, checkId);
     if (!items.length) throw new Error(source === "audit" ? "nothing in the checklist is failing" : source === "health" ? "that check has nothing to fix" : "the review has no high or medium findings");
@@ -595,21 +605,36 @@ export class EnrichRunner {
    * left, applying and rescanning after each so fixed hits drop out of the next batch.
    * Stops on cancel, at the job's spending limit, or when a batch makes no progress.
    */
-  private async runFixAll(job: EnrichJob) {
+  private async runFixAll(job: EnrichJob, source: "audit" | "health") {
     const { root } = job;
-    const total = await fixableCount(root);
-    if (!total) throw new Error("nothing left that Fix can change");
+    // Find problems first when that report hasn't been run yet.
+    const plan = await fixAllPlan(root, source);
+    if (plan.first) {
+      const saved = job.budgetUsd;
+      job.budgetUsd = Math.min(saved, plan.firstLimit);
+      this.push(job, plan.first === "audit" ? "Auditing the code" : "Reviewing the code");
+      const ok = plan.first === "audit" ? await this.auditStep(job) : await this.reviewStep(job);
+      job.budgetUsd = saved;
+      if (!ok) return;
+      job.audit = undefined;
+      job.review = undefined;
+    }
+    const total = await fixableCount(root, source);
+    if (!total) {
+      job.remediation = { source, proposed: 0, invalid: 0, skipped: 0, applied: 0 };
+      return this.finish(job, "done");
+    }
     const progress = { attempted: 0, total, fixed: 0, batches: 0 } as NonNullable<EnrichJob["fixAll"]>;
     job.fixAll = progress;
     const tried = new Set<string>();
-    const merged: Awaited<ReturnType<typeof buildRecord>> = { generatedAt: new Date().toISOString(), source: "health", fixes: [], skipped: [], edits: {} };
+    const merged: Awaited<ReturnType<typeof buildRecord>> = { generatedAt: new Date().toISOString(), source, fixes: [], skipped: [], edits: {} };
     const dir = paths(root).intermediate;
     await fs.mkdir(dir, { recursive: true });
     const instructions = agentInstructions("remediator");
     if (!existsSync(instructions)) throw new Error(`missing ${instructions}`);
 
     while (job.state === "running") {
-      const items = (await remediationItems(root, "health", undefined, Infinity)).filter((i) => !tried.has(`${i.title}|${i.evidence[0]}`)).slice(0, FIX_ALL_LIMIT);
+      const items = (await remediationItems(root, source, undefined, Infinity)).filter((i) => !tried.has(`${i.title}|${i.evidence[0]}`)).slice(0, FIX_ALL_LIMIT);
       if (!items.length) break;
       const remaining = job.budgetUsd - (job.costUsd ?? 0);
       if (remaining < 0.3) {
@@ -653,17 +678,17 @@ export class EnrichRunner {
         if (resultError?.includes("spending") || resultError?.includes("safety limit")) break;
         continue;
       }
-      const rec = buildRecord(root, "health", parsed.data, undefined, undefined, `b${progress.batches}`);
+      const rec = buildRecord(root, source, parsed.data, undefined, undefined, `b${progress.batches}`);
       merged.fixes.push(...rec.fixes);
       merged.skipped.push(...rec.skipped);
       Object.assign(merged.edits, rec.edits);
       merged.costUsd = job.costUsd;
-      await writeJsonAtomic(remediationPath(root, "health"), merged, true);
+      await writeJsonAtomic(remediationPath(root, source), merged, true);
       await fs.rm(outPath, { force: true });
       const valid = rec.fixes.filter((f) => !f.invalid).map((f) => f.id);
       let applied: string[] = [];
       if (valid.length) {
-        applied = (await applyFixes(root, "health", valid)).applied;
+        applied = (await applyFixes(root, source, valid)).applied;
         // applyFixes updated statuses on disk; keep the in-memory record in step.
         for (const f of merged.fixes) if (applied.includes(f.id)) f.status = "applied";
         this.push(job, `Applied ${applied.length}; rescanning`);
@@ -676,14 +701,31 @@ export class EnrichRunner {
       }
     }
     merged.costUsd = job.costUsd;
-    await writeJsonAtomic(remediationPath(root, "health"), merged, true);
-    job.remediation = { source: "health", proposed: merged.fixes.filter((f) => !f.invalid).length, invalid: merged.fixes.filter((f) => f.invalid).length, skipped: merged.skipped.length, applied: progress.fixed };
+    await writeJsonAtomic(remediationPath(root, source), merged, true);
+    job.remediation = { source, proposed: merged.fixes.filter((f) => !f.invalid).length, invalid: merged.fixes.filter((f) => f.invalid).length, skipped: merged.skipped.length, applied: progress.fixed };
     this.finish(job, "done");
   }
 }
 
-/** Everything Fix can work on: open review findings plus the full count of every fixable check. */
-export async function fixableCount(root: string): Promise<number> {
+/**
+ * Fix All on one page: the report to run first (when it hasn't been run), items to fix
+ * now, and the expected cost of both. Items found by that first run aren't counted yet.
+ */
+export async function fixAllPlan(root: string, source: "audit" | "health"): Promise<{ first: "audit" | "review" | null; firstLimit: number; items: number; estimate: CostEstimate }> {
+  const g = await loadGraph(root);
+  const files = g?.nodes.filter((n) => n.kind === "file" && n.path).length ?? 0;
+  const first = source === "audit" ? (existsSync(auditPath(root)) ? null : "audit") : existsSync(reviewPath(root)) ? null : "review";
+  const pre = first ? estimateCost(first, files) : { low: 0, high: 0, limit: 0 };
+  const items = await fixableCount(root, source);
+  // Before the first run, assume about ten more items will turn up.
+  const fix = estimateFixAll(Math.max(1, items + (first ? 10 : 0)));
+  const r = (n: number) => Math.round(n * 100) / 100;
+  return { first, firstLimit: pre.limit, items, estimate: { low: r(pre.low + fix.low), high: r(pre.high + fix.high), limit: r(Math.min(150, pre.limit + fix.limit)) } };
+}
+
+/** Everything Fix All can work on for a page. */
+export async function fixableCount(root: string, source: "audit" | "health" = "health"): Promise<number> {
+  if (source === "audit") return (await remediationItems(root, "audit", undefined, Infinity)).length;
   const g = await loadGraph(root);
   const checks = (g?.health?.checks ?? []).filter((c) => FIXABLE_CHECKS.has(c.id)).reduce((a, c) => a + c.count, 0);
   const review = (await remediationItems(root, "health", undefined, Infinity)).filter((i) => i.id.startsWith("review-")).length;
@@ -741,7 +783,13 @@ export async function remediationItems(root: string, source: RemediationSource, 
   const g = await loadGraph(root);
   const audit = await readJson<AuditRecord>(auditPath(root));
   const ai = new Map((audit?.items ?? []).map((i) => [i.id, i]));
-  return (g?.security?.checklist ?? [])
+  const applied = new Set(((await loadRemediation(root, "audit"))?.fixes ?? []).filter((f) => f.status === "applied").map((f) => f.itemId));
+  const FINDING_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2 };
+  const findings = (g?.security?.findings ?? [])
+    .filter((f) => f.status !== "false_positive" && f.status !== "accepted" && f.severity in FINDING_RANK)
+    .sort((a, b) => FINDING_RANK[a.severity]! - FINDING_RANK[b.severity]!)
+    .map((f) => ({ id: `finding-${f.id}`.slice(0, 80), title: f.title, evidence: [`${f.path}:${f.line} ${f.message}`], fix: undefined as string | undefined }));
+  const checks = (g?.security?.checklist ?? [])
     .filter((c) => c.status !== "manual" && c.source !== "manual")
     .map((c) => {
       const v = ai.get(c.id);
@@ -749,4 +797,5 @@ export async function remediationItems(root: string, source: RemediationSource, 
     })
     .filter((c) => c.status === "fail")
     .map((c) => ({ id: c.id, title: c.title, evidence: c.evidence, fix: c.fix }));
+  return [...checks, ...findings].filter((i) => !applied.has(i.id)).slice(0, limit);
 }
