@@ -100,6 +100,7 @@ export function Remediation({ source }: { source: Source }) {
   const op = useStore((s) => s.fixOp);
   const [showChanges, setShowChanges] = useState(false);
   const [showManual, setShowManual] = useState(false);
+  const [showSafe, setShowSafe] = useState(false);
   const cloud = useStore((s) => !!s.meta?.cloud);
   const canPush = useStore((s) => !!s.meta?.canPush);
   const downloadPatch = async () => {
@@ -135,15 +136,15 @@ export function Remediation({ source }: { source: Source }) {
       <div className={cx(box, "overflow-hidden text-[12.5px] text-fg")} role="status">
         <div className="flex items-center gap-2 px-3 pb-2 pt-2.5">
           <Spinner size={14} />
-          {fa ? (
-            <span>
-              Fixing… <span className="font-mono tabular">{Math.min(fa.attempted, fa.total)} of {fa.total}</span> · {fa.fixed} fixed
-              {job.costUsd ? <span className="text-faint"> · ${job.costUsd.toFixed(2)}</span> : null}
-            </span>
-          ) : (
-            job.progress?.some((p) => p.startsWith("Auditing")) ? "Auditing…" : job.progress?.some((p) => p.startsWith("Reviewing")) ? "Reviewing…" : "Fixing…"
-          )}
-          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint">{(job.progress ?? []).at(-1)}</span>
+          <span className="min-w-0 flex-1 truncate">
+            {fa ? (
+              <>
+                Fixing… <span className="font-mono tabular">{Math.min(fa.attempted, fa.total)} of {fa.total}</span> · {fa.fixed} fixed
+                {job.costUsd ? <span className="text-faint"> · ${job.costUsd.toFixed(2)}</span> : null}
+              </>
+            ) : job.progress?.some((p) => p.startsWith("Auditing")) ? "Auditing…" : job.progress?.some((p) => p.startsWith("Reviewing")) ? "Reviewing…" : "Fixing…"}
+            {(job.progress ?? []).at(-1) && <span className="text-faint"> · {(job.progress ?? []).at(-1)}</span>}
+          </span>
           <Elapsed since={job.step?.startedAt ?? job.startedAt} typicalMs={job.step?.typicalMs} />
           <Button size="sm" variant="ghost" onClick={() => void cancel()}>
             Cancel
@@ -201,6 +202,8 @@ export function Remediation({ source }: { source: Source }) {
   // Valid edits left from an older run that predates auto-apply.
   const ready = rec.fixes.filter((f) => f.status === "proposed" && !f.invalid);
   const notFixed = rec.fixes.filter((f) => f.status === "proposed" && f.invalid);
+  const safe = rec.skipped.filter((x) => SAFE.test(x.reason));
+  const todo = rec.skipped.filter((x) => !SAFE.test(x.reason));
   if (!applied.length && !ready.length && !notFixed.length && !rec.skipped.length) return null;
   const undoAll = async () => {
     for (const { f, src } of appliedBySource) await useStore.getState().undoFix(src, f.id);
@@ -265,10 +268,10 @@ export function Remediation({ source }: { source: Source }) {
           ))}
         </ul>
       )}
-      {(notFixed.length > 0 || rec.skipped.length > 0) && (
+      {(notFixed.length > 0 || todo.length > 0) && (
         <div className="px-3 py-2">
           <button type="button" className="eyebrow flex items-center gap-1 hover:!text-fg" onClick={() => setShowManual((v) => !v)} aria-expanded={showManual}>
-            {showManual ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />} Do Yourself · {notFixed.length + rec.skipped.length}
+            {showManual ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />} Do Yourself · {notFixed.length + todo.length}
           </button>
           {showManual && <ul className="mt-1 space-y-1 text-muted">
             {notFixed.map((f) => (
@@ -276,10 +279,20 @@ export function Remediation({ source }: { source: Source }) {
                 <span className="text-fg">{f.title}</span> <span className="text-faint">· couldn't apply: {f.invalid}</span>
               </li>
             ))}
-            {rec.skipped.map((s, i) => (
-              <li key={i}>
-                <span className="font-mono text-[11px] text-faint">{s.itemId}</span> {renderInlineCode(s.reason)}
-              </li>
+            {todo.map((x, i) => (
+              <li key={i}>{renderInlineCode(x.reason)}</li>
+            ))}
+          </ul>}
+        </div>
+      )}
+      {safe.length > 0 && (
+        <div className="border-t border-line px-3 py-2">
+          <button type="button" className="eyebrow flex items-center gap-1 hover:!text-fg" onClick={() => setShowSafe((v) => !v)} aria-expanded={showSafe}>
+            {showSafe ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />} Already Safe · {safe.length}
+          </button>
+          {showSafe && <ul className="mt-1 space-y-1 text-muted">
+            {safe.map((x, i) => (
+              <li key={i}>{renderInlineCode(x.reason.replace(SAFE_PREFIX, ""))}</li>
             ))}
           </ul>}
         </div>
@@ -287,6 +300,10 @@ export function Remediation({ source }: { source: Source }) {
     </div>
   );
 }
+
+/** Skips where the agent found the code already handles the issue. Nothing for the owner to do. */
+const SAFE = /^(scanner was wrong|already (safe|hardened|handled|fixed))\b/i;
+const SAFE_PREFIX = /^scanner was wrong[:.,]?\s*/i;
 
 function Elapsed({ since, typicalMs }: { since?: number; typicalMs?: number }) {
   const [now, setNow] = useState(() => Date.now());

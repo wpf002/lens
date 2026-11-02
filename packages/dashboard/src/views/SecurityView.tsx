@@ -91,7 +91,7 @@ export function SecurityView() {
           })}
         </div>
         <div className="flex items-center gap-4 text-[12px]">
-          {(["unguarded", "unknown", "public", "guarded"] as const).map((a) => (
+          {(["unguarded", "unknown", "public", "guarded"] as const).filter((a) => counts[a] > 0).map((a) => (
             <div key={a} className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full" style={{ background: AUTH_COLOR[a] }} />
               <span className="font-mono font-semibold tabular">{counts[a]}</span>

@@ -19,7 +19,7 @@ The items file has `items[]`, each with an `id`, `title`, `evidence` (`path:line
 For each item:
 
 1. Read the code at the evidence locations and confirm the problem is still there.
-2. Decide whether it can be fixed in code within this repo. Skip it when the scanner was wrong (say why); Lens won't offer it again this run.
+2. Decide whether it can be fixed in code within this repo. Skip it when the scanner was wrong or the code already handles it. Start that reason with `Scanner was wrong:` and say why; Lens won't offer it again.
    - **Skip** anything that needs a secret value, a key rotation, a dashboard or hosting setting (Railway, Vercel, a cloud console), a new paid service, or a product decision. Say what the user should do instead.
    - **Skip** fixes that need more than about 80 changed lines or touch more than 4 files. Say why, and describe the change.
 3. Otherwise, write the smallest correct fix in the style of the surrounding code. Don't refactor, rename, or reformat anything else. Prefer libraries the project already uses; don't add dependencies unless the fix truly needs one (then include the manifest edit).

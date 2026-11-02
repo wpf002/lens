@@ -678,7 +678,17 @@ export class EnrichRunner {
     const progress = { attempted: 0, total, fixed: 0, batches: 0 } as NonNullable<EnrichJob["fixAll"]>;
     job.fixAll = progress;
     const tried = new Set<string>();
-    const merged: Awaited<ReturnType<typeof buildRecord>> = { generatedAt: new Date().toISOString(), source, fixes: [], skipped: [], edits: {} };
+    const runTag = Date.now().toString(36);
+    // Keep earlier applied fixes (for Undo and the FIXED badge) and skips that found the code already safe.
+    const prior = await loadRemediation(root, source);
+    const kept = (prior?.fixes ?? []).filter((f) => f.status === "applied");
+    const merged: Awaited<ReturnType<typeof buildRecord>> = {
+      generatedAt: new Date().toISOString(),
+      source,
+      fixes: kept,
+      skipped: (prior?.skipped ?? []).filter((x) => ALREADY_SAFE.test(x.reason)),
+      edits: Object.fromEntries(kept.map((f) => [f.id, prior?.edits?.[f.id] ?? []])),
+    };
     const dir = paths(root).intermediate;
     await fs.mkdir(dir, { recursive: true });
     const instructions = agentInstructions("remediator");
@@ -729,7 +739,7 @@ export class EnrichRunner {
         if (resultError?.includes("spending") || resultError?.includes("safety limit")) break;
         continue;
       }
-      const rec = buildRecord(root, source, parsed.data, undefined, undefined, `b${progress.batches}`);
+      const rec = buildRecord(root, source, parsed.data, undefined, undefined, `${runTag}b${progress.batches}`);
       merged.fixes.push(...rec.fixes);
       merged.skipped.push(...rec.skipped);
       Object.assign(merged.edits, rec.edits);
@@ -762,6 +772,9 @@ export class EnrichRunner {
  * Fix All on one page: the report to run first (when it hasn't been run), items to fix
  * now, and the expected cost of both. Items found by that first run aren't counted yet.
  */
+/** A skip where the agent found the code already handles the issue. Not offered again. */
+export const ALREADY_SAFE = /^(scanner was wrong|already (safe|hardened|handled|fixed))\b/i;
+
 /** Accepted findings stay as designed; Fix hardens them instead. */
 function acceptedFix(rule: string): string {
   return rule === "unauthenticated-mutation" || rule === "server-action-no-auth"
@@ -853,7 +866,8 @@ export async function remediationItems(root: string, source: RemediationSource, 
   const g = await loadGraph(root);
   const audit = await auditWithDecisions(root);
   const ai = new Map((audit?.items ?? []).map((i) => [i.id, i]));
-  const applied = new Set(((await loadRemediation(root, "audit"))?.fixes ?? []).filter((f) => f.status === "applied").map((f) => f.itemId));
+  const rem = await loadRemediation(root, "audit");
+  const applied = new Set([...(rem?.fixes ?? []).filter((f) => f.status === "applied").map((f) => f.itemId), ...(rem?.skipped ?? []).filter((x) => ALREADY_SAFE.test(x.reason)).map((x) => x.itemId)]);
   const FINDING_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2 };
   const findings = (g?.security?.findings ?? [])
     .filter((f) => f.status !== "false_positive" && f.severity in FINDING_RANK)
