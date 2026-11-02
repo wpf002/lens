@@ -19,8 +19,8 @@ Email wfoti71992@gmail.com with details and a reproduction. Please don't open a 
 
 ## Hosted mode (`lens cloud`)
 
-- Every `/api` call needs `LENS_TOKEN` (constant-time compare, 750 ms delay on a wrong token). The loopback Host check is off because Railway's proxy sets the Host header.
+- Sign-in checks `LENS_USERNAME` and `LENS_PASSWORD` (constant-time compare of SHA-256 digests, 750 ms delay on a failure) and returns a random per-boot session token that every other `/api` call needs. The loopback Host check is off because Railway's proxy sets the Host header.
 - Projects can only be GitHub repos cloned into `/data/repos`. Opening arbitrary server paths is refused.
-- `GITHUB_TOKEN` goes to git as a per-command auth header and is never written to `.git/config`. It's scrubbed from error messages and removed, along with `LENS_TOKEN`, from the environment of Claude runs.
+- `GITHUB_TOKEN` goes to git as a per-command auth header and is never written to `.git/config`. It's scrubbed from error messages and removed from the environment of Claude runs.
 - Fixes are pushed only to new `lens/fixes-*` branches.
 

@@ -14,7 +14,6 @@ import {
 } from "@lens/core";
 import { startServer, dashboardHtmlPath } from "./server.js";
 import { cloneOrUpdate, parseRepo, reposDir } from "./cloud.js";
-import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const VERSION = "0.1.0";
@@ -217,23 +216,16 @@ program
 
 program
   .command("cloud")
-  .description("Hosted server (Railway): GitHub repos in a workspace volume, token from LENS_TOKEN")
+  .description("Hosted server (Railway): GitHub repos in a workspace volume, sign-in from LENS_USERNAME/LENS_PASSWORD")
   .action(async () => {
     const workspace = path.resolve(process.env.LENS_WORKSPACE ?? "/data");
     await fs.mkdir(reposDir(workspace), { recursive: true });
 
-    let token = process.env.LENS_TOKEN?.trim();
-    if (token && token.length < 24) fail("LENS_TOKEN must be at least 24 characters.");
-    if (!token) {
-      const file = path.join(workspace, "token");
-      token = (await fs.readFile(file, "utf8").catch(() => "")).trim();
-      if (!token) {
-        token = randomBytes(24).toString("base64url");
-        await fs.writeFile(file, token + "\n", { mode: 0o600 });
-        log(`generated a login token (stored in ${file}). Set LENS_TOKEN to choose your own.`);
-        out(`Login token: ${token}`);
-      }
-    }
+    const username = process.env.LENS_USERNAME?.trim() ?? "";
+    const password = process.env.LENS_PASSWORD ?? "";
+    const login = username && password ? { username, password } : null;
+    if (!login) log(pc.yellow("LENS_USERNAME and LENS_PASSWORD aren't set; nobody can sign in."));
+    if (password && password.length < 12) fail("LENS_PASSWORD must be at least 12 characters.");
 
     // Last repo opened, then LENS_REPO, then the bundled demo app.
     const wanted = [(await fs.readFile(path.join(workspace, "last-repo"), "utf8").catch(() => "")).trim(), process.env.LENS_REPO ?? ""];
@@ -257,7 +249,7 @@ program
     }
     if (!(await loadGraph(root))) await scanAndSave(root);
 
-    const s = await startServer({ root, port: Number(process.env.PORT ?? 8080), host: "0.0.0.0", token, cloud: { workspace } });
+    const s = await startServer({ root, port: Number(process.env.PORT ?? 8080), host: "0.0.0.0", cloud: { workspace, login } });
     out(`${pc.bold("Lens")} listening on port ${process.env.PORT ?? 8080}, project ${root}`);
     const stop = async () => {
       await s.close();

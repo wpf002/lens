@@ -143,7 +143,7 @@ function describeTool(name: string, input: Record<string, unknown>, root: string
 const claudeBin = () => process.env.LENS_CLAUDE_BIN || "claude";
 /** The agent doesn't need Lens's own secrets. */
 function childEnv(): NodeJS.ProcessEnv {
-  const { LENS_TOKEN: _t, GITHUB_TOKEN: _g, ...rest } = process.env;
+  const { LENS_TOKEN: _t, LENS_PASSWORD: _p, GITHUB_TOKEN: _g, ...rest } = process.env;
   return rest;
 }
 export const LOGIN_HELP = process.env.LENS_WORKSPACE

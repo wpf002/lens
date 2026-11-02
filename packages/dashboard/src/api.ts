@@ -270,3 +270,26 @@ export function pushFixesBranch(): Promise<{ branch: string; compareUrl: string 
 export function fixesPatch(): Promise<{ name: string; patch: string }> {
   return request("/api/project/patch");
 }
+
+/** Whether this server signs in with a username and password. Needs no session. */
+export async function authMode(): Promise<{ login: boolean }> {
+  try {
+    const res = await fetch("/api/auth", { credentials: "same-origin" });
+    return res.ok ? ((await res.json()) as { login: boolean }) : { login: false };
+  } catch {
+    return { login: false };
+  }
+}
+
+/** Hosted server: exchange a username and password for a session. */
+export async function signIn(username: string, password: string): Promise<string> {
+  const res = await fetch("/api/login", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { token?: string; error?: string };
+  if (!res.ok || !body.token) throw new Error(body.error ?? "Sign-in failed.");
+  return body.token;
+}

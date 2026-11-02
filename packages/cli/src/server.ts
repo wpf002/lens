@@ -15,7 +15,7 @@ import { execFile } from "node:child_process";
 import os from "node:os";
 import { promises as fs, statSync, realpathSync } from "node:fs";
 import path from "node:path";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { cloneOrUpdate, fixesPatch, listRepos, parseRepo, pushFixes, reposDir } from "./cloud.js";
 import { SOURCES, applyFixes, loadRemediation, undoFix, type RemediationSource } from "./remediate.js";
@@ -32,7 +32,7 @@ export interface ServeOptions {
   token?: string;
   graphFile?: string;
   /** Hosted mode: projects are GitHub repos cloned under this workspace folder. */
-  cloud?: { workspace: string };
+  cloud?: { workspace: string; login: { username: string; password: string } | null };
 }
 
 const MAX_FILE_BYTES = 2_000_000;
@@ -164,6 +164,26 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
       if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) return send(res, 200, html, "text/html; charset=utf-8");
       if (req.method === "GET" && url.pathname === "/favicon.ico") return send(res, 204, "");
       if (!url.pathname.startsWith("/api/")) return send(res, 404, { error: "not found" });
+      if (req.method === "GET" && url.pathname === "/api/auth") return send(res, 200, { login: !!opts.cloud });
+      if (opts.cloud && req.method === "POST" && url.pathname === "/api/login") {
+        const login = opts.cloud.login;
+        if (!login) return send(res, 503, { error: "Login isn't set up. Add LENS_USERNAME and LENS_PASSWORD in Railway." });
+        let body: { username?: unknown; password?: unknown } = {};
+        try {
+          body = JSON.parse(await readBody(req, 2_000)) as typeof body;
+        } catch {
+          /* falls through to a failed login */
+        }
+        const same = (a: unknown, b: string) =>
+          typeof a === "string" && timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
+        const userOk = same(body.username, login.username);
+        const passOk = same(body.password, login.password);
+        if (!userOk || !passOk) {
+          await new Promise((r) => setTimeout(r, 750));
+          return send(res, 403, { error: "Wrong username or password." });
+        }
+        return send(res, 200, { token });
+      }
       if (!authed(req)) {
         // Slows token guessing on a public host.
         if (opts.cloud) await new Promise((r) => setTimeout(r, 750));
