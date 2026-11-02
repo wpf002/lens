@@ -183,7 +183,7 @@ export function SecurityView() {
                   <th className="px-2 py-1.5 font-semibold">Rule</th>
                   <th className="px-2 py-1.5 font-semibold">Location</th>
                   <th className="px-2 py-1.5 text-right font-semibold" title="Entry points that reach this finding">Reach</th>
-                  <th className="px-2 py-1.5 font-semibold">Taint</th>
+                  <th className="px-2 py-1.5 font-semibold" title="User-controlled input reaches this code">User Input</th>
                   <th className="px-3 py-1.5 font-semibold">Status</th>
                 </tr>
               </thead>
@@ -227,7 +227,7 @@ export function SecurityView() {
                       <td className="px-2 py-2">
                         {f.tainted ? (
                           <span className="inline-flex items-center gap-1 text-accent" title="User-controlled input reaches this sink">
-                            <IconDroplet size={12} /> yes
+                            <IconDroplet size={12} /> Yes
                           </span>
                         ) : (
                           <span className="text-faint">—</span>
