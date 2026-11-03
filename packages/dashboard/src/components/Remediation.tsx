@@ -11,6 +11,8 @@ import { Button, SeverityBadge, Spinner, cx, renderInlineCode } from "./ui";
 type Source = RemediationSource;
 
 /** The one entry point on Security and Health: find problems if needed, then fix them. */
+const CHECKS_POLL_MS = 20_000;
+
 export function FixAllButton({ source, onOpen }: { source: "audit" | "health"; onOpen?: () => void }) {
   const aiRunning = useStore((s) => s.enrichJob.state === "running");
   const plan = useStore((s) => s.fixable.plans?.[source]);
@@ -121,6 +123,14 @@ export function Remediation({ source }: { source: Source }) {
   const [push, setPush] = useState<{ busy: string | null; error?: string }>({ busy: null });
   const pushed = useStore((s) => s.push);
   const refreshPush = useStore((s) => s.refreshPush);
+  // GitHub doesn't push check results to us; poll while they're running or haven't started yet.
+  const c = pushed?.pr?.checks;
+  const checksRunning = pushed?.pr?.state === "open" && (!c || c.pending > 0 || c.passing + c.failing === 0);
+  useEffect(() => {
+    if (!checksRunning) return;
+    const t = setInterval(() => void refreshPush(), CHECKS_POLL_MS);
+    return () => clearInterval(t);
+  }, [checksRunning, refreshPush]);
   const step = async (label: string, fn: () => Promise<PullRequest>, reload = false) => {
     setPush({ busy: label });
     try {
@@ -242,19 +252,22 @@ export function Remediation({ source }: { source: Source }) {
           </button>
           <span className="ml-auto flex items-center gap-3 text-[11.5px]">
             {merged ? (
-              <span className="font-medium text-guarded">Merged · #{pr.number}</span>
+              <a className="font-medium text-guarded hover:underline" href={pr.url} target="_blank" rel="noreferrer noopener">
+                Merged · #{pr.number}
+              </a>
             ) : inPr ? (
               <>
                 <a className="text-muted hover:text-fg hover:underline" href={pr.url} target="_blank" rel="noreferrer noopener">
                   Pull Request #{pr.number}
                 </a>
+                <ChecksLink pr={pr} />
                 {pushed?.dirty ? (
                   <Button size="sm" variant="accent" disabled={!!push.busy || op.busy} onClick={() => void step("Updating…", createPullRequest)}>
                     {push.busy ?? "Update Pull Request"}
                   </Button>
                 ) : (
                   <Button size="sm" variant="accent" disabled={!!push.busy || op.busy} onClick={() => void step("Merging…", mergePullRequest, true)}>
-                    {push.busy ?? "Merge"}
+                    {push.busy ?? (pr.checks?.failing ? "Merge Anyway" : "Merge")}
                   </Button>
                 )}
               </>
@@ -397,5 +410,17 @@ function ItemList({ info, items }: { info: ItemInfo; items: Array<{ itemId: stri
         );
       })}
     </ul>
+  );
+}
+
+/** GitHub CI status for an open fixes PR. */
+function ChecksLink({ pr }: { pr: PullRequest }) {
+  const c = pr.checks;
+  if (!c || c.passing + c.failing + c.pending === 0) return null;
+  const [label, tone] = c.failing ? [`${c.failing} Check${c.failing === 1 ? "" : "s"} Failing`, "text-critical"] : c.pending ? ["Checks Running", "text-muted"] : ["Checks Passed", "text-guarded"];
+  return (
+    <a className={cx("hover:underline", tone)} href={`${pr.url}/checks`} target="_blank" rel="noreferrer noopener">
+      {label}
+    </a>
   );
 }

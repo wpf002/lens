@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pushFixes, pushPending } from "../src/cloud.js";
+import { countChecks, pushFixes, pushPending } from "../src/cloud.js";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" }).trim();
 
@@ -93,5 +93,19 @@ describe("pushFixes", () => {
     expect(run(remote, "show", `${branch}:a.js`)).toBe("2");
     expect(run(remote, "show", "lens/fixes-1:b.js")).toBe("x");
     await fs.rm(tmp, { recursive: true, force: true });
+  });
+});
+
+describe("countChecks", () => {
+  it("counts failed, running, and passed GitHub check runs", () => {
+    expect(
+      countChecks([
+        { status: "completed", conclusion: "failure" },
+        { status: "completed", conclusion: "timed_out" },
+        { status: "in_progress", conclusion: null },
+        { status: "completed", conclusion: "success" },
+        { status: "completed", conclusion: "skipped" },
+      ]),
+    ).toEqual({ failing: 2, pending: 1, passing: 2 });
   });
 });

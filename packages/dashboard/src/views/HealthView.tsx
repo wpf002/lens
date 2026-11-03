@@ -260,6 +260,7 @@ function ReviewPanel() {
   const meta = useStore((s) => s.meta);
   const job = useStore((s) => s.enrichJob);
   const review = useStore((s) => s.review);
+  const push = useStore((s) => s.push);
   const confirming = useStore((s) => s.reviewConfirm);
   const run = useStore((s) => s.runAI);
   const cancel = useStore((s) => s.cancelAI);
@@ -313,16 +314,24 @@ function ReviewPanel() {
     );
   if (failed) return <p className={cx(box, "text-critical")}>{renderInlineCode(job.error ?? "The review failed.")}</p>;
   if (!review) return null;
+  const mergedPr = push?.pr?.state === "merged" ? push.pr : null;
+  const outdated = !!mergedPr?.mergedAt && mergedPr.mergedAt > review.generatedAt;
   return (
     <div className={cx(box, "flex flex-wrap items-start gap-3")}>
       <Mascot size={28} className="shrink-0" />
       <div className="min-w-0 flex-1">
         <p className="text-fg">
           {new Date(review.generatedAt).toLocaleDateString()} · {review.findings.length} findings{review.costUsd ? <span className="text-muted"> · {usd(review.costUsd)}</span> : null}
+          {outdated && <span className="text-faint" title="The code changed after this review. Run it again to see the current state."> · Before #{mergedPr!.number}</span>}
         </p>
-        {review.summary && <p className="mt-0.5 text-muted">{review.summary}</p>}
+        {review.summary && <p className={cx("mt-0.5", outdated ? "text-faint" : "text-muted")}>{review.summary}</p>}
       </div>
       <div className="flex shrink-0 items-center gap-3 text-[11.5px]">
+        {outdated && (
+          <button type="button" className="text-accent hover:underline" onClick={() => setConfirming(true)}>
+            Review Again
+          </button>
+        )}
         <button type="button" className="text-accent hover:underline" onClick={() => openCode(review.report, { title: "Code review" })}>
           Open Report
         </button>

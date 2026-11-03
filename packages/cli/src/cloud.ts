@@ -179,10 +179,18 @@ async function pushBranch(root: string, start: string): Promise<{ branch: string
   }
 }
 
+export interface CheckCounts {
+  passing: number;
+  failing: number;
+  pending: number;
+}
 export interface PullRequest {
   number: number;
   url: string;
   state: "open" | "merged" | "closed";
+  mergedAt?: string;
+  /** GitHub check runs on the PR's head commit; only fetched for open PRs. */
+  checks?: CheckCounts;
 }
 export interface PushInfo {
   /** The `lens/fixes-*` branch, or null once merged. */
@@ -197,10 +205,40 @@ async function repoOf(root: string): Promise<RepoRef> {
   return r;
 }
 
+const FAILED_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
+
+async function checksFor(r: RepoRef, sha: string): Promise<CheckCounts> {
+  const res = (await githubApi(`/repos/${r.owner}/${r.name}/commits/${sha}/check-runs?per_page=100`)) as { check_runs: CheckRun[] };
+  return countChecks(res.check_runs);
+}
+
+type CheckRun = { status: string; conclusion: string | null };
+
+export function countChecks(runs: CheckRun[]): CheckCounts {
+  const counts: CheckCounts = { passing: 0, failing: 0, pending: 0 };
+  for (const c of runs) {
+    if (c.status !== "completed") counts.pending++;
+    else if (c.conclusion && FAILED_CONCLUSIONS.has(c.conclusion)) counts.failing++;
+    else counts.passing++;
+  }
+  return counts;
+}
+
 async function findPr(r: RepoRef, branch: string): Promise<PullRequest | null> {
-  const rows = (await githubApi(`/repos/${r.owner}/${r.name}/pulls?state=all&head=${encodeURIComponent(`${r.owner}:${branch}`)}`)) as Array<{ number: number; html_url: string; state: string; merged_at: string | null }>;
+  const rows = (await githubApi(`/repos/${r.owner}/${r.name}/pulls?state=all&head=${encodeURIComponent(`${r.owner}:${branch}`)}`)) as Array<{ number: number; html_url: string; state: string; merged_at: string | null; head: { sha: string } }>;
   const p = rows[0];
-  return p ? { number: p.number, url: p.html_url, state: p.merged_at ? "merged" : p.state === "open" ? "open" : "closed" } : null;
+  if (!p) return null;
+  const state = p.merged_at ? "merged" : p.state === "open" ? "open" : "closed";
+  const checks = state === "open" ? await checksFor(r, p.head.sha).catch(() => undefined) : undefined;
+  return { number: p.number, url: p.html_url, state, ...(p.merged_at ? { mergedAt: p.merged_at } : {}), ...(checks ? { checks } : {}) };
+}
+
+async function mergedTime(root: string, n: number): Promise<string | undefined> {
+  const r = await repoOf(root);
+  const p = (await githubApi(`/repos/${r.owner}/${r.name}/pulls/${n}`)) as { html_url: string; merged_at: string | null };
+  if (!p.merged_at) return undefined;
+  await git(root, ["config", "lens.merged", `${n} ${p.html_url} ${p.merged_at}`]);
+  return p.merged_at;
 }
 
 /** Where the fixes are: unpushed, pushed, in an open pull request, or merged. */
@@ -209,8 +247,11 @@ export async function pushState(root: string): Promise<PushInfo | null> {
   const dirty = !!(await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"]).catch(() => ""));
   if (!branch.startsWith("lens/fixes-")) {
     const merged = await git(root, ["config", "--get", "lens.merged"]).catch(() => "");
-    const [n, url] = merged.split(" ");
-    return n && url ? { branch: null, dirty, pr: { number: Number(n), url, state: "merged" } } : null;
+    const [n, url, saved] = merged.split(" ");
+    if (!n || !url) return null;
+    // Merges recorded before Lens saved the time: ask GitHub once and keep the answer.
+    const mergedAt = saved || (githubToken() ? await mergedTime(root, Number(n)).catch(() => undefined) : undefined);
+    return { branch: null, dirty, pr: { number: Number(n), url, state: "merged", ...(mergedAt ? { mergedAt } : {}) } };
   }
   // Shallow clones are single-branch, so there's no local origin/<branch> ref to check. Ask GitHub.
   const pr = githubToken() ? await findPr(await repoOf(root), branch).catch(() => null) : null;
@@ -273,8 +314,9 @@ export async function mergePullRequest(root: string): Promise<PullRequest> {
   await git(root, ["checkout", base]);
   await git(root, ["pull", "--ff-only", "--no-tags", "origin", base]);
   await git(root, ["branch", "-D", branch]).catch(() => undefined);
-  await git(root, ["config", "lens.merged", `${pr.number} ${pr.url}`]);
-  return { ...pr, state: "merged" };
+  const mergedAt = new Date().toISOString();
+  await git(root, ["config", "lens.merged", `${pr.number} ${pr.url} ${mergedAt}`]);
+  return { number: pr.number, url: pr.url, state: "merged", mergedAt };
 }
 
 /** Repos already on the volume, as `owner/name`. */
