@@ -21,7 +21,7 @@ import { authorizeUrl, disconnectGithub, finishOAuth, githubLogin, githubToken, 
 import { cloneOrUpdate, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, type PushInfo } from "./cloud.js";
 import { MAX_TEST_REPAIRS, recordRepairAttempt, repairItems, saveRepairItems } from "./ci.js";
 import { SOURCES, applyFixes, loadRemediation, undoFix, type RemediationSource } from "./remediate.js";
-import { EnrichRunner, FIXABLE_CHECKS, HEALTH_BATCH, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, fixAllPlan, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
+import { EnrichRunner, FIXABLE_CHECKS, HEALTH_BATCH, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import {
   buildBatches, diffImpact, isGitRepo, loadGraph, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
   type EmbeddingStore, type KnowledgeGraph,
@@ -256,7 +256,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
 
       if (req.method === "GET" && url.pathname === "/api/meta") {
         const { graph } = await getGraph();
-        return send(res, 200, { project: graph.project, hasEmbeddings: !!proj.embeddings, git: proj.git, root: proj.root, canPick: !opts.cloud && process.platform === "darwin", cloud: !!opts.cloud, canPush: !!opts.cloud && !!githubToken(), github: opts.cloud ? { available: oauthAvailable(), login: githubLogin() } : undefined, repo: repoName(proj.root), canEnrich: !proj.graphFile, enrichEstimates: estimatesFor(graph) });
+        return send(res, 200, { project: graph.project, hasEmbeddings: !!proj.embeddings, git: proj.git, root: proj.root, canPick: !opts.cloud && process.platform === "darwin", cloud: !!opts.cloud, canPush: !!opts.cloud && !!githubToken(), github: opts.cloud ? { available: oauthAvailable(), login: githubLogin() } : undefined, repo: repoName(proj.root), canEnrich: !proj.graphFile, ...(await estimatesFor(proj.root, graph, !proj.graphFile)) });
       }
       if (req.method === "GET" && url.pathname === "/api/graph") {
         const { graph } = await getGraph();
@@ -312,7 +312,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
           task === "remediate" && source !== "review" && !checkId
             ? (await fixAllPlan(proj.root, source)).estimate.limit
             : task === "remediate"
-              ? remediateLimit(checkId, (await remediationItems(proj.root, source, checkId)).length) : estimatesFor((await getGraph()).graph)[task as Exclude<EnrichTask, "remediate">].limit;
+              ? remediateLimit(checkId, (await remediationItems(proj.root, source, checkId)).length) : (await estimatesFor(proj.root, (await getGraph()).graph, true)).enrichEstimates[task as Exclude<EnrichTask, "remediate">].limit;
         if (enrich.running) return send(res, 409, { error: "an AI run is already in progress" });
         const authProblem = await checkClaudeAuth();
         if (authProblem) return send(res, 412, { error: authProblem });
@@ -529,16 +529,18 @@ function pickFolder(startIn: string): Promise<string | null> {
   });
 }
 
-/** Per-task cost estimates for the project being served. */
-function estimatesFor(g: KnowledgeGraph): Record<Exclude<EnrichTask, "remediate">, ReturnType<typeof estimateCost>> {
+/** Per-task cost estimates for the project being served, and the files waiting for review. */
+async function estimatesFor(root: string, g: KnowledgeGraph, hasSource: boolean) {
   const files = g.nodes.filter((n) => isFileKind(n) && n.path).length;
   const pending = buildBatches(g, { pendingOnly: true }).reduce((a, b) => a + b.files.length, 0);
-  return {
+  const review = hasSource ? await reviewPlan(root, g) : { files: 0, batches: 0, estimate: reviewEstimate(0) };
+  const enrichEstimates: Record<Exclude<EnrichTask, "remediate">, CostEstimate> = {
     domain: estimateCost("domain", files),
     audit: estimateCost("audit", files),
-    review: estimateCost("review", files),
+    review: review.estimate,
     summaries: estimateCost("summaries", Math.max(1, pending)),
   };
+  return { enrichEstimates, reviewPending: { files: review.files, batches: review.batches } };
 }
 
 function readBody(req: http.IncomingMessage, limit: number): Promise<string> {

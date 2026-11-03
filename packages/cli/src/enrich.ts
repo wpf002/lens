@@ -8,24 +8,18 @@
  * final stream-json result is reported back to the dashboard.
  */
 import { loadRepairItems } from "./ci.js";
+import { hashFiles, loadCoverage, mergeReview, pendingReview, planBatches, priorFindingsFor, renderReport, reviewIndex, saveCoverage, type ReviewFile, type ReviewRecord } from "./review-ledger.js";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyFixes, buildRecord, loadRemediation, remediationPath, type RemediationSource } from "./remediate.js";
 import { collectChanges, makeWorkspace } from "./workspace.js";
-import { AuditVerdictsSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, type ReviewFindings, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts } from "@lens/core";
+import { AuditVerdictsSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type KnowledgeGraph } from "@lens/core";
 
 export type EnrichTask = "domain" | "audit" | "summaries" | "review" | "remediate";
 
-/** Stored at .lens/review.json; survives rescans. */
-export interface ReviewRecord {
-  generatedAt: string;
-  costUsd?: number;
-  summary?: string;
-  report: string;
-  findings: ReviewFindings["findings"];
-}
+export type { ReviewRecord } from "./review-ledger.js";
 
 /** Stored at .lens/audit.json; survives rescans. */
 export interface AuditRecord {
@@ -50,7 +44,7 @@ export interface EnrichJob {
   result?: { domains: number; flows: number; dropped: number };
   audit?: { items: number; failing: number; report: string };
   summaries?: { batchesDone: number; batchesTotal: number; files: number; stoppedEarly?: string };
-  review?: { findings: number; report: string };
+  review?: { findings: number; report: string; batchesDone?: number; batchesTotal?: number; stoppedEarly?: string };
   remediation?: { source: RemediationSource; proposed: number; invalid: number; skipped: number; applied?: number };
   /** Cost of earlier Claude runs in this job (Fix runs several batches). */
   costBase?: number;
@@ -80,7 +74,6 @@ export function estimateCost(task: EnrichTask, files: number): CostEstimate {
   const [low, high] =
     task === "summaries" ? [0.008 * files, 0.02 * files]
     : task === "audit" ? [0.5 + 0.005 * f, 1.2 + 0.01 * f]
-    : task === "review" ? [0.6 + 0.004 * f, 1.5 + 0.008 * f]
     : task === "remediate" ? [0.3 + 0.15 * Math.min(files, 30), 0.8 + 0.4 * Math.min(files, 30)]
     : [0.3 + 0.003 * f, 0.8 + 0.007 * f];
   const r = (n: number) => Math.round(n * 100) / 100;
@@ -88,6 +81,26 @@ export function estimateCost(task: EnrichTask, files: number): CostEstimate {
   const room = task === "remediate" ? Math.max(3, high * 2.5) : Math.max(0.5, high * 2);
   return { low: r(Math.max(0.05, low)), high: r(Math.max(0.2, high)), limit: r(Math.min(MAX_BUDGET_USD, room)) };
 }
+/** A review of `batches` batches of new or changed files (Sonnet, ~25 files or 4000 lines each). */
+export function reviewEstimate(batches: number): CostEstimate {
+  const r = (n: number) => Math.round(n * 100) / 100;
+  if (!batches) return { low: 0, high: 0, limit: 0 };
+  const high = REVIEW_BATCH_HIGH_USD * batches;
+  return { low: r(REVIEW_BATCH_LOW_USD * batches), high: r(high), limit: r(Math.min(MAX_REVIEW_USD, Math.max(1, high * 1.5))) };
+}
+const REVIEW_BATCH_LOW_USD = 0.35;
+const REVIEW_BATCH_HIGH_USD = 0.9;
+const MAX_REVIEW_USD = 150;
+/** Per-batch cap passed to Claude, so one batch can't take the whole review's budget. */
+const REVIEW_BATCH_LIMIT_USD = 2;
+/** Below this, a Claude run can't do useful work. */
+const MIN_RUN_USD = 0.3;
+/** Spend allowed for reviewing Lens's own changes after a fix run, and for fixing what it finds. */
+const FIX_CHECK_LIMIT_USD = 1.5;
+const FIX_CHECK_DIFF_CHARS = 30_000;
+/** Budget added to every Fix run for that check: one review pass and one repair round. */
+export const FIX_CHECK_RESERVE_USD = 2 * FIX_CHECK_LIMIT_USD;
+
 /** Fix everything with no size limit per fix, with a limit at 1.5x the high end. */
 export function estimateFixAll(items: number): CostEstimate {
   const low = Math.max(0.3, 0.15 * items);
@@ -156,10 +169,10 @@ export const REFACTOR_CHECKS = new Set(["oversized"]);
 export const REFACTOR_ITEM_LIMIT_USD = 8;
 const REFACTOR_JOB_LIMIT_USD = 60;
 export const isRefactorItem = (id: string) => REFACTOR_CHECKS.has(id.split("~")[0]!);
-/** Spending cap for a Fix run on one check or one item. */
+/** Spending cap for a Fix run on one check or one item, plus room to review and repair Lens's own changes. */
 export function remediateLimit(checkId: string | undefined, items: number): number {
-  if (checkId && isRefactorItem(checkId)) return Math.min(REFACTOR_JOB_LIMIT_USD, Math.max(1, items) * REFACTOR_ITEM_LIMIT_USD);
-  return estimateCost("remediate", items).limit;
+  const fixes = checkId && isRefactorItem(checkId) ? Math.min(REFACTOR_JOB_LIMIT_USD, Math.max(1, items) * REFACTOR_ITEM_LIMIT_USD) : estimateCost("remediate", items).limit;
+  return Math.round((fixes + FIX_CHECK_RESERVE_USD) * 100) / 100;
 }
 
 /** Lens checkout root (holds agents/ and bin/lens), from packages/cli/{src,dist}. */
@@ -390,7 +403,7 @@ export class EnrichRunner {
   private async timed(job: EnrichJob, kind: "audit" | "review"): Promise<boolean> {
     const step = { kind, startedAt: Date.now(), typicalMs: await typicalDuration(job.root, kind) };
     job.step = step;
-    const ok = kind === "audit" ? await this.auditStep(job) : await this.reviewStep(job);
+    const ok = kind === "audit" ? await this.auditStep(job) : (await this.reviewStep(job, { limitUsd: job.budgetUsd - (job.costUsd ?? 0) })) !== null;
     job.step = undefined;
     if (ok) await recordDuration(job.root, kind, Date.now() - step.startedAt).catch(() => undefined);
     return ok;
@@ -548,81 +561,147 @@ export class EnrichRunner {
     if (await this.timed(job, "review")) this.finish(job, "done");
   }
 
-  /** Runs the review and saves it. False when the job stopped. */
-  private async reviewStep(job: EnrichJob): Promise<boolean> {
+  /**
+   * Reviews every code file that is new or changed since its last review, in batches, and
+   * folds the findings into the ledger after each batch so a stopped run keeps its progress.
+   * With `scope`, reviews only the files a fix run just changed, against their diff.
+   * Returns the indexes of new findings, or null when the job stopped.
+   */
+  private async reviewStep(job: EnrichJob, opts: { limitUsd: number; scope?: { paths: string[]; diff: string } }): Promise<number[] | null> {
     const { root } = job;
-    // Remediate finds everything: refresh the automatic checks first (free), then review.
+    const scoped = !!opts.scope;
     this.push(job, "Rescanning");
     await scanAndSave(root);
     const g = await loadGraph(root);
     if (!g) throw new Error("no graph for this project; scan it first");
+    const files = reviewFiles(g);
+    const hashes = await hashFiles(root, files.map((f) => f.path));
+    const coverage = await loadCoverage(root);
+    const inScope = new Set(opts.scope?.paths ?? []);
+    const targets = scoped ? files.filter((f) => inScope.has(f.path)) : pendingReview(files, hashes, coverage);
+    const batches = planBatches(targets);
+    const progress = { findings: 0, report: REVIEW_REPORT, batchesDone: 0, batchesTotal: batches.length } as NonNullable<EnrichJob["review"]>;
+    if (!scoped) job.review = progress;
+    if (!batches.length) {
+      this.push(job, "No new or changed files to review");
+      return [];
+    }
     const dir = paths(root).intermediate;
     await fs.mkdir(dir, { recursive: true });
     const ctxPath = path.join(dir, "context-health.json");
     const outPath = path.join(dir, "review.json");
-    const reportPath = path.join(root, REVIEW_REPORT);
-    const files = g.nodes.filter((n) => n.kind === "file" && n.path).map((n) => ({ path: n.path!, loc: n.metrics?.loc ?? 0, layer: n.layer, complexity: n.complexity }));
-    // Point the reviewer at the riskiest files so it doesn't read the whole repo.
-    const hitsByFile = new Map<string, number>();
-    for (const c of g.health?.checks ?? []) for (const h of c.hits) if (h.path) hitsByFile.set(h.path, (hitsByFile.get(h.path) ?? 0) + 1);
-    const fanIn = new Map<string, number>();
-    for (const e of g.edges) if (e.kind === "imports") fanIn.set(e.target, (fanIn.get(e.target) ?? 0) + 1);
-    const focus = files
-      .filter((f) => !/(^|\/)(tests?|__tests__)\/|\.(test|spec)\./.test(f.path))
-      .map((f) => ({ path: f.path, score: (hitsByFile.get(f.path) ?? 0) * 2 + (f.complexity === "complex" ? 3 : f.complexity === "moderate" ? 1 : 0) + (fanIn.get(`file:${f.path}`) ?? 0) * 0.5 + Math.min(f.loc, 2000) / 400 }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 30)
-      .map((f) => f.path);
-    const health = g.health && { ...g.health, checks: g.health.checks.map((c) => ({ ...c, hits: c.hits.slice(0, 10) })) };
-    await writeJsonAtomic(ctxPath, { project: g.project, focus, health, files }, true);
-    await fs.rm(outPath, { force: true });
-    const mtime = () => {
-      try {
-        return statSync(reportPath).mtimeMs;
-      } catch {
-        return 0;
-      }
-    };
-    const reportBefore = mtime();
     const instructions = agentInstructions("code-reviewer");
     if (!existsSync(instructions)) throw new Error(`missing ${instructions}`);
-    const prompt = [
-      `Follow the agent instructions in ${instructions} (read that file first).`,
-      `Project root: ${root}`,
-      `Health report: ${ctxPath}`,
-      `Report path: ${reportPath}`,
-      `Findings path: ${outPath}`,
-      "Start with the files listed under `focus` in the health report (the riskiest ~30). Read other files only to confirm or trace a finding, and keep it to roughly 40 file reads in total.",
-      "Read-only: write those two files and nothing else.",
-      "If a write is refused, put the full report in your final message inside a ```markdown fence and the findings inside a ```json fence instead.",
-    ].join("\n");
-    const tools = ["Read", "Grep", "Glob", `Edit(./${REVIEW_REPORT})`, "Edit(./.lens/intermediate/review.json)"];
-    const { code, stderr, resultError, resultText } = await this.runClaude(job, prompt, tools, MODEL_ARGS);
-    if (job.state !== "running") return false;
+    const existing = new Set(files.map((f) => f.path));
+    const startCost = job.costUsd ?? 0;
+    const added: number[] = [];
+    let lastError: string | undefined;
 
-    const fenced = (lang: string) => new RegExp("```" + lang + "\\s*\\n([\\s\\S]*?)\\n```").exec(resultText)?.[1];
-    if (mtime() === reportBefore) {
-      const md = fenced("markdown");
-      if (md) await fs.writeFile(reportPath, md);
-    }
-    let raw = await readJson<unknown>(outPath);
-    if (!raw) {
-      try {
-        raw = JSON.parse(fenced("json") ?? "null");
-      } catch {
-        raw = null;
+    for (const [n, batch] of batches.entries()) {
+      const remaining = opts.limitUsd - ((job.costUsd ?? 0) - startCost);
+      if (remaining < MIN_RUN_USD) {
+        progress.stoppedEarly = "reached the spending limit; the next review continues from here";
+        break;
       }
+      this.push(job, batches.length > 1 ? `Batch ${n + 1} of ${batches.length}: ${batch.length} files` : `Reviewing ${batch.length} files`);
+      const batchPaths = new Set(batch.map((f) => f.path));
+      const closed = await reviewClosed(root);
+      const ledger = await loadReview(root);
+      const health = (g.health?.checks ?? []).map((c) => ({ id: c.id, title: c.title, hits: c.hits.filter((h) => h.path && batchPaths.has(h.path)).slice(0, 10) })).filter((c) => c.hits.length);
+      await writeJsonAtomic(ctxPath, { project: g.project, mode: scoped ? "changes" : "full", files: batch, priorFindings: priorFindingsFor(ledger.findings, batchPaths, closed), health, ...(scoped ? { diff: opts.scope!.diff } : {}) }, true);
+      await fs.rm(outPath, { force: true });
+      const prompt = [
+        `Follow the agent instructions in ${instructions} (read that file first).`,
+        `Project root: ${root}`,
+        `Context: ${ctxPath}`,
+        `Findings path: ${outPath}`,
+        "Read-only: write the findings file and nothing else.",
+        "If the write is refused, put the findings inside a ```json fence in your final message instead.",
+      ].join("\n");
+      const saved = job.budgetUsd;
+      job.costBase = job.costUsd ?? 0;
+      job.budgetUsd = Math.round(Math.min(remaining, REVIEW_BATCH_LIMIT_USD) * 100) / 100;
+      const { code, stderr, resultError, resultText } = await this.runClaude(job, prompt, ["Read", "Grep", "Glob", "Edit(./.lens/intermediate/review.json)"], MODEL_ARGS);
+      job.budgetUsd = saved;
+      if (job.state !== "running") return null;
+
+      const parsed = ReviewFindingsSchema.safeParse((await readJson<unknown>(outPath)) ?? fencedJson(resultText));
+      if (!parsed.success) {
+        lastError = resultError ?? (code ? `Claude Code exited with code ${code}: ${stderr.trim().split("\n").pop() ?? ""}` : `review findings failed validation:\n${formatZodError(parsed.error)}`);
+        this.push(job, `Batch ${n + 1} failed: ${lastError.split("\n")[0]}`);
+        continue;
+      }
+      const now = new Date().toISOString();
+      const merged = mergeReview(ledger.findings, parsed.data, { ...closed, reviewed: batchPaths, existing, now, byFix: scoped });
+      const record: ReviewRecord = { ...ledger, generatedAt: now, costUsd: (job.costUsd ?? 0) - startCost, summary: undefined, findings: merged.findings };
+      await saveReview(root, record);
+      if (!scoped) {
+        for (const f of batch) coverage[f.path] = hashes.get(f.path)!;
+        await saveCoverage(root, coverage);
+      }
+      added.push(...merged.added);
+      progress.findings += merged.added.length;
+      progress.batchesDone = n + 1;
     }
-    if (!raw) throw new Error(resultError ?? (code ? `Claude Code exited with code ${code}: ${stderr.trim().split("\n").pop() ?? ""}` : "the reviewer did not write its findings"));
-    const parsed = ReviewFindingsSchema.safeParse(raw);
-    if (!parsed.success) throw new Error(`review findings failed validation:\n${formatZodError(parsed.error)}`);
-    const record: ReviewRecord = { generatedAt: new Date().toISOString(), costUsd: job.costUsd, summary: parsed.data.summary, report: REVIEW_REPORT, findings: parsed.data.findings };
-    await writeJsonAtomic(reviewPath(root), record, true);
     await fs.rm(outPath, { force: true });
-    job.review = { findings: record.findings.length, report: REVIEW_REPORT };
+    if (!progress.batchesDone && lastError) throw new Error(lastError);
+    if (!scoped) {
+      this.push(job, "Rescanning");
+      await scanAndSave(root);
+    }
+    return added;
+  }
+
+  /**
+   * Fixes shouldn't create new issues: review the files a fix run changed against their diff,
+   * then give any high or medium problem that review finds one fix round. That round isn't
+   * reviewed again; its files stay pending, so the next review covers them.
+   */
+  private async checkOwnFixes(job: EnrichJob, source: RemediationSource, changed: string[]) {
+    const { root } = job;
+    if (!changed.length || job.state !== "running") return;
+    const allowance = Math.min(FIX_CHECK_LIMIT_USD, job.budgetUsd - (job.costUsd ?? 0));
+    if (allowance < MIN_RUN_USD) {
+      this.push(job, "Skipped checking Lens's changes: spending limit reached. The next review covers them.");
+      return;
+    }
+    this.push(job, `Checking Lens's changes to ${changed.length} file${changed.length === 1 ? "" : "s"}`);
+    // The fixes are already applied; a failed check leaves their files pending for the next review instead of failing the run.
+    const added = await this.reviewStep(job, { limitUsd: allowance, scope: { paths: changed, diff: gitDiff(root, changed) } }).catch((e: unknown) => {
+      const reason = e instanceof Error ? e.message.split("\n")[0]! : String(e);
+      console.error(`[ai] check of Lens's changes failed in ${path.basename(root)}: ${reason}`);
+      this.push(job, `Couldn't check Lens's changes: ${reason}`);
+      return null;
+    });
+    if (!added?.length) return;
+    const ledger = await loadReview(root);
+    const items = added
+      .map((i) => ({ i, f: ledger.findings[i]! }))
+      .filter(({ f }) => f.severity !== "low")
+      .map(({ i, f }) => ({ id: `review-${i}`, title: f.title, evidence: [`${f.path}${f.line ? `:${f.line}` : ""} ${f.detail}`], fix: f.fix }));
+    const remaining = job.budgetUsd - (job.costUsd ?? 0);
+    if (!items.length || remaining < MIN_RUN_USD) return;
+    this.push(job, `Fixing ${items.length} problem${items.length === 1 ? "" : "s"} in Lens's changes`);
+    const saved = job.budgetUsd;
+    job.costBase = job.costUsd ?? 0;
+    job.budgetUsd = Math.round(Math.min(remaining, estimateCost("remediate", items.length).limit) * 100) / 100;
+    const { data, error } = await this.draftFixes(job, items, false);
+    job.budgetUsd = saved;
+    if (job.state !== "running") return;
+    if (!data) {
+      this.push(job, `No fix for the problems in Lens's changes${error ? `: ${error.split("\n")[0]}` : ""}`);
+      return;
+    }
+    const rec = buildRecord(root, source, data, undefined, undefined, `c${Date.now().toString(36)}`);
+    const prior = await loadRemediation(root, source);
+    const merged = prior ? { ...prior, generatedAt: rec.generatedAt, costUsd: job.costUsd, fixes: [...prior.fixes, ...rec.fixes], skipped: [...prior.skipped, ...rec.skipped], edits: { ...prior.edits, ...rec.edits } } : rec;
+    await writeJsonAtomic(remediationPath(root, source), merged, true);
+    const valid = rec.fixes.filter((f) => !f.invalid).map((f) => f.id);
+    if (!valid.length) return;
+    const { applied } = await applyFixes(root, source, valid);
+    if (job.remediation) job.remediation.applied = (job.remediation.applied ?? 0) + applied.length;
     this.push(job, "Rescanning");
     await scanAndSave(root);
-    return true;
   }
 
   /**
@@ -685,7 +764,8 @@ export class EnrichRunner {
     // Keep earlier results (and their Undo edits); this run replaces only its own items.
     const prior = await loadRemediation(root, source);
     const review = source === "review" ? await readJson<ReviewRecord>(reviewPath(root)) : null;
-    const keepPrior = prior && !prior.legacyIds && (!review || prior.generatedAt >= review.generatedAt);
+    // Review ids are stable since the ledger started; records older than that used other numbering.
+    const keepPrior = prior && !prior.legacyIds && (!review || prior.generatedAt >= (review.stableSince ?? review.generatedAt));
     if (keepPrior) {
       const mine = new Set(items.map((i) => i.id));
       const merged = {
@@ -708,6 +788,7 @@ export class EnrichRunner {
       await scanAndSave(root);
     }
     job.remediation = { source, proposed: valid.length, invalid: record.fixes.filter((f) => f.invalid).length, skipped: record.skipped.length, applied };
+    await this.checkOwnFixes(job, source, changedPaths(record, valid));
     this.finish(job, "done");
   }
 
@@ -741,9 +822,10 @@ export class EnrichRunner {
     const tried = new Set<string>();
     const runTag = Date.now().toString(36);
     // Keep earlier applied fixes (for Undo and the FIXED badge) and skips that found the code already safe.
-    // Review ids (review-<i>) renumber per review, so only stable ids carry over.
+    // Review ids (review-<i>) are stable since the ledger started; older records used other numbering.
     const prior = await loadRemediation(root, source);
-    const stable = (id: string) => !id.startsWith("review-");
+    const since = (await readJson<ReviewRecord>(reviewPath(root)))?.stableSince;
+    const stable = (id: string) => !id.startsWith("review-") || (!!since && !!prior && prior.generatedAt >= since);
     const kept = (prior?.fixes ?? []).filter((f) => f.status === "applied" && stable(f.itemId));
     const merged: Awaited<ReturnType<typeof buildRecord>> = {
       generatedAt: new Date().toISOString(),
@@ -804,6 +886,7 @@ export class EnrichRunner {
     merged.costUsd = job.costUsd;
     await writeJsonAtomic(remediationPath(root, source), merged, true);
     job.remediation = { source, proposed: merged.fixes.filter((f) => !f.invalid).length, invalid: merged.fixes.filter((f) => f.invalid).length, skipped: merged.skipped.length, applied: progress.fixed };
+    await this.checkOwnFixes(job, source, changedPaths(merged, merged.fixes.filter((f) => f.status === "applied" && f.id.startsWith(runTag)).map((f) => f.id)));
     this.finish(job, "done");
   }
 }
@@ -822,19 +905,85 @@ function acceptedFix(rule: string): string {
     : "Triaged as accepted risk. Reduce it where that's possible without changing behavior; skip if it isn't.";
 }
 
+/** Code files the review covers. */
+function reviewFiles(g: KnowledgeGraph): ReviewFile[] {
+  return g.nodes.filter((n) => n.kind === "file" && n.path).map((n) => ({ path: n.path!, loc: n.metrics?.loc ?? 0 }));
+}
+
+/** The ledger, with the time its ids became stable filled in for a review saved before the ledger. */
+async function loadReview(root: string): Promise<ReviewRecord> {
+  const rec = await readJson<ReviewRecord>(reviewPath(root));
+  const now = new Date().toISOString();
+  if (!rec) return { generatedAt: now, report: REVIEW_REPORT, findings: [], stableSince: now };
+  return { ...rec, stableSince: rec.stableSince ?? rec.generatedAt };
+}
+
+async function saveReview(root: string, record: ReviewRecord): Promise<void> {
+  await writeJsonAtomic(reviewPath(root), record, true);
+  await fs.writeFile(path.join(root, REVIEW_REPORT), renderReport(record, await reviewClosed(root)));
+}
+
+/** Review findings Lens fixed or found already safe, and the owner's Won't Fix keys. */
+export async function reviewClosed(root: string): Promise<{ fixed: Set<number>; wontFix: Set<string> }> {
+  const review = await readJson<ReviewRecord>(reviewPath(root));
+  const since = review?.stableSince ?? review?.generatedAt;
+  const fixed = new Set<number>();
+  for (const source of ["review", "health"] as const) {
+    const rec = await loadRemediation(root, source);
+    if (!rec || !since || rec.generatedAt < since) continue;
+    const ids = [...rec.fixes.filter((f) => f.status === "applied").map((f) => f.itemId), ...rec.skipped.filter((x) => ALREADY_SAFE.test(x.reason)).map((x) => x.itemId)];
+    for (const id of ids) {
+      const i = reviewIndex(id);
+      if (i !== undefined) fixed.add(i);
+    }
+  }
+  return { fixed, wontFix: new Set(await loadWontFix(root)) };
+}
+
+/** Files waiting for review (new or changed since their last review) and what reviewing them costs. */
+export async function reviewPlan(root: string, graph?: KnowledgeGraph | null): Promise<{ files: number; batches: number; estimate: CostEstimate }> {
+  const g = graph ?? (await loadGraph(root));
+  const files = g ? reviewFiles(g) : [];
+  const pending = pendingReview(files, await hashFiles(root, files.map((f) => f.path)), await loadCoverage(root));
+  const batches = planBatches(pending).length;
+  return { files: pending.length, batches, estimate: reviewEstimate(batches) };
+}
+
+const fencedJson = (text: string): unknown => {
+  try {
+    return JSON.parse(new RegExp("```json\\s*\\n([\\s\\S]*?)\\n```").exec(text)?.[1] ?? "null");
+  } catch {
+    return null;
+  }
+};
+
 export async function fixAllPlan(root: string, source: "audit" | "health"): Promise<{ first: "audit" | "review" | null; firstLimit: number; items: number; estimate: CostEstimate }> {
   const g = await loadGraph(root);
   const files = g?.nodes.filter((n) => n.kind === "file" && n.path).length ?? 0;
-  // Run the audit or review again when it's missing or older than the latest commit.
-  const report = source === "audit" ? auditPath(root) : reviewPath(root);
-  const at = Date.parse((await readJson<{ generatedAt?: string }>(report))?.generatedAt ?? "") || 0;
-  const first = at && at >= headCommitTime(root) ? null : source === "audit" ? "audit" : "review";
-  const pre = first ? estimateCost(first, files) : { low: 0, high: 0, limit: 0 };
+  // The audit runs again when it's missing or older than the latest commit. The review runs whenever a file is new or changed since it was reviewed.
+  const auditAt = source === "audit" ? Date.parse((await readJson<{ generatedAt?: string }>(auditPath(root)))?.generatedAt ?? "") || 0 : 0;
+  const review = source === "health" ? await reviewPlan(root, g) : null;
+  const first = review ? (review.batches ? "review" : null) : auditAt && auditAt >= headCommitTime(root) ? null : "audit";
+  const pre = !first ? { low: 0, high: 0, limit: 0 } : review ? review.estimate : estimateCost("audit", files);
   const items = await fixableCount(root, source);
   // Before the first run, assume about ten more items will turn up.
   const fix = estimateFixAll(Math.max(1, items + (first ? 10 : 0)));
   const r = (n: number) => Math.round(n * 100) / 100;
-  return { first, firstLimit: pre.limit, items, estimate: { low: r(pre.low + fix.low), high: r(pre.high + fix.high), limit: r(Math.min(150, pre.limit + fix.limit)) } };
+  return { first, firstLimit: pre.limit, items, estimate: { low: r(pre.low + fix.low), high: r(pre.high + fix.high), limit: r(Math.min(MAX_REVIEW_USD + 150, pre.limit + fix.limit + FIX_CHECK_RESERVE_USD)) } };
+}
+
+/** Files the given fixes changed, without deletions. */
+function changedPaths(record: { edits: Record<string, Array<{ path: string; delete?: boolean }>> }, fixIds: string[]): string[] {
+  return [...new Set(fixIds.flatMap((id) => (record.edits[id] ?? []).filter((e) => !e.delete).map((e) => e.path)))];
+}
+
+/** The working-tree diff of these files against HEAD, truncated. Empty outside a git repo. */
+function gitDiff(root: string, files: string[]): string {
+  try {
+    return execFileSync("git", ["diff", "HEAD", "--", ...files], { cwd: root, encoding: "utf8", timeout: 10_000, maxBuffer: 10_000_000 }).slice(0, FIX_CHECK_DIFF_CHARS);
+  } catch {
+    return "";
+  }
 }
 
 /** Last commit time in ms, or 0 outside a git repo. */
@@ -877,7 +1026,7 @@ export async function remediationItems(root: string, source: RemediationSource, 
     const skip = new Set(await loadWontFix(root));
     return (rec?.findings ?? [])
       .map((f, i) => ({ f, i }))
-      .filter(({ f, i }) => (only === null ? f.severity !== "low" && !skip.has(reviewKey(f)) : i === only))
+      .filter(({ f, i }) => (only === null ? f.severity !== "low" && !f.resolvedAt && !skip.has(reviewKey(f)) : i === only))
       .map(({ f, i }) => ({ id: `review-${i}`, title: f.title, evidence: [`${f.path}${f.line ? `:${f.line}` : ""} ${f.detail}`], fix: f.fix }));
   }
   if (source === "health" && !checkId) {
@@ -893,7 +1042,7 @@ export async function remediationItems(root: string, source: RemediationSource, 
     const rec = await readJson<ReviewRecord>(reviewPath(root));
     (rec?.findings ?? [])
       .map((f, i) => ({ f, i }))
-      .filter(({ f, i }) => !applied.has(`review-${i}`) && !wontFix.has(reviewKey(f)))
+      .filter(({ f, i }) => !f.resolvedAt && !applied.has(`review-${i}`) && !wontFix.has(reviewKey(f)))
       .sort((a, b) => SEV_RANK[a.f.severity] - SEV_RANK[b.f.severity])
       .forEach(({ f, i }) => out.push({ id: `review-${i}`, title: f.title, evidence: [`${f.path}${f.line ? `:${f.line}` : ""} ${f.detail}`], fix: f.fix }));
     const g = await loadGraph(root);

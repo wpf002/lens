@@ -39,6 +39,16 @@ Every fix must pass a senior engineer's code review. Before writing a fix, check
 - Matches the file's existing naming, error style, and libraries.
 - If a correct fix needs a test or a refactor, include it. If it needs a design decision only the owner can make, skip it with `Decision:`.
 
+## Before you finish
+
+Lens reviews every file you change as a senior engineer would and reports anything your change introduced. Re-read each file you touched and fix these before writing the report:
+
+- Every caller, import, type, and test affected by the change is updated. Grep for the old names.
+- New code is wired in and reachable. Nothing is left half-moved by a split.
+- No duplicated helper: reuse what the project already has.
+- No swallowed errors, magic numbers, debug output, or comments narrating the change.
+- Tests that cover the changed behavior still match it. If behavior changed on purpose, update the test and say so in `explanation`.
+
 ## Output
 
 Make the changes in the project copy, then write this JSON to the report path:

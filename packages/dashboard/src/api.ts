@@ -30,6 +30,8 @@ export interface Meta {
   canEnrich?: boolean;
   /** Expected cost per AI run for this project, and the server's safety limit. */
   enrichEstimates?: Record<"domain" | "audit" | "summaries" | "review", { low: number; high: number; limit: number }>;
+  /** Files the next review will read: new or changed since their last review. */
+  reviewPending?: { files: number; batches: number };
 }
 
 export interface AuditRecord {
@@ -52,7 +54,7 @@ export interface EnrichJob {
   result?: { domains: number; flows: number; dropped: number };
   audit?: { items: number; failing: number; report: string };
   summaries?: { batchesDone: number; batchesTotal: number; files: number; stoppedEarly?: string };
-  review?: { findings: number; report: string };
+  review?: { findings: number; report: string; batchesDone?: number; batchesTotal?: number; stoppedEarly?: string };
   remediation?: { source: RemediationSource; proposed: number; invalid: number; skipped: number };
   source?: RemediationSource;
   checkId?: string;
@@ -86,7 +88,24 @@ export interface ReviewRecord {
   costUsd?: number;
   summary?: string;
   report: string;
-  findings: Array<{ title: string; severity: "high" | "medium" | "low"; category: string; path: string; line?: number; detail: string; fix?: string }>;
+  findings: Array<{
+    title: string;
+    severity: "high" | "medium" | "low";
+    category: string;
+    path: string;
+    line?: number;
+    detail: string;
+    fix?: string;
+    foundAt?: string;
+    /** A later review confirmed it's gone, or its file was deleted. */
+    resolvedAt?: string;
+    /** Index of the closed finding this one brings back. */
+    regressionOf?: number;
+    /** Found by the check Lens runs on its own fixes. */
+    byFix?: boolean;
+  }>;
+  /** Review ids have been stable since this time. */
+  stableSince?: string;
 }
 
 export interface FilePayload {

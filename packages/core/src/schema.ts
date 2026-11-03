@@ -229,7 +229,11 @@ export const ReviewFindingsSchema = z.object({
     line: z.number().int().positive().optional(),
     detail: clip(600),
     fix: clip(600).optional(),
+    /** The earlier finding (review-<n>) this re-reports. */
+    priorId: z.string().regex(/^review-\d+$/).optional().catch(undefined),
   })).transform((a) => a.slice(0, 40)),
+  /** Earlier findings (review-<n>) the reviewer checked and found fixed. */
+  resolved: z.array(z.string().regex(/^review-\d+$/)).max(200).catch([]).default([]),
 });
 export type ReviewFindings = z.infer<typeof ReviewFindingsSchema>;
 

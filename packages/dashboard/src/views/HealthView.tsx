@@ -202,7 +202,7 @@ function ItemActions({ source, itemId, stableId }: { source: "review" | "health"
   );
 }
 
-function FindingRow({ f, i, st, canFix }: { f: ReviewRecord["findings"][number]; i: number; st: ItemStatus; canFix: boolean }) {
+function FindingRow({ f, i, st, canFix, isNew }: { f: ReviewRecord["findings"][number]; i: number; st: ItemStatus; canFix: boolean; isNew: boolean }) {
   const [open, setOpen] = useState(false);
   const reopen = useStore((s) => s.toggleWontFix);
   const fixing = useStore((s) => s.enrichJob.state === "running" && s.enrichJob.task === "remediate" && s.enrichJob.checkId === `review-${i}`);
@@ -214,6 +214,8 @@ function FindingRow({ f, i, st, canFix }: { f: ReviewRecord["findings"][number];
         <SeverityBadge severity={f.severity as Severity} className="w-[68px] justify-center" />
         <span className={cx("min-w-0 flex-1 text-[13px]", closed ? "text-muted" : "text-fg")}>
           {f.title}
+          {!closed && f.regressionOf !== undefined && <span className="ml-2 text-[11px] font-medium text-critical">Regressed</span>}
+          {!closed && f.regressionOf === undefined && isNew && <span className="ml-2 text-[11px] font-medium text-accent">New</span>}
           {st.kind === "open" && st.reason && <span className="block truncate text-[11.5px] text-muted">{st.reason}</span>}
         </span>
         {fixing ? <span className="shrink-0 animate-pulse text-[11.5px] font-medium text-accent">Fixing…</span> : <StatusTag st={st} />}
@@ -266,6 +268,7 @@ function ReviewPanel() {
   const cancel = useStore((s) => s.cancelAI);
   const openCode = useStore((s) => s.openCode);
   const estimate = costRange(meta?.enrichEstimates?.review);
+  const pending = meta?.reviewPending;
   const mine = job.task === "review";
   const running = mine && job.state === "running";
   const failed = mine && job.state === "error";
@@ -277,7 +280,7 @@ function ReviewPanel() {
     return (
       <div className={box} role="status">
         <div className="flex items-center gap-2 text-[12.5px] text-fg">
-          <Spinner size={14} /> Reviewing… <span className="font-mono text-muted tabular">{elapsed}</span>
+          <Spinner size={14} /> Reviewing…{job.review?.batchesTotal ? <span className="font-mono text-muted tabular">{job.review.batchesDone ?? 0}/{job.review.batchesTotal}</span> : null} <span className="font-mono text-muted tabular">{elapsed}</span>
           <Button size="sm" variant="ghost" className="ml-auto" onClick={() => void cancel()}>
             Cancel
           </Button>
@@ -295,7 +298,7 @@ function ReviewPanel() {
   if (confirming)
     return (
       <div className={cx(box, "flex flex-wrap items-center gap-2 text-muted")}>
-        <span className="min-w-0 flex-1">Lens rescans every file, then Claude reviews the riskiest ones as a senior engineer would. Read-only. Usually {estimate}.</span>
+        <span className="min-w-0 flex-1">{pending && pending.files > 0 ? `Reviews ${pending.files} new or changed files in ${pending.batches} ${pending.batches === 1 ? "batch" : "batches"}. Read-only. Usually ${estimate}.` : "Every file is reviewed. Nothing has changed since."}</span>
         <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
           Cancel
         </Button>
@@ -321,13 +324,13 @@ function ReviewPanel() {
       <Mascot size={28} className="shrink-0" />
       <div className="min-w-0 flex-1">
         <p className="text-fg">
-          {new Date(review.generatedAt).toLocaleDateString()} · {review.findings.length} findings{review.costUsd ? <span className="text-muted"> · {usd(review.costUsd)}</span> : null}
+          {new Date(review.generatedAt).toLocaleDateString()} · {review.findings.filter((f) => !f.resolvedAt).length} Findings{pending?.files ? ` · ${pending.files} Files Pending` : ""}{review.costUsd ? <span className="text-muted"> · {usd(review.costUsd)}</span> : null}
           {outdated && <span className="text-faint" title="The code changed after this review. Run it again to see the current state."> · Before #{mergedPr!.number}</span>}
         </p>
         {review.summary && <p className={cx("mt-0.5", outdated ? "text-faint" : "text-muted")}>{review.summary}</p>}
       </div>
       <div className="flex shrink-0 items-center gap-3 text-[11.5px]">
-        {outdated && (
+        {(outdated || !!pending?.files) && (
           <button type="button" className="text-accent hover:underline" onClick={() => setConfirming(true)}>
             Review Again
           </button>
@@ -353,7 +356,7 @@ export function HealthView() {
   const health = model.graph.health;
 
   const { issues, clean, counts, manual, last, fixed, safe, wontFix } = useMemo(() => {
-    // Review ids are positions (review-<i>), so only trust records newer than the review. Check-hit ids are content hashes.
+    // Review ids are stable since stableSince; older records used other numbering. Check-hit ids are content hashes.
     const closed = new Set<string>(wontFixList);
     const fixed = new Set<string>();
     const safe = new Map<string, string>();
@@ -362,7 +365,7 @@ export function HealthView() {
     const last = new Map<string, string>();
     for (const rec of [reviewFixes, healthFixes]) {
       if (!rec) continue;
-      const fresh = (id: string) => !id.startsWith("review-") || !review || rec.generatedAt >= review.generatedAt;
+      const fresh = (id: string) => !id.startsWith("review-") || !review || rec.generatedAt >= (review.stableSince ?? review.generatedAt);
       for (const f of rec.fixes) {
         if (!fresh(f.itemId)) continue;
         if (f.status === "applied") (closed.add(f.itemId), fixed.add(f.itemId));
@@ -385,7 +388,7 @@ export function HealthView() {
     const counts = { high: 0, medium: 0, low: 0 };
     for (const x of checks) if (x.count > 0) counts[x.c.severity] += x.count;
     (review?.findings ?? []).forEach((f, i) => {
-      if (!closed.has(`review-${i}`) && !wontFix.has(reviewKey(f))) counts[f.severity] += 1;
+      if (!f.resolvedAt && !closed.has(`review-${i}`) && !wontFix.has(reviewKey(f))) counts[f.severity] += 1;
     });
     return { issues, clean, counts, closed, manual, last, fixed, safe, wontFix };
   }, [health, review, reviewFixes, healthFixes, wontFixList]);
@@ -399,6 +402,7 @@ export function HealthView() {
     const id = `review-${i}`;
     if (wontFix.has(reviewKey(f))) return { kind: "wontfix" };
     if (fixed.has(id)) return { kind: "fixed", label: fixedLabel };
+    if (f.resolvedAt) return { kind: "fixed", label: "Fixed" };
     if (safe.has(id)) return { kind: "safe", reason: safe.get(id)! };
     return { kind: "open", reason: manual.get(id), last: last.get(id) };
   };
@@ -456,7 +460,7 @@ export function HealthView() {
             </h3>
             <ul>
               {openFindings.map(({ f, i, st }) => (
-                <FindingRow key={i} f={f} i={i} st={st} canFix={canReview} />
+                <FindingRow key={i} f={f} i={i} st={st} canFix={canReview} isNew={!!f.foundAt && f.foundAt === review?.generatedAt} />
               ))}
             </ul>
             {!openFindings.length && <p className="px-4 py-3 text-[12.5px] text-guarded">All closed.</p>}
@@ -468,7 +472,7 @@ export function HealthView() {
                 {showClosed && (
                   <ul className="border-t border-line">
                     {closedFindings.map(({ f, i, st }) => (
-                      <FindingRow key={i} f={f} i={i} st={st} canFix={canReview} />
+                      <FindingRow key={i} f={f} i={i} st={st} canFix={canReview} isNew={!!f.foundAt && f.foundAt === review?.generatedAt} />
                     ))}
                   </ul>
                 )}

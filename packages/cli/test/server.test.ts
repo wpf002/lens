@@ -281,11 +281,11 @@ import fs from "node:fs";
 const prompt = process.argv[process.argv.indexOf("-p") + 1];
 const get = (k) => new RegExp(k + ": (.+)").exec(prompt)[1].trim();
 fs.writeFileSync(${JSON.stringify(argsLog)}, JSON.stringify(process.argv.slice(2)));
-const ctx = JSON.parse(fs.readFileSync(get("Health report"), "utf8"));
-if (!ctx.health) throw new Error("no health report in context");
-fs.writeFileSync(get("Report path"), "# Code review\\n");
-fs.writeFileSync(get("Findings path"), JSON.stringify({ summary: "Small and tidy.", findings: [
-  { title: "Logic in the entry file", severity: "low", category: "design", path: "main.py", line: 1, detail: "Everything lives in main.py.", fix: "Split when it grows." }
+const ctx = JSON.parse(fs.readFileSync(get("Context"), "utf8"));
+if (!ctx.files?.length) throw new Error("no files in context");
+const prior = ctx.priorFindings.find((f) => f.title === "Logic in the entry file");
+fs.writeFileSync(get("Findings path"), JSON.stringify({ findings: [
+  { title: "Logic in the entry file", severity: "low", category: "design", path: "main.py", line: 1, detail: "Everything lives in main.py.", fix: "Split when it grows.", ...(prior ? { priorId: prior.id } : {}) }
 ] }));
 console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, total_cost_usd: 0.4 }));
 `,
@@ -309,7 +309,18 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
       expect(rem.healthItems).toBeGreaterThanOrEqual(1);
       const args = JSON.parse(await fs.readFile(argsLog, "utf8")) as string[];
       const tools = args.slice(args.indexOf("--allowedTools") + 1);
-      expect(tools).toEqual(["Read", "Grep", "Glob", "Edit(./CODE_REVIEW.md)", "Edit(./.lens/intermediate/review.json)"]);
+      expect(tools).toEqual(["Read", "Grep", "Glob", "Edit(./.lens/intermediate/review.json)"]);
+      // Every file was reviewed, so nothing is pending and a second run finds no new findings.
+      const after = JSON.parse((await get(`${base}/api/meta`, auth())).body);
+      expect(after.reviewPending.files).toBe(0);
+      expect((await post(`${base}/api/enrich/review`, {}, auth())).status).toBe(202);
+      job = { state: "running" };
+      for (let i = 0; i < 100 && job.state === "running"; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        job = JSON.parse((await get(`${base}/api/enrich/status`, auth())).body);
+      }
+      expect(job.review?.findings).toBe(0);
+      expect(JSON.parse((await get(`${base}/api/review`, auth())).body).review.findings).toHaveLength(1);
     } finally {
       delete process.env.LENS_CLAUDE_BIN;
     }
