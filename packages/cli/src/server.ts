@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { authorizeUrl, disconnectGithub, finishOAuth, githubLogin, githubToken, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
 import { cloneOrUpdate, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pushFixes, pushState, reposDir } from "./cloud.js";
 import { SOURCES, applyFixes, loadRemediation, undoFix, type RemediationSource } from "./remediate.js";
-import { EnrichRunner, FIXABLE_CHECKS, HEALTH_BATCH, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, fixAllPlan, remediationItems, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
+import { EnrichRunner, FIXABLE_CHECKS, HEALTH_BATCH, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, fixAllPlan, remediateLimit, remediationItems, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import {
   buildBatches, diffImpact, isGitRepo, loadGraph, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
   type EmbeddingStore, type KnowledgeGraph,
@@ -267,7 +267,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
           task === "remediate" && source !== "review" && !checkId
             ? (await fixAllPlan(proj.root, source)).estimate.limit
             : task === "remediate"
-              ? estimateCost("remediate", (await remediationItems(proj.root, source, checkId)).length).limit : estimatesFor((await getGraph()).graph)[task as Exclude<EnrichTask, "remediate">].limit;
+              ? remediateLimit(checkId, (await remediationItems(proj.root, source, checkId)).length) : estimatesFor((await getGraph()).graph)[task as Exclude<EnrichTask, "remediate">].limit;
         if (enrich.running) return send(res, 409, { error: "an AI run is already in progress" });
         const authProblem = await checkClaudeAuth();
         if (authProblem) return send(res, 412, { error: authProblem });

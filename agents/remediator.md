@@ -24,6 +24,7 @@ For each item:
    - **Skip** only when a correct fix changes what users see or what the product does, and the code can't tell you which way the owner wants. Start that reason with `Decision:` followed by one short question for the owner. If the item has an `ownerNote`, that is the owner's answer; follow it.
    - Code structure is your call, never a `Decision:`. How to split a function or file, which folder a new module goes in, names, whether a dependency is really unused: pick the option that matches the project's existing layout and conventions, make the fix, and say what you chose in `explanation`.
    - Size is never a reason to skip. Make the complete fix, however many lines or files it takes.
+   - Time and budget are never reasons to skip. Never answer "not attempted" or "run it again". Every item you're given gets fixed in this run.
 3. Otherwise, write the smallest correct fix in the style of the surrounding code. Don't refactor, rename, or reformat anything else. Prefer libraries the project already uses; don't add dependencies unless the fix truly needs one (then include the manifest edit).
 
 ## Quality bar

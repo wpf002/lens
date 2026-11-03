@@ -7,6 +7,9 @@ import { Mascot } from "../components/Mascot";
 import { FixAllButton, Remediation, SAFE } from "../components/Remediation";
 
 const OWNER = /^(decision|outside code):/i;
+/** Refactor checks run one item per Claude session; each costs more than a small fix. */
+const REFACTOR_CHECKS = new Set(["oversized"]);
+const isRefactor = (id: string) => REFACTOR_CHECKS.has(id.split("~")[0]!);
 import { Button, EmptyState, SeverityBadge, Spinner, cx, renderInlineCode } from "../components/ui";
 import { useStore } from "../store";
 import { SEVERITY_COLOR } from "../utils/colors";
@@ -85,7 +88,7 @@ function FixCheck({ id, open }: { id: string; open: number }) {
   const run = useStore((s) => s.runAI);
   const [asking, setAsking] = useState(false);
   const n = Math.min(open, 15);
-  const est = `~$${Math.max(0.3, 0.15 * n).toFixed(2)}–${Math.max(0.8, 0.4 * n).toFixed(2)}`;
+  const est = isRefactor(id) ? `~$${n}–${4 * n}` : `~$${Math.max(0.3, 0.15 * n).toFixed(2)}–${Math.max(0.8, 0.4 * n).toFixed(2)}`;
   if (asking)
     return (
       <div className="flex shrink-0 items-center gap-2">
@@ -170,7 +173,7 @@ function ItemActions({ source, itemId, stableId }: { source: "review" | "health"
           placeholder="Decision For Claude (Optional)"
           className="h-7 min-w-[220px] flex-1 rounded border border-line bg-panel px-2 text-[12px] text-fg placeholder:text-faint"
         />
-        <span className="text-[11px] text-faint">~$0.45–1.20</span>
+        <span className="text-[11px] text-faint">{isRefactor(itemId) ? "~$1–4" : "~$0.45–1.20"}</span>
         <Button size="sm" variant="ghost" onClick={() => setAsking(false)}>
           Cancel
         </Button>

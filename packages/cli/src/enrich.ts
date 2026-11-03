@@ -149,7 +149,17 @@ async function recordDuration(root: string, kind: "audit" | "review", ms: number
   await writeJsonAtomic(runTimesPath(root), all, true);
 }
 export const MAX_BUDGET_USD = 20;
-const TIMEOUT_MS = 20 * 60_000;
+const TIMEOUT_MS = 45 * 60_000;
+/** Checks whose fixes are refactors: each item gets its own Claude run and a larger cap. */
+export const REFACTOR_CHECKS = new Set(["oversized"]);
+export const REFACTOR_ITEM_LIMIT_USD = 8;
+const REFACTOR_JOB_LIMIT_USD = 60;
+export const isRefactorItem = (id: string) => REFACTOR_CHECKS.has(id.split("~")[0]!);
+/** Spending cap for a Fix run on one check or one item. */
+export function remediateLimit(checkId: string | undefined, items: number): number {
+  if (checkId && isRefactorItem(checkId)) return Math.min(REFACTOR_JOB_LIMIT_USD, Math.max(1, items) * REFACTOR_ITEM_LIMIT_USD);
+  return estimateCost("remediate", items).limit;
+}
 
 /** Lens checkout root (holds agents/ and bin/lens), from packages/cli/{src,dist}. */
 function repoRoot(): string {
@@ -278,7 +288,7 @@ export class EnrichRunner {
     this.child = child;
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
-      this.finish(job, "error", "timed out after 20 minutes");
+      this.finish(job, "error", `timed out after ${TIMEOUT_MS / 60_000} minutes`);
     }, TIMEOUT_MS);
 
     let buf = "";
@@ -660,6 +670,7 @@ export class EnrichRunner {
   /** Fix items in a copy of the project, then apply every valid change with a backup for Undo. */
   private async runRemediate(job: EnrichJob, source: RemediationSource, checkId?: string, note?: string) {
     if (!checkId && source !== "review") return this.runFixAll(job, source);
+    if (source === "health" && checkId && REFACTOR_CHECKS.has(checkId)) return this.runFixAll(job, source, checkId);
     const { root } = job;
     // One item the owner picked: no size limit, and their note rides along as data.
     const single = !!checkId && (/^review-\d+$/.test(checkId) || checkId.includes("~"));
@@ -704,10 +715,11 @@ export class EnrichRunner {
    * left, applying and rescanning after each so fixed hits drop out of the next batch.
    * Stops on cancel, at the job's spending limit, or when a batch makes no progress.
    */
-  private async runFixAll(job: EnrichJob, source: "audit" | "health") {
+  private async runFixAll(job: EnrichJob, source: "audit" | "health", onlyCheck?: string) {
     const { root } = job;
+    const pending = async () => (await remediationItems(root, source, undefined, Infinity)).filter((i) => !onlyCheck || i.id.startsWith(`${onlyCheck}~`));
     // Find problems first when that report hasn't been run yet.
-    const plan = await fixAllPlan(root, source);
+    const plan = onlyCheck ? { first: undefined, firstLimit: 0 } : await fixAllPlan(root, source);
     if (plan.first) {
       const saved = job.budgetUsd;
       job.budgetUsd = Math.min(saved, plan.firstLimit);
@@ -718,7 +730,7 @@ export class EnrichRunner {
       job.audit = undefined;
       job.review = undefined;
     }
-    const total = await fixableCount(root, source);
+    const total = onlyCheck ? (await pending()).length : await fixableCount(root, source);
     if (!total) {
       job.remediation = { source, proposed: 0, invalid: 0, skipped: 0, applied: 0 };
       return this.finish(job, "done");
@@ -740,7 +752,9 @@ export class EnrichRunner {
       edits: Object.fromEntries(kept.map((f) => [f.id, prior?.edits?.[f.id] ?? []])),
     };
     while (job.state === "running") {
-      const items = (await remediationItems(root, source, undefined, Infinity)).filter((i) => !tried.has(`${i.title}|${i.evidence[0]}`)).slice(0, FIX_ALL_BATCH);
+      const left = (await pending()).filter((i) => !tried.has(`${i.title}|${i.evidence[0]}`));
+      // A refactor runs alone so Claude has the whole budget and time for it.
+      const items = left[0] && isRefactorItem(left[0].id) ? [left[0]] : left.filter((i) => !isRefactorItem(i.id)).slice(0, FIX_ALL_BATCH);
       if (!items.length) break;
       const remaining = job.budgetUsd - (job.costUsd ?? 0);
       if (remaining < 0.3) {
@@ -751,7 +765,7 @@ export class EnrichRunner {
       progress.batches++;
       this.push(job, `Batch ${progress.batches}: ${items.length} issues`);
       job.costBase = job.costUsd ?? 0;
-      const batchBudget = Math.min(remaining, estimateCost("remediate", items.length).limit);
+      const batchBudget = Math.min(remaining, isRefactorItem(items[0]!.id) ? REFACTOR_ITEM_LIMIT_USD : estimateCost("remediate", items.length).limit);
       const saved = job.budgetUsd;
       job.budgetUsd = Math.round(batchBudget * 100) / 100; // per-run cap passed to Claude
       const { data, error } = await this.draftFixes(job, items, false);

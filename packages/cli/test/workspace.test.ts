@@ -41,3 +41,14 @@ describe("workspace fixes", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 });
+
+describe("refactor budget", () => {
+  it("gives each oversized item its own larger cap", async () => {
+    const { remediateLimit, isRefactorItem } = await import("../src/enrich.js");
+    expect(isRefactorItem("oversized~abc")).toBe(true);
+    expect(isRefactorItem("untested~abc")).toBe(false);
+    expect(remediateLimit("oversized", 5)).toBe(40);
+    expect(remediateLimit("oversized~abc", 1)).toBe(8);
+    expect(remediateLimit("untested", 5)).toBeLessThan(8);
+  });
+});
