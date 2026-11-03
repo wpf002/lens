@@ -59,7 +59,7 @@ function scrub(msg: string): string {
   out = out.replace(/Basic [A-Za-z0-9+/=]+/g, "Basic ***");
   // The browser gets a short message; the server log keeps git's own (token-free) text.
   console.error(`[github] ${out.slice(0, 1000)}`);
-  if (/workflow/i.test(out) && /refusing|scope|permission/i.test(out)) return "GitHub won't accept changes to .github/workflows from Lens. Undo the fix that touched them, then retry.";
+  if (/workflow/i.test(out) && /refusing|scope|permission/i.test(out)) return WORKFLOW_REJECTED;
   if (/Authentication failed|could not read Username|Repository not found|403/i.test(out)) {
     out = t
       ? "GitHub refused access to this repo, or it doesn't exist."
@@ -107,10 +107,37 @@ export async function pushFixes(root: string): Promise<{ branch: string; compare
   await git(root, ["add", "-A"]);
   await git(root, ["reset", "-q", "--", ".lens"]).catch(() => undefined);
   await git(root, ["commit", "-m", `Lens fixes (${files} file${files === 1 ? "" : "s"})`]);
-  await git(root, ["push", "-u", "origin", branch]);
+  const dropped = await pushDroppingWorkflows(root, branch);
   const origin = await git(root, ["remote", "get-url", "origin"]).catch(() => "");
   const r = parseRepo(origin);
-  return { branch, compareUrl: r ? `https://github.com/${r.owner}/${r.name}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}?expand=1` : null, files };
+  return { branch, compareUrl: r ? `https://github.com/${r.owner}/${r.name}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}?expand=1` : null, files: files - dropped };
+}
+
+const WORKFLOWS = ".github/workflows";
+export const WORKFLOW_REJECTED = "GitHub won't accept changes to .github/workflows from Lens.";
+
+/**
+ * Push the branch. If GitHub rejects it only because the commit touches workflow files,
+ * drop those changes from the commit and push again. Returns how many files were dropped.
+ */
+async function pushDroppingWorkflows(root: string, branch: string): Promise<number> {
+  try {
+    await git(root, ["push", "-u", "origin", branch]);
+    return 0;
+  } catch (e) {
+    if (!(e instanceof Error) || !e.message.startsWith(WORKFLOW_REJECTED)) throw e;
+    const touched = (await git(root, ["diff", "--name-only", "HEAD~1", "HEAD", "--", WORKFLOWS])).split("\n").filter(Boolean);
+    if (!touched.length) throw e;
+    await git(root, ["reset", "-q", "--soft", "HEAD~1"]);
+    await git(root, ["reset", "-q", "--", WORKFLOWS]);
+    await git(root, ["checkout", "--", WORKFLOWS]).catch(() => undefined);
+    await git(root, ["clean", "-fdq", "--", WORKFLOWS]);
+    const left = await git(root, ["diff", "--cached", "--name-only"]);
+    if (!left) throw e;
+    await git(root, ["commit", "-m", `Lens fixes (${left.split("\n").length} files)`]);
+    await git(root, ["push", "-u", "origin", branch]);
+    return touched.length;
+  }
 }
 
 export interface PullRequest {

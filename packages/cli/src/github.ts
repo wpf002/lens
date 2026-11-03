@@ -18,7 +18,8 @@ let file: string | null = null;
 const states = new Map<string, number>();
 
 export const oauthAvailable = () => !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET);
-export const githubToken = (): string | null => process.env.GITHUB_TOKEN || stored?.token || null;
+// The account connected in the app wins, so reconnecting fixes a stale server credential.
+export const githubToken = (): string | null => stored?.token || process.env.GITHUB_TOKEN || null;
 export const githubLogin = (): string | null => stored?.login ?? null;
 
 export async function loadGithub(workspace: string): Promise<void> {
@@ -36,7 +37,7 @@ export function authorizeUrl(redirectUri: string): string {
   for (const [k, exp] of states) if (exp < now) states.delete(k);
   const state = randomBytes(16).toString("hex");
   states.set(state, now + 10 * 60_000);
-  const q = new URLSearchParams({ client_id: process.env.GITHUB_CLIENT_ID!, redirect_uri: redirectUri, scope: "repo", state, allow_signup: "false" });
+  const q = new URLSearchParams({ client_id: process.env.GITHUB_CLIENT_ID!, redirect_uri: redirectUri, scope: "repo workflow", state, allow_signup: "false" });
   return `https://github.com/login/oauth/authorize?${q}`;
 }
 
