@@ -18,9 +18,10 @@ import path from "node:path";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { authorizeUrl, disconnectGithub, finishOAuth, githubLogin, githubToken, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
-import { cloneOrUpdate, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pushFixes, pushState, reposDir } from "./cloud.js";
+import { cloneOrUpdate, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, type PushInfo } from "./cloud.js";
+import { MAX_TEST_REPAIRS, recordRepairAttempt, repairItems, saveRepairItems } from "./ci.js";
 import { SOURCES, applyFixes, loadRemediation, undoFix, type RemediationSource } from "./remediate.js";
-import { EnrichRunner, FIXABLE_CHECKS, HEALTH_BATCH, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, fixAllPlan, remediateLimit, remediationItems, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
+import { EnrichRunner, FIXABLE_CHECKS, HEALTH_BATCH, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, fixAllPlan, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import {
   buildBatches, diffImpact, isGitRepo, loadGraph, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
   type EmbeddingStore, type KnowledgeGraph,
@@ -37,6 +38,10 @@ export interface ServeOptions {
 }
 
 const MAX_FILE_BYTES = 2_000_000;
+/** How often the test watcher asks GitHub about a pull request's CI. */
+const TEST_POLL_MS = 30_000;
+const JOB_POLL_MS = 5_000;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 
 export function dashboardHtmlPath(): string {
@@ -112,6 +117,46 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
   await getGraph(); // fail fast
 
   const enrich = new EnrichRunner();
+  // After Lens opens or updates a pull request, wait for its CI. Tests Lens broke get a repair
+  // run, and the repair is pushed to the same pull request, up to MAX_TEST_REPAIRS times.
+  let watchingTests: string | null = null;
+  const repairingTests = () => enrich.running && enrich.job?.checkId === TEST_REPAIR_ID;
+  const withRepairFlag = (st: PushInfo | null): PushInfo | null =>
+    st?.pr?.tests && repairingTests() ? { ...st, pr: { ...st.pr, tests: { ...st.pr.tests, repairing: true } } } : st;
+  const watchTests = async (root: string) => {
+    if (watchingTests === root) return;
+    watchingTests = root;
+    try {
+      while (proj.root === root) {
+        if (enrich.running) {
+          await sleep(TEST_POLL_MS);
+          continue;
+        }
+        const st = await pushState(root);
+        const gate = st?.pr?.state === "open" ? st.pr.tests : undefined;
+        if (!gate || st?.dirty) return;
+        if (gate.state === "running") {
+          await sleep(TEST_POLL_MS);
+          continue;
+        }
+        if (gate.state !== "broken" || gate.attempts >= MAX_TEST_REPAIRS) return;
+        const authProblem = await checkClaudeAuth();
+        if (authProblem) return console.error(`[tests] can't repair: ${authProblem}`);
+        const items = repairItems(gate, await pullRequestFiles(root, gate.pr).catch(() => []));
+        await saveRepairItems(root, items);
+        await recordRepairAttempt(root, gate.pr);
+        console.log(`[tests] PR #${gate.pr} broke ${items.length} check(s); repair ${gate.attempts + 1} of ${MAX_TEST_REPAIRS}`);
+        const job = enrich.start("remediate", root, remediateLimit(TEST_REPAIR_ID, items.length), { source: "health", checkId: TEST_REPAIR_ID });
+        while (job.state === "running") await sleep(JOB_POLL_MS);
+        if (job.state !== "done" || !job.remediation?.applied) return console.error(`[tests] repair made no changes${job.error ? `: ${job.error}` : ""}`);
+        await pushPending(root);
+      }
+    } catch (e) {
+      console.error(`[tests] ${e instanceof Error ? e.message : e}`);
+    } finally {
+      watchingTests = null;
+    }
+  };
   let switching = false;
   /** Scan `dir` (incremental when it already has a graph) and make it the served project. */
   const openProject = async (dir: string) => {
@@ -379,7 +424,10 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         return send(res, 200, { name: `${repoName(proj.root)!.replace("/", "-")}-lens-fixes.patch`, patch });
       }
       if (opts.cloud && req.method === "GET" && url.pathname === "/api/project/push") {
-        return send(res, 200, { state: repoName(proj.root) ? await pushState(proj.root) : null });
+        const st = repoName(proj.root) ? await pushState(proj.root) : null;
+        const tests = st?.pr?.state === "open" ? st.pr.tests : undefined;
+        if (tests && (tests.state === "running" || (tests.state === "broken" && tests.attempts < MAX_TEST_REPAIRS))) void watchTests(proj.root);
+        return send(res, 200, { state: withRepairFlag(st) });
       }
       if (opts.cloud && req.method === "POST" && url.pathname === "/api/project/push") {
         if (!githubToken()) return send(res, 400, { error: "Connect GitHub to push, or use Download Patch." });
@@ -398,7 +446,9 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         }
         const titles: string[] = [];
         for (const src of SOURCES) for (const f of (await loadRemediation(proj.root, src))?.fixes ?? []) if (f.status === "applied") titles.push(`- ${f.title}`);
-        return send(res, 200, { pr: await createPullRequest(proj.root, `Fixes applied by Lens.\n\n${[...new Set(titles)].join("\n")}`) });
+        const pr = await createPullRequest(proj.root, `Fixes applied by Lens.\n\n${[...new Set(titles)].join("\n")}`);
+        void watchTests(proj.root);
+        return send(res, 200, { pr });
       }
       if (req.method === "POST" && url.pathname === "/api/project/pick") {
         if (opts.cloud) return send(res, 501, { error: "enter a GitHub repo instead" });

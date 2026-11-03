@@ -107,3 +107,15 @@ export function githubApi(p: string, method = "GET", body?: unknown): Promise<un
   if (!t) throw new Error("Connect GitHub first.");
   return api(p, t, method, body);
 }
+
+/** Plain-text GitHub download (Actions job logs). Returns null when GitHub has no log for it. */
+export async function githubText(p: string, maxBytes = 5_000_000): Promise<string | null> {
+  const t = githubToken();
+  if (!t) throw new Error("Connect GitHub first.");
+  // Logs redirect to a signed URL; fetch drops the auth header on that cross-origin hop.
+  const res = await fetch(`https://api.github.com${p}`, { headers: { Authorization: `Bearer ${t}`, "User-Agent": "lens" }, signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) });
+  if (res.status === 404 || res.status === 410) return null;
+  if (!res.ok) throw new Error(`GitHub: ${res.status}`);
+  const text = await res.text();
+  return text.length > maxBytes ? text.slice(-maxBytes) : text;
+}

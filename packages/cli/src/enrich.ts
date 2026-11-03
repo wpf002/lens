@@ -7,6 +7,7 @@
  * Cost control: every run passes --max-budget-usd, and the actual cost from the
  * final stream-json result is reported back to the dashboard.
  */
+import { loadRepairItems } from "./ci.js";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
@@ -859,6 +860,8 @@ export async function fixableCount(root: string, source: "audit" | "health" = "h
 export const FIXABLE_CHECKS = new Set(["untested", "swallowed-errors", "debug-leftovers", "stubs", "mock-data", "type-escapes", "duplicates", "dead-functions", "unused-deps", "dead-files", "stale-docs"]);
 /** Hits handed to one run, so a check with hundreds of hits doesn't become one huge bill. */
 export const HEALTH_BATCH = 15;
+/** checkId for a run that repairs tests a Lens pull request broke. */
+export const TEST_REPAIR_ID = "tests";
 /** "Fix Issues" on the Health page: one run over the highest-priority items. */
 export const FIX_ALL_LIMIT = 20;
 /** Items per Fix All run. Small, since fixes have no size limit. */
@@ -908,6 +911,8 @@ export async function remediationItems(root: string, source: RemediationSource, 
       }
     return out.slice(0, limit);
   }
+  // Tests a Lens pull request broke, written by the server's test watcher from the CI logs.
+  if (source === "health" && checkId === TEST_REPAIR_ID) return loadRepairItems(root);
   if (source === "health" && checkId?.includes("~")) {
     // One hit, picked by the owner. Any check, not just the batch-fixable ones.
     const g = await loadGraph(root);

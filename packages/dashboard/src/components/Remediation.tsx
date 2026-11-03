@@ -12,6 +12,8 @@ type Source = RemediationSource;
 
 /** The one entry point on Security and Health: find problems if needed, then fix them. */
 const CHECKS_POLL_MS = 20_000;
+/** Matches the server: automatic repair runs per pull request. */
+const MAX_TEST_REPAIRS = 2;
 
 export function FixAllButton({ source, onOpen }: { source: "audit" | "health"; onOpen?: () => void }) {
   const aiRunning = useStore((s) => s.enrichJob.state === "running");
@@ -123,9 +125,9 @@ export function Remediation({ source }: { source: Source }) {
   const [push, setPush] = useState<{ busy: string | null; error?: string }>({ busy: null });
   const pushed = useStore((s) => s.push);
   const refreshPush = useStore((s) => s.refreshPush);
-  // GitHub doesn't push check results to us; poll while they're running or haven't started yet.
-  const c = pushed?.pr?.checks;
-  const checksRunning = pushed?.pr?.state === "open" && (!c || c.pending > 0 || c.passing + c.failing === 0);
+  // GitHub doesn't push check results to us; poll while tests run or Lens repairs what they caught.
+  const tests = pushed?.pr?.tests;
+  const checksRunning = pushed?.pr?.state === "open" && (!tests || tests.state === "running" || !!tests.repairing || (tests.state === "broken" && tests.attempts < MAX_TEST_REPAIRS));
   useEffect(() => {
     if (!checksRunning) return;
     const t = setInterval(() => void refreshPush(), CHECKS_POLL_MS);
@@ -260,14 +262,14 @@ export function Remediation({ source }: { source: Source }) {
                 <a className="text-muted hover:text-fg hover:underline" href={pr.url} target="_blank" rel="noreferrer noopener">
                   Pull Request #{pr.number}
                 </a>
-                <ChecksLink pr={pr} />
+                <TestsLink pr={pr} />
                 {pushed?.dirty ? (
                   <Button size="sm" variant="accent" disabled={!!push.busy || op.busy} onClick={() => void step("Updating…", createPullRequest)}>
                     {push.busy ?? "Update Pull Request"}
                   </Button>
                 ) : (
-                  <Button size="sm" variant="accent" disabled={!!push.busy || op.busy} onClick={() => void step("Merging…", mergePullRequest, true)}>
-                    {push.busy ?? (pr.checks?.failing ? "Merge Anyway" : "Merge")}
+                  <Button size="sm" variant="accent" disabled={!!push.busy || op.busy || !canMerge(pr)} onClick={() => void step("Merging…", mergePullRequest, true)}>
+                    {push.busy ?? "Merge"}
                   </Button>
                 )}
               </>
@@ -413,13 +415,27 @@ function ItemList({ info, items }: { info: ItemInfo; items: Array<{ itemId: stri
   );
 }
 
-/** GitHub CI status for an open fixes PR. */
-function ChecksLink({ pr }: { pr: PullRequest }) {
-  const c = pr.checks;
-  if (!c || c.passing + c.failing + c.pending === 0) return null;
-  const [label, tone] = c.failing ? [`${c.failing} Check${c.failing === 1 ? "" : "s"} Failing`, "text-critical"] : c.pending ? ["Checks Running", "text-muted"] : ["Checks Passed", "text-guarded"];
+/** Merge waits for CI and is refused while Lens's changes break tests that pass on the base branch. */
+const canMerge = (pr: PullRequest) => pr.tests?.state === "passed" || pr.tests?.state === "none";
+
+/** Test results for an open fixes PR, counting only failures Lens's changes caused. */
+function TestsLink({ pr }: { pr: PullRequest }) {
+  const t = pr.tests;
+  if (!t) return null;
+  const broken = t.broken.reduce((n, b) => n + Math.max(1, b.tests.length), 0);
+  const plural = broken === 1 ? "" : "s";
+  const [label, tone] =
+    t.state === "running" ? ["Testing…", "text-muted"]
+    : t.state === "none" ? ["No Tests", "text-muted"]
+    : t.state === "passed" ? ["Tests Passed", "text-guarded"]
+    : t.repairing ? [`Fixing ${broken} Broken Test${plural}…`, "text-critical"]
+    : [`${broken} Test${plural} Broken`, "text-critical"];
+  const detail = [
+    ...t.broken.map((b) => `${b.name}: ${b.tests.length ? b.tests.join(", ") : "failing"}`),
+    ...(t.preexisting ? [`${t.preexisting} check${t.preexisting === 1 ? "" : "s"} also failing on the base branch`] : []),
+  ].join("\n");
   return (
-    <a className={cx("hover:underline", tone)} href={`${pr.url}/checks`} target="_blank" rel="noreferrer noopener">
+    <a className={cx("hover:underline", tone)} title={detail || undefined} href={`${pr.url}/checks`} target="_blank" rel="noreferrer noopener">
       {label}
     </a>
   );

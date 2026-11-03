@@ -1,0 +1,68 @@
+import { describe, it, expect } from "vitest";
+import { compareRuns, errorExcerpt, failedTests, repairItems, type TestGate } from "../src/ci.js";
+import { mergeBlock } from "../src/cloud.js";
+
+const PYTEST_LOG = [
+  "2026-11-03T22:40:01.1234567Z ERROR    main:main.py:126 Unhandled exception on POST /api/alerts/subscribe",
+  "2026-11-03T22:40:01.1234567Z ============ short test summary info ============",
+  "2026-11-03T22:40:01.1234567Z FAILED tests/test_xml.py::test_parse - AttributeError: 'XMLParser' object has no attribute 'parser'",
+  "2026-11-03T22:40:01.1234567Z FAILED tests/test_analytics.py::test_forwarded_for_takes_leftmost_client",
+  "2026-11-03T22:40:01.1234567Z FAILED tests/test_alerts.py::test_subscribe_reports_send_failure - RuntimeError: DB pool not initialised",
+  "2026-11-03T22:40:01.1234567Z ======= 3 failed, 120 passed in 9.1s =======",
+].join("\n");
+
+const VITEST_LOG = [" FAIL  src/App.test.tsx > renders", " × renders the header 12ms", " ✓ keeps working 3ms"].join("\n");
+
+describe("CI log parsing", () => {
+  it("reads failing test names from pytest and vitest output", () => {
+    expect(failedTests(PYTEST_LOG)).toEqual(["tests/test_xml.py::test_parse", "tests/test_analytics.py::test_forwarded_for_takes_leftmost_client", "tests/test_alerts.py::test_subscribe_reports_send_failure"]);
+    expect(failedTests(VITEST_LOG)).toEqual(["src/App.test.tsx", "renders the header"]);
+    expect(failedTests("--- FAIL: TestHandler (0.01s)\ntest api::parse ... FAILED")).toEqual(["TestHandler", "api::parse"]);
+  });
+
+  it("keeps the error lines without timestamps", () => {
+    const excerpt = errorExcerpt(PYTEST_LOG);
+    expect(excerpt).toContain("AttributeError");
+    expect(excerpt).not.toMatch(/2026-11-03T/);
+  });
+});
+
+describe("test gate", () => {
+  it("blames Lens only for tests that pass on the base commit", () => {
+    const head = [
+      { name: "backend", failed: true, tests: ["t::alerts", "t::xml", "t::analytics"], excerpt: "x" },
+      { name: "frontend", failed: true, tests: [], excerpt: "audit" },
+      { name: "lint", failed: true, tests: [], excerpt: "lint" },
+      { name: "build", failed: false, tests: [], excerpt: "" },
+    ];
+    const base = [
+      { name: "backend", failed: true, tests: ["t::alerts"], excerpt: "" },
+      { name: "frontend", failed: true, tests: [], excerpt: "" },
+      { name: "lint", failed: false, tests: [], excerpt: "" },
+    ];
+    const { broken, preexisting } = compareRuns(head, base);
+    expect(broken).toEqual([
+      { name: "backend", tests: ["t::xml", "t::analytics"], excerpt: "x" },
+      { name: "lint", tests: [], excerpt: "lint" },
+    ]);
+    expect(preexisting).toBe(1);
+  });
+
+  it("blocks Merge while tests run or when Lens broke some", () => {
+    const gate: TestGate = { pr: 1, sha: "a", state: "broken", broken: [{ name: "backend", tests: ["a", "b"], excerpt: "" }], preexisting: 0, attempts: 0 };
+    expect(mergeBlock(gate)).toMatch(/break 2 tests/);
+    expect(mergeBlock({ ...gate, state: "running" })).toMatch(/still running/);
+    expect(mergeBlock({ ...gate, state: "passed", broken: [] })).toBeNull();
+    expect(mergeBlock({ ...gate, state: "none", broken: [] })).toBeNull();
+    expect(mergeBlock(undefined)).not.toBeNull();
+  });
+
+  it("hands the remediator the failing tests, log, and changed files", () => {
+    const gate: TestGate = { pr: 1, sha: "a", state: "broken", broken: [{ name: "backend", tests: ["t::xml"], excerpt: "AttributeError" }], preexisting: 0, attempts: 0 };
+    const [item] = repairItems(gate, ["backend/services/xml_safe.py"]);
+    expect(item?.id).toBe("tests-1");
+    expect(item?.evidence.join("\n")).toContain("t::xml");
+    expect(item?.evidence.join("\n")).toContain("AttributeError");
+    expect(item?.evidence.join("\n")).toContain("backend/services/xml_safe.py");
+  });
+});

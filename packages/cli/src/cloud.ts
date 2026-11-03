@@ -8,6 +8,7 @@ import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { createHmac, randomBytes } from "node:crypto";
 import { githubApi, githubToken } from "./github.js";
+import { brokenCount, testGate, type TestGate } from "./ci.js";
 
 export interface RepoRef {
   owner: string;
@@ -179,18 +180,13 @@ async function pushBranch(root: string, start: string): Promise<{ branch: string
   }
 }
 
-export interface CheckCounts {
-  passing: number;
-  failing: number;
-  pending: number;
-}
 export interface PullRequest {
   number: number;
   url: string;
   state: "open" | "merged" | "closed";
   mergedAt?: string;
-  /** GitHub check runs on the PR's head commit; only fetched for open PRs. */
-  checks?: CheckCounts;
+  /** Test results on the PR's head commit compared with the base; only for open PRs. */
+  tests?: TestGate;
 }
 export interface PushInfo {
   /** The `lens/fixes-*` branch, or null once merged. */
@@ -205,32 +201,25 @@ async function repoOf(root: string): Promise<RepoRef> {
   return r;
 }
 
-const FAILED_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
-
-async function checksFor(r: RepoRef, sha: string): Promise<CheckCounts> {
-  const res = (await githubApi(`/repos/${r.owner}/${r.name}/commits/${sha}/check-runs?per_page=100`)) as { check_runs: CheckRun[] };
-  return countChecks(res.check_runs);
-}
-
-type CheckRun = { status: string; conclusion: string | null };
-
-export function countChecks(runs: CheckRun[]): CheckCounts {
-  const counts: CheckCounts = { passing: 0, failing: 0, pending: 0 };
-  for (const c of runs) {
-    if (c.status !== "completed") counts.pending++;
-    else if (c.conclusion && FAILED_CONCLUSIONS.has(c.conclusion)) counts.failing++;
-    else counts.passing++;
-  }
-  return counts;
-}
-
-async function findPr(r: RepoRef, branch: string): Promise<PullRequest | null> {
-  const rows = (await githubApi(`/repos/${r.owner}/${r.name}/pulls?state=all&head=${encodeURIComponent(`${r.owner}:${branch}`)}`)) as Array<{ number: number; html_url: string; state: string; merged_at: string | null; head: { sha: string } }>;
+async function findPr(root: string, r: RepoRef, branch: string): Promise<PullRequest | null> {
+  const rows = (await githubApi(`/repos/${r.owner}/${r.name}/pulls?state=all&head=${encodeURIComponent(`${r.owner}:${branch}`)}`)) as Array<{ number: number; html_url: string; state: string; merged_at: string | null; head: { sha: string }; base: { sha: string } }>;
   const p = rows[0];
   if (!p) return null;
   const state = p.merged_at ? "merged" : p.state === "open" ? "open" : "closed";
-  const checks = state === "open" ? await checksFor(r, p.head.sha).catch(() => undefined) : undefined;
-  return { number: p.number, url: p.html_url, state, ...(p.merged_at ? { mergedAt: p.merged_at } : {}), ...(checks ? { checks } : {}) };
+  const tests = state === "open" ? await gateFor(root, r, p).catch((e: unknown) => (console.error(`[tests] ${e instanceof Error ? e.message : e}`), undefined)) : undefined;
+  return { number: p.number, url: p.html_url, state, ...(p.merged_at ? { mergedAt: p.merged_at } : {}), ...(tests ? { tests } : {}) };
+}
+
+async function gateFor(root: string, r: RepoRef, p: { number: number; head: { sha: string }; base: { sha: string } }): Promise<TestGate> {
+  const committed = Number(await git(root, ["log", "-1", "--format=%ct", p.head.sha]).catch(() => ""));
+  return testGate(root, { repo: `${r.owner}/${r.name}`, pr: p.number, headSha: p.head.sha, baseSha: p.base.sha, ...(committed ? { pushedAt: committed * 1000 } : {}) });
+}
+
+/** Paths the open pull request changes, for the test-repair prompt. */
+export async function pullRequestFiles(root: string, pr: number): Promise<string[]> {
+  const r = await repoOf(root);
+  const rows = (await githubApi(`/repos/${r.owner}/${r.name}/pulls/${pr}/files?per_page=100`)) as Array<{ filename: string }>;
+  return rows.map((f) => f.filename);
 }
 
 async function mergedTime(root: string, n: number): Promise<string | undefined> {
@@ -254,7 +243,7 @@ export async function pushState(root: string): Promise<PushInfo | null> {
     return { branch: null, dirty, pr: { number: Number(n), url, state: "merged", ...(mergedAt ? { mergedAt } : {}) } };
   }
   // Shallow clones are single-branch, so there's no local origin/<branch> ref to check. Ask GitHub.
-  const pr = githubToken() ? await findPr(await repoOf(root), branch).catch(() => null) : null;
+  const pr = githubToken() ? await findPr(root, await repoOf(root), branch).catch(() => null) : null;
   return { branch, dirty, pr };
 }
 
@@ -293,11 +282,19 @@ export async function createPullRequest(root: string, body: string): Promise<Pul
   await pushPending(root);
   const branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
   const r = await repoOf(root);
-  const existing = await findPr(r, branch);
+  const existing = await findPr(root, r, branch);
   if (existing?.state === "open") return existing;
   const base = (await git(root, ["config", "--get", "lens.base"]).catch(() => "")) || "main";
   const p = (await githubApi(`/repos/${r.owner}/${r.name}/pulls`, "POST", { title: "Lens fixes", head: branch, base, body: body.slice(0, 60_000) })) as { number: number; html_url: string };
   return { number: p.number, url: p.html_url, state: "open" };
+}
+
+/** Why Merge is refused, or null. Only failures Lens's changes introduced block it. */
+export function mergeBlock(tests: TestGate | undefined): string | null {
+  if (!tests) return "Couldn't read the test results from GitHub. Try again.";
+  if (tests.state === "running") return "Tests are still running.";
+  if (tests.state === "broken") return `These fixes break ${brokenCount(tests)} test${brokenCount(tests) === 1 ? "" : "s"}. Undo them or wait for Lens to repair them.`;
+  return null;
 }
 
 /** Squash-merge the open pull request, then move the working copy back to the updated base branch. */
@@ -306,8 +303,10 @@ export async function mergePullRequest(root: string): Promise<PullRequest> {
   if (!branch.startsWith("lens/fixes-")) throw new Error("No fixes branch to merge.");
   if (await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"])) throw new Error("There are fixes not in the pull request yet. Update it first.");
   const r = await repoOf(root);
-  const pr = await findPr(r, branch);
+  const pr = await findPr(root, r, branch);
   if (!pr || pr.state !== "open") throw new Error("There's no open pull request for these fixes.");
+  const blocked = mergeBlock(pr.tests);
+  if (blocked) throw new Error(blocked);
   await githubApi(`/repos/${r.owner}/${r.name}/pulls/${pr.number}/merge`, "PUT", { merge_method: "squash" });
   await githubApi(`/repos/${r.owner}/${r.name}/git/refs/heads/${branch.split("/").map(encodeURIComponent).join("/")}`, "DELETE").catch(() => undefined);
   const base = (await git(root, ["config", "--get", "lens.base"]).catch(() => "")) || "main";
