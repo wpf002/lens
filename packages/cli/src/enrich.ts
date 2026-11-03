@@ -79,10 +79,12 @@ export function estimateCost(task: EnrichTask, files: number): CostEstimate {
     task === "summaries" ? [0.008 * files, 0.02 * files]
     : task === "audit" ? [0.5 + 0.005 * f, 1.2 + 0.01 * f]
     : task === "review" ? [0.6 + 0.004 * f, 1.5 + 0.008 * f]
-    : task === "remediate" ? [0.3 + 0.12 * Math.min(files, 30), 0.8 + 0.25 * Math.min(files, 30)]
+    : task === "remediate" ? [0.3 + 0.15 * Math.min(files, 30), 0.8 + 0.4 * Math.min(files, 30)]
     : [0.3 + 0.003 * f, 0.8 + 0.007 * f];
   const r = (n: number) => Math.round(n * 100) / 100;
-  return { low: r(Math.max(0.05, low)), high: r(Math.max(0.2, high)), limit: r(Math.min(MAX_BUDGET_USD, Math.max(0.5, high * 2))) };
+  // Fixes have no size limit, so a single large refactor gets more room.
+  const room = task === "remediate" ? Math.max(3, high * 2.5) : Math.max(0.5, high * 2);
+  return { low: r(Math.max(0.05, low)), high: r(Math.max(0.2, high)), limit: r(Math.min(MAX_BUDGET_USD, room)) };
 }
 /** Fix everything with no size limit per fix, with a limit at 1.5x the high end. */
 export function estimateFixAll(items: number): CostEstimate {

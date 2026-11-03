@@ -21,7 +21,8 @@ For each item:
 1. Read the code at the evidence locations and confirm the problem is still there.
 2. Decide whether it can be fixed in code within this repo. Skip it when the scanner was wrong or the code already handles it. Start that reason with `Scanner was wrong:` and say why; Lens won't offer it again.
    - **Skip** anything that needs a secret value, a key rotation, a dashboard or hosting setting (Railway, Vercel, a cloud console), or a new paid service. Start that reason with `Outside code:` and say what the user should do.
-   - **Skip** only when a correct fix needs a product decision the code can't answer. Start that reason with `Decision:` followed by one short question for the owner. If the item has an `ownerNote`, that is the owner's answer; follow it.
+   - **Skip** only when a correct fix changes what users see or what the product does, and the code can't tell you which way the owner wants. Start that reason with `Decision:` followed by one short question for the owner. If the item has an `ownerNote`, that is the owner's answer; follow it.
+   - Code structure is your call, never a `Decision:`. How to split a function or file, which folder a new module goes in, names, whether a dependency is really unused: pick the option that matches the project's existing layout and conventions, make the fix, and say what you chose in `explanation`.
    - Size is never a reason to skip. Make the complete fix, however many lines or files it takes.
 3. Otherwise, write the smallest correct fix in the style of the surrounding code. Don't refactor, rename, or reformat anything else. Prefer libraries the project already uses; don't add dependencies unless the fix truly needs one (then include the manifest edit).
 
@@ -70,6 +71,7 @@ Rules for `edits`:
 - `find` must be copied exactly from the current file (whitespace and indentation included) and must appear **exactly once** in that file. Include enough surrounding lines to make it unique.
 - `replace` is the full replacement for that text.
 - To create a new file, use `"find": ""` and put the whole file in `replace`. Only for files that don't exist yet.
+- To split a large file or function: create each new file with `"find": ""`, then replace the moved code in the original with an import. Move code in pieces so each `find` stays under about 400 lines.
 - To delete a file, use `{ "path": "...", "delete": true }`. Only for items that say the file is unused or a stale doc, and only after you've confirmed with Grep that nothing imports, links to, or runs it (including package.json scripts, Dockerfiles, and CI config).
 - Several edits to the same file are applied in order; later `find` strings must match the file after earlier edits.
 - Never edit `.env` files, lockfiles, or anything under `.git/`.

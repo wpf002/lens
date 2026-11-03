@@ -169,7 +169,7 @@ function ItemActions({ source, itemId, stableId }: { source: "review" | "health"
           placeholder="Decision For Claude (Optional)"
           className="h-7 min-w-[220px] flex-1 rounded border border-line bg-panel px-2 text-[12px] text-fg placeholder:text-faint"
         />
-        <span className="text-[11px] text-faint">~$0.40–1</span>
+        <span className="text-[11px] text-faint">~$0.45–1.20</span>
         <Button size="sm" variant="ghost" onClick={() => setAsking(false)}>
           Cancel
         </Button>

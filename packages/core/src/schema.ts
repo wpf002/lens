@@ -242,11 +242,11 @@ export const RemediationSchema = z.object({
     explanation: clip(600),
     edits: z.array(z.object({
       path: z.string().min(1).max(400),
-      find: z.string().max(20_000).default(""),
-      replace: z.string().max(40_000).default(""),
+      find: z.string().max(40_000).default(""),
+      replace: z.string().max(80_000).default(""),
       /** Remove the whole file (unused files, stale docs). */
       delete: z.boolean().optional(),
-    })).min(1).max(12),
+    })).min(1).max(40),
   })).transform((a) => a.slice(0, 30)),
   skipped: z.array(z.object({ itemId: z.string().max(80), reason: clip(600) })).transform((a) => a.slice(0, 60)).default([]),
 });
