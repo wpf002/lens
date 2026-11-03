@@ -41,7 +41,8 @@ function git(cwd: string, args: string[], timeout = 5 * 60_000): Promise<string>
   return new Promise((resolve, reject) => {
     execFile(
       "git",
-      [...authArgs(), "-c", "user.name=Lens", "-c", "user.email=lens@users.noreply.github.com", ...args],
+      // HTTP/2 drops large pushes to GitHub ("RPC failed; curl 92"); HTTP/1.1 with a big buffer doesn't.
+      [...authArgs(), "-c", "http.version=HTTP/1.1", "-c", "http.postBuffer=524288000", "-c", "user.name=Lens", "-c", "user.email=lens@users.noreply.github.com", ...args],
       { cwd, timeout, maxBuffer: 20_000_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
       (err, stdout, stderr) => {
         if (err) return reject(new Error(scrub(stderr.trim() || err.message)));
@@ -96,8 +97,7 @@ export async function pushFixes(root: string): Promise<{ branch: string; compare
   const files = status.split("\n").filter(Boolean).length;
   let branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
   if (!branch.startsWith("lens/fixes-")) {
-    const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
-    const next = `lens/fixes-${stamp}-${randomBytes(2).toString("hex")}`;
+    const next = newBranchName();
     await git(root, ["config", "lens.base", branch]);
     await git(root, ["config", "--unset", "lens.merged"]).catch(() => undefined);
     await git(root, ["checkout", "-b", next]);
@@ -107,7 +107,9 @@ export async function pushFixes(root: string): Promise<{ branch: string; compare
   await git(root, ["add", "-A"]);
   await git(root, ["reset", "-q", "--", ".lens"]).catch(() => undefined);
   await git(root, ["commit", "-m", `Lens fixes (${files} file${files === 1 ? "" : "s"})`]);
-  const dropped = await pushDroppingWorkflows(root, branch);
+  const pushed = await pushBranch(root, branch);
+  branch = pushed.branch;
+  const dropped = pushed.dropped;
   const origin = await git(root, ["remote", "get-url", "origin"]).catch(() => "");
   const r = parseRepo(origin);
   return { branch, compareUrl: r ? `https://github.com/${r.owner}/${r.name}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}?expand=1` : null, files: files - dropped };
@@ -116,27 +118,64 @@ export async function pushFixes(root: string): Promise<{ branch: string; compare
 const WORKFLOWS = ".github/workflows";
 export const WORKFLOW_REJECTED = "GitHub won't accept changes to .github/workflows from Lens.";
 
+const TRANSIENT = /RPC failed|remote end hung up|early EOF|Connection (reset|timed out)|Operation timed out|Could not resolve host|unexpected disconnect|returned error: 5\d\d|HTTP\/2/i;
+const DIVERGED = /non-fast-forward|fetch first|\[rejected\]/i;
+const PUSH_RETRY_DELAYS_MS = [2_000, 8_000, 20_000];
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const newBranchName = () => `lens/fixes-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}-${randomBytes(2).toString("hex")}`;
+
+/** `git push`, retried with backoff when the connection drops. */
+async function pushWithRetry(root: string, branch: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await git(root, ["push", "-u", "origin", branch]);
+      return;
+    } catch (e) {
+      const delay = PUSH_RETRY_DELAYS_MS[attempt];
+      if (!(e instanceof Error) || !TRANSIENT.test(e.message) || delay === undefined) throw e;
+      console.error(`[github] push attempt ${attempt + 1} failed, retrying in ${delay / 1000}s`);
+      await sleep(delay);
+    }
+  }
+}
+
+/** Remove workflow-file changes from the last commit. Returns how many files were dropped. */
+async function dropWorkflowChanges(root: string): Promise<number> {
+  const touched = (await git(root, ["diff", "--name-only", "HEAD~1", "HEAD", "--", WORKFLOWS])).split("\n").filter(Boolean);
+  if (!touched.length) return 0;
+  await git(root, ["reset", "-q", "--soft", "HEAD~1"]);
+  await git(root, ["reset", "-q", "--", WORKFLOWS]);
+  await git(root, ["checkout", "--", WORKFLOWS]).catch(() => undefined);
+  await git(root, ["clean", "-fdq", "--", WORKFLOWS]);
+  const left = await git(root, ["diff", "--cached", "--name-only"]);
+  if (!left) throw new Error("The only changes were to .github/workflows, which GitHub won't accept from Lens.");
+  await git(root, ["commit", "-m", `Lens fixes (${left.split("\n").length} files)`]);
+  return touched.length;
+}
+
 /**
- * Push the branch. If GitHub rejects it only because the commit touches workflow files,
- * drop those changes from the commit and push again. Returns how many files were dropped.
+ * Push the fixes branch. Retries dropped connections, drops workflow files if GitHub
+ * refuses them, and moves to a fresh branch name if the remote branch has diverged
+ * (never force-pushes). Returns the branch that was pushed.
  */
-async function pushDroppingWorkflows(root: string, branch: string): Promise<number> {
-  try {
-    await git(root, ["push", "-u", "origin", branch]);
-    return 0;
-  } catch (e) {
-    if (!(e instanceof Error) || !e.message.startsWith(WORKFLOW_REJECTED)) throw e;
-    const touched = (await git(root, ["diff", "--name-only", "HEAD~1", "HEAD", "--", WORKFLOWS])).split("\n").filter(Boolean);
-    if (!touched.length) throw e;
-    await git(root, ["reset", "-q", "--soft", "HEAD~1"]);
-    await git(root, ["reset", "-q", "--", WORKFLOWS]);
-    await git(root, ["checkout", "--", WORKFLOWS]).catch(() => undefined);
-    await git(root, ["clean", "-fdq", "--", WORKFLOWS]);
-    const left = await git(root, ["diff", "--cached", "--name-only"]);
-    if (!left) throw e;
-    await git(root, ["commit", "-m", `Lens fixes (${left.split("\n").length} files)`]);
-    await git(root, ["push", "-u", "origin", branch]);
-    return touched.length;
+async function pushBranch(root: string, start: string): Promise<{ branch: string; dropped: number }> {
+  let branch = start;
+  let dropped = 0;
+  for (;;) {
+    try {
+      await pushWithRetry(root, branch);
+      return { branch, dropped };
+    } catch (e) {
+      if (!(e instanceof Error)) throw e;
+      if (e.message.startsWith(WORKFLOW_REJECTED) && dropped === 0) {
+        dropped = await dropWorkflowChanges(root);
+        if (!dropped) throw e;
+      } else if (DIVERGED.test(e.message) && branch === start) {
+        branch = newBranchName();
+        await git(root, ["branch", "-m", branch]);
+      } else throw e;
+    }
   }
 }
 
@@ -181,9 +220,32 @@ export async function pushState(root: string): Promise<PushInfo | null> {
 /** Push any new fixes, then open a pull request into the base branch. */
 /** Commit and push new fixes, or re-push a commit whose earlier push failed. */
 export async function pushPending(root: string): Promise<void> {
-  const st = await pushState(root);
+  let st = await pushState(root);
+  // That branch's pull request was merged or closed (maybe outside Lens); start the new fixes from the base branch.
+  if (st?.branch && st.pr && st.pr.state !== "open") {
+    await restartFromBase(root, st.branch);
+    st = await pushState(root);
+  }
   if (!st?.branch || st.dirty) await pushFixes(root);
-  else await pushDroppingWorkflows(root, st.branch);
+  else await pushBranch(root, st.branch);
+}
+
+/** Move uncommitted fixes off a finished fixes branch onto the latest base branch. */
+async function restartFromBase(root: string, old: string): Promise<void> {
+  const base = (await git(root, ["config", "--get", "lens.base"]).catch(() => "")) || "main";
+  const dirty = !!(await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"]));
+  if (dirty) await git(root, ["stash", "push", "-u", "-q", "--", ".", ":(exclude).lens"]);
+  try {
+    await git(root, ["fetch", "-q", "--no-tags", "origin", base]);
+    await git(root, ["checkout", "-q", "-B", base, "FETCH_HEAD"]);
+    if (dirty) await git(root, ["stash", "pop", "-q"]);
+  } catch (e) {
+    // Put everything back where it was rather than lose the fixes.
+    await git(root, ["checkout", "-q", "-f", old]).catch(() => undefined);
+    if (dirty) await git(root, ["stash", "pop", "-q"]).catch(() => undefined);
+    throw new Error(`These fixes conflict with the latest ${base}. Undo them and run Fix again. (${e instanceof Error ? e.message.slice(0, 200) : e})`);
+  }
+  await git(root, ["branch", "-D", old]).catch(() => undefined);
 }
 
 export async function createPullRequest(root: string, body: string): Promise<PullRequest> {

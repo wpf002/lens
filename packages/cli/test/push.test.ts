@@ -65,4 +65,33 @@ describe("pushFixes", () => {
     expect(run(remote, "show", "lens/fixes-1:a.js")).toBe("2");
     await fs.rm(tmp, { recursive: true, force: true });
   });
+
+  it("pushes to a fresh branch instead of force-pushing when the remote branch diverged", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "lens-push-"));
+    const remote = path.join(tmp, "remote.git");
+    const root = path.join(tmp, "work");
+    const other = path.join(tmp, "other");
+    run(tmp, "init", "-q", "--bare", "-b", "main", remote);
+    run(tmp, "init", "-q", "-b", "main", root);
+    await fs.writeFile(path.join(root, "a.js"), "1\n");
+    run(root, "add", "-A");
+    run(root, "commit", "-qm", "init");
+    run(root, "remote", "add", "origin", remote);
+    run(root, "push", "-q", "-u", "origin", "main");
+    run(root, "checkout", "-qb", "lens/fixes-1");
+    run(tmp, "clone", "-q", "-b", "main", remote, other);
+    run(other, "checkout", "-qb", "lens/fixes-1");
+    await fs.writeFile(path.join(other, "b.js"), "x\n");
+    run(other, "add", "-A");
+    run(other, "commit", "-qm", "someone else");
+    run(other, "push", "-q", "origin", "lens/fixes-1");
+    await fs.writeFile(path.join(root, "a.js"), "2\n");
+
+    const { branch } = await pushFixes(root);
+
+    expect(branch).not.toBe("lens/fixes-1");
+    expect(run(remote, "show", `${branch}:a.js`)).toBe("2");
+    expect(run(remote, "show", "lens/fixes-1:b.js")).toBe("x");
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
 });

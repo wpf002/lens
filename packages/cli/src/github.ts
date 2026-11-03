@@ -79,11 +79,14 @@ export async function listGithubRepos(): Promise<GithubRepo[]> {
   return rows.map((r) => ({ name: r.full_name, private: r.private, pushedAt: r.pushed_at }));
 }
 
+const GITHUB_API_TIMEOUT_MS = 30_000;
+
 async function api(p: string, token: string, method = "GET", body?: unknown): Promise<unknown> {
   const res = await fetch(`https://api.github.com${p}`, {
     method,
     headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "lens", ...(body ? { "Content-Type": "application/json" } : {}) },
     body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
   });
   if (res.status === 401) {
     if (stored?.token === token) await disconnectGithub();
