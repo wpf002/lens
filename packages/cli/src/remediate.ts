@@ -47,7 +47,8 @@ function backupDir(root: string, source: RemediationSource, id: string): string 
   return !existsSync(dir) && existsSync(path.join(legacy, "manifest.json")) ? legacy : dir;
 }
 
-const FORBIDDEN = /(^|\/)(\.git|node_modules|\.lens)(\/|$)|(^|\/)\.env(\.|$)|(^|\/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|poetry\.lock|uv\.lock|Cargo\.lock|go\.sum)$/;
+// GitHub rejects pushes touching .github/workflows unless the credential has workflow scope.
+const FORBIDDEN = /(^|\/)(\.git|node_modules|\.lens)(\/|$)|^\.github\/workflows\/|(^|\/)\.env(\.|$)|(^|\/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|poetry\.lock|uv\.lock|Cargo\.lock|go\.sum)$/;
 
 /** Resolve a repo-relative path, refusing anything outside the project or on the forbidden list. */
 export function safeTarget(root: string, rel: string): string {

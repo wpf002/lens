@@ -57,6 +57,9 @@ function scrub(msg: string): string {
   const t = githubToken();
   if (t) out = out.split(t).join("***");
   out = out.replace(/Basic [A-Za-z0-9+/=]+/g, "Basic ***");
+  // The browser gets a short message; the server log keeps git's own (token-free) text.
+  console.error(`[github] ${out.slice(0, 1000)}`);
+  if (/workflow/i.test(out) && /refusing|scope|permission/i.test(out)) return "GitHub won't accept changes to .github/workflows from Lens. Undo the fix that touched them, then retry.";
   if (/Authentication failed|could not read Username|Repository not found|403/i.test(out)) {
     out = t
       ? "GitHub refused access to this repo, or it doesn't exist."
