@@ -60,13 +60,16 @@ function CheckRow({ c, statusOf, canFix }: { c: HealthCheck; statusOf: (id: stri
       </button>
       {open && (
         <div className="pb-3 pl-[118px] pr-4 text-[12px] text-muted">
-          <p className="pb-2 text-fg">
-            <span className="text-faint">Fix: </span>
-            {renderInlineCode(c.fix)}
-          </p>
+          <div className="flex items-start gap-3 pb-2">
+            <p className="min-w-0 flex-1 text-fg">
+              <span className="text-faint">Fix: </span>
+              {renderInlineCode(c.fix)}
+            </p>
+            {canFix && left > 0 && <FixCheck id={c.id} open={Math.min(left, c.hits.length)} />}
+          </div>
           <ul className="divide-y divide-line border-y border-line">
             {rows.map(({ h, id, st }) => (
-              <HitRow key={id} h={h} id={id} st={st} canFix={canFix} />
+              <HitRow key={id} h={h} id={id} checkId={c.id} st={st} canFix={canFix} />
             ))}
           </ul>
           {c.count > c.hits.length && <p className="pt-1.5 text-faint">+{c.count - c.hits.length} more after these are closed</p>}
@@ -76,9 +79,43 @@ function CheckRow({ c, statusOf, canFix }: { c: HealthCheck; statusOf: (id: stri
   );
 }
 
-function HitRow({ h, id, st, canFix }: { h: HealthCheck["hits"][number]; id: string; st: ItemStatus; canFix: boolean }) {
+/** Fix every open hit of one check in one run. */
+function FixCheck({ id, open }: { id: string; open: number }) {
+  const busy = useStore((s) => s.enrichJob.state === "running");
+  const run = useStore((s) => s.runAI);
+  const [asking, setAsking] = useState(false);
+  const n = Math.min(open, 15);
+  const est = `~$${Math.max(0.3, 0.15 * n).toFixed(2)}–${Math.max(0.8, 0.4 * n).toFixed(2)}`;
+  if (asking)
+    return (
+      <div className="flex shrink-0 items-center gap-2">
+        <span className="text-[11px] text-faint">{est}</span>
+        <Button size="sm" variant="ghost" onClick={() => setAsking(false)}>
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          variant="accent"
+          disabled={busy}
+          onClick={() => {
+            setAsking(false);
+            void run("remediate", { source: "health", checkId: id });
+          }}
+        >
+          Fix {n}
+        </Button>
+      </div>
+    );
+  return (
+    <Button size="sm" variant="accent" className="shrink-0" disabled={busy} onClick={() => setAsking(true)}>
+      Fix All {n}
+    </Button>
+  );
+}
+
+function HitRow({ h, id, checkId, st, canFix }: { h: HealthCheck["hits"][number]; id: string; checkId: string; st: ItemStatus; canFix: boolean }) {
   const reopen = useStore((s) => s.toggleWontFix);
-  const fixing = useStore((s) => s.enrichJob.state === "running" && s.enrichJob.task === "remediate" && s.enrichJob.checkId === id);
+  const fixing = useStore((s) => s.enrichJob.state === "running" && s.enrichJob.task === "remediate" && (s.enrichJob.checkId === id || (s.enrichJob.checkId === checkId && st.kind === "open")));
   return (
     <li className="py-1.5">
       <div className="flex items-start gap-3">

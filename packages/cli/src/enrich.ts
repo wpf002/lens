@@ -852,8 +852,8 @@ export async function fixableCount(root: string, source: "audit" | "health" = "h
 }
 
 /** Failing checklist items (scanner + AI audit merged) or the review's high/medium findings. */
-/** Automatic checks a code change can fix. Refactors, deletions, and new tests aren't offered. */
-export const FIXABLE_CHECKS = new Set(["swallowed-errors", "debug-leftovers", "stubs", "mock-data", "type-escapes", "duplicates", "dead-functions", "unused-deps", "dead-files", "stale-docs"]);
+/** Automatic checks Fix All includes. Any check can still be fixed from its own row. */
+export const FIXABLE_CHECKS = new Set(["untested", "swallowed-errors", "debug-leftovers", "stubs", "mock-data", "type-escapes", "duplicates", "dead-functions", "unused-deps", "dead-files", "stale-docs"]);
 /** Hits handed to one run, so a check with hundreds of hits doesn't become one huge bill. */
 export const HEALTH_BATCH = 15;
 /** "Fix Issues" on the Health page: one run over the highest-priority items. */
@@ -915,11 +915,19 @@ export async function remediationItems(root: string, source: RemediationSource, 
     return h ? [{ id: checkId, title: check.title, evidence: [`${h.path}${h.line ? `:${h.line}` : ""} ${h.detail}`], fix: check.fix }] : [];
   }
   if (source === "health") {
+    // Every open hit of one check, picked by the owner.
     const g = await loadGraph(root);
     const check = g?.health?.checks.find((c) => c.id === checkId);
-    if (!check || !FIXABLE_CHECKS.has(check.id)) return [];
+    if (!check) return [];
+    const closed = new Set(await loadWontFix(root));
+    const r = await loadRemediation(root, "health");
+    for (const f of r?.fixes ?? []) if (f.status === "applied") closed.add(f.itemId);
+    for (const x of r?.skipped ?? []) if (ALREADY_SAFE.test(x.reason)) closed.add(x.itemId);
     const ids = checkHitIds(check);
-    return check.hits.slice(0, HEALTH_BATCH).map((h, i) => ({ id: ids[i]!, title: check.title, evidence: [`${h.path}${h.line ? `:${h.line}` : ""} ${h.detail}`], fix: check.fix }));
+    return check.hits
+      .map((h, i) => ({ id: ids[i]!, title: check.title, evidence: [`${h.path}${h.line ? `:${h.line}` : ""} ${h.detail}`], fix: check.fix }))
+      .filter((x) => !closed.has(x.id))
+      .slice(0, HEALTH_BATCH);
   }
   const g = await loadGraph(root);
   const audit = await auditWithDecisions(root);
