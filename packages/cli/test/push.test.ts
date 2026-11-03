@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pushFixes } from "../src/cloud.js";
+import { pushFixes, pushPending } from "../src/cloud.js";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" }).trim();
 
@@ -42,6 +42,27 @@ describe("pushFixes", () => {
     expect(run(remote, "show", `${branch}:a.js`)).toBe("2");
     expect(run(remote, "show", `${branch}:.github/workflows/ci.yml`)).toBe("on: push");
     expect(run(root, "status", "--porcelain")).toBe("");
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
+  it("re-pushes a commit whose earlier push failed", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "lens-push-"));
+    const remote = path.join(tmp, "remote.git");
+    const root = path.join(tmp, "work");
+    run(tmp, "init", "-q", "--bare", "-b", "main", remote);
+    run(tmp, "init", "-q", "-b", "main", root);
+    await fs.writeFile(path.join(root, "a.js"), "1\n");
+    run(root, "add", "-A");
+    run(root, "commit", "-qm", "init");
+    run(root, "remote", "add", "origin", remote);
+    run(root, "push", "-q", "-u", "origin", "main");
+    run(root, "checkout", "-qb", "lens/fixes-1");
+    await fs.writeFile(path.join(root, "a.js"), "2\n");
+    run(root, "commit", "-qam", "Lens fixes");
+
+    await pushPending(root);
+
+    expect(run(remote, "show", "lens/fixes-1:a.js")).toBe("2");
     await fs.rm(tmp, { recursive: true, force: true });
   });
 });

@@ -179,9 +179,15 @@ export async function pushState(root: string): Promise<PushInfo | null> {
 }
 
 /** Push any new fixes, then open a pull request into the base branch. */
-export async function createPullRequest(root: string, body: string): Promise<PullRequest> {
+/** Commit and push new fixes, or re-push a commit whose earlier push failed. */
+export async function pushPending(root: string): Promise<void> {
   const st = await pushState(root);
   if (!st?.branch || st.dirty) await pushFixes(root);
+  else await pushDroppingWorkflows(root, st.branch);
+}
+
+export async function createPullRequest(root: string, body: string): Promise<PullRequest> {
+  await pushPending(root);
   const branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
   const r = await repoOf(root);
   const existing = await findPr(r, branch);

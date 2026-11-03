@@ -90,7 +90,9 @@ async function api(p: string, token: string, method = "GET", body?: unknown): Pr
     throw new Error("GitHub access was revoked. Connect GitHub again.");
   }
   if (!res.ok) {
-    const msg = ((await res.json().catch(() => null)) as { message?: string } | null)?.message;
+    const err = (await res.json().catch(() => null)) as { message?: string; errors?: Array<{ message?: string }> } | null;
+    // 422s put the reason in errors[], e.g. "No commits between main and lens/fixes-…".
+    const msg = [err?.message, ...(err?.errors ?? []).map((e) => e.message)].filter(Boolean).join(": ");
     throw new Error(`GitHub: ${msg ? msg.slice(0, 200) : res.status}`);
   }
   return res.status === 204 ? null : res.json();
