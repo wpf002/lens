@@ -125,6 +125,7 @@ function HitRow({ h, id, checkId, st, canFix }: { h: HealthCheck["hits"][number]
         {fixing ? <span className="shrink-0 animate-pulse text-[11.5px] font-medium text-accent">Fixing…</span> : <StatusTag st={st} />}
       </div>
       {st.kind === "open" && st.reason && <p className="pt-0.5 text-[11.5px] text-muted">{renderInlineCode(st.reason)}</p>}
+      {st.kind === "open" && !st.reason && st.last && !fixing && <p className="pt-0.5 text-[11.5px] text-faint">Last Try: {renderInlineCode(st.last)}</p>}
       {st.kind === "open" && canFix && !fixing && <ItemActions source="health" itemId={id} stableId={id} />}
       {st.kind === "wontfix" && (
         <button type="button" className="text-[11.5px] text-accent hover:underline" onClick={() => void reopen(id, false)}>
@@ -135,7 +136,7 @@ function HitRow({ h, id, checkId, st, canFix }: { h: HealthCheck["hits"][number]
   );
 }
 
-type ItemStatus = { kind: "open"; reason?: string } | { kind: "fixed"; label: string } | { kind: "safe"; reason: string } | { kind: "wontfix" };
+type ItemStatus = { kind: "open"; reason?: string; last?: string } | { kind: "fixed"; label: string } | { kind: "safe"; reason: string } | { kind: "wontfix" };
 
 function StatusTag({ st }: { st: ItemStatus }) {
   const ask = st.kind === "open" && !!st.reason;
@@ -230,6 +231,12 @@ function FindingRow({ f, i, st, canFix }: { f: ReviewRecord["findings"][number];
             <p className="text-fg">
               <span className="text-faint">Why: </span>
               {renderInlineCode(st.reason)}
+            </p>
+          )}
+          {st.kind === "open" && !st.reason && st.last && (
+            <p>
+              <span className="text-faint">Last Try: </span>
+              {renderInlineCode(st.last)}
             </p>
           )}
           {st.kind === "safe" && <p className="text-fg">{renderInlineCode(st.reason)}</p>}
@@ -333,22 +340,28 @@ export function HealthView() {
   const [showClosed, setShowClosed] = useState(false);
   const health = model.graph.health;
 
-  const { issues, clean, counts, manual, fixed, safe, wontFix } = useMemo(() => {
+  const { issues, clean, counts, manual, last, fixed, safe, wontFix } = useMemo(() => {
     // Review ids are positions (review-<i>), so only trust records newer than the review. Check-hit ids are content hashes.
     const closed = new Set<string>(wontFixList);
     const fixed = new Set<string>();
     const safe = new Map<string, string>();
     const wontFix = new Set(wontFixList);
     const manual = new Map<string, string>();
+    const last = new Map<string, string>();
     for (const rec of [reviewFixes, healthFixes]) {
       if (!rec) continue;
       const fresh = (id: string) => !id.startsWith("review-") || !review || rec.generatedAt >= review.generatedAt;
-      for (const f of rec.fixes) if (f.status === "applied" && fresh(f.itemId)) (closed.add(f.itemId), fixed.add(f.itemId));
+      for (const f of rec.fixes) {
+        if (!fresh(f.itemId)) continue;
+        if (f.status === "applied") (closed.add(f.itemId), fixed.add(f.itemId));
+        else if (f.invalid) last.set(f.itemId, `Couldn't apply. ${f.invalid}`);
+      }
       for (const x of rec.skipped) {
         if (!fresh(x.itemId)) continue;
         if (SAFE.test(x.reason)) (closed.add(x.itemId), safe.set(x.itemId, x.reason.replace(/^scanner was wrong[:.,]?\s*/i, "")));
         // Only owner questions and outside-code steps need the owner. Other skips stay Open for Fix All to retry.
         else if (OWNER.test(x.reason)) manual.set(x.itemId, x.reason.replace(/^decision:\s*/i, ""));
+        else last.set(x.itemId, x.reason);
       }
     }
     const checks = (health?.checks ?? []).map((c) => {
@@ -362,7 +375,7 @@ export function HealthView() {
     (review?.findings ?? []).forEach((f, i) => {
       if (!closed.has(`review-${i}`) && !wontFix.has(reviewKey(f))) counts[f.severity] += 1;
     });
-    return { issues, clean, counts, closed, manual, fixed, safe, wontFix };
+    return { issues, clean, counts, closed, manual, last, fixed, safe, wontFix };
   }, [health, review, reviewFixes, healthFixes, wontFixList]);
 
   if (!health) {
@@ -375,10 +388,10 @@ export function HealthView() {
     if (wontFix.has(reviewKey(f))) return { kind: "wontfix" };
     if (fixed.has(id)) return { kind: "fixed", label: fixedLabel };
     if (safe.has(id)) return { kind: "safe", reason: safe.get(id)! };
-    return { kind: "open", reason: manual.get(id) };
+    return { kind: "open", reason: manual.get(id), last: last.get(id) };
   };
   const hitStatus = (id: string): ItemStatus =>
-    wontFix.has(id) ? { kind: "wontfix" } : fixed.has(id) ? { kind: "fixed", label: fixedLabel } : safe.has(id) ? { kind: "safe", reason: safe.get(id)! } : { kind: "open", reason: manual.get(id) };
+    wontFix.has(id) ? { kind: "wontfix" } : fixed.has(id) ? { kind: "fixed", label: fixedLabel } : safe.has(id) ? { kind: "safe", reason: safe.get(id)! } : { kind: "open", reason: manual.get(id), last: last.get(id) };
   const findings = (review?.findings ?? []).map((f, i) => ({ f, i, st: statusOf(f, i) })).sort((a, b) => SEV_ORDER[a.f.severity] - SEV_ORDER[b.f.severity]);
   const asks = (st: ItemStatus) => st.kind === "open" && !!st.reason;
   const openFindings = findings.filter((x) => x.st.kind === "open").sort((a, b) => Number(asks(b.st)) - Number(asks(a.st)));

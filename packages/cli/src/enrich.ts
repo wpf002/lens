@@ -12,7 +12,8 @@ import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyFixes, buildRecord, loadRemediation, remediationPath, type RemediationSource } from "./remediate.js";
-import { AuditVerdictsSchema, PatchValidationError, RemediationSchema, ReviewFindingsSchema, type ReviewFindings, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts } from "@lens/core";
+import { collectChanges, makeWorkspace } from "./workspace.js";
+import { AuditVerdictsSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, type ReviewFindings, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts } from "@lens/core";
 
 export type EnrichTask = "domain" | "audit" | "summaries" | "review" | "remediate";
 
@@ -263,7 +264,7 @@ export class EnrichRunner {
   }
 
   /** Spawn Claude Code, stream its tool calls into the job's progress, resolve on exit. */
-  private async runClaude(job: EnrichJob, prompt: string, tools: string[], extraArgs: string[] = []): Promise<{ code: number | null; stderr: string; resultError?: string; resultText: string }> {
+  private async runClaude(job: EnrichJob, prompt: string, tools: string[], extraArgs: string[] = [], cwd = job.root): Promise<{ code: number | null; stderr: string; resultError?: string; resultText: string }> {
     const args = [
       "-p", prompt,
       "--output-format", "stream-json", "--verbose",
@@ -273,7 +274,7 @@ export class EnrichRunner {
       "--allowedTools", ...tools,
     ];
     this.push(job, "Starting Claude Code");
-    const child = spawn(claudeBin(), args, { cwd: job.root, stdio: ["ignore", "pipe", "pipe"], env: childEnv() });
+    const child = spawn(claudeBin(), args, { cwd, stdio: ["ignore", "pipe", "pipe"], env: childEnv() });
     this.child = child;
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
@@ -298,7 +299,7 @@ export class EnrichRunner {
           continue;
         }
         if (msg.type === "assistant") {
-          for (const c of msg.message?.content ?? []) if (c.type === "tool_use" && c.name) this.push(job, describeTool(c.name, c.input ?? {}, job.root));
+          for (const c of msg.message?.content ?? []) if (c.type === "tool_use" && c.name) this.push(job, describeTool(c.name, c.input ?? {}, cwd));
         } else if (msg.type === "result") {
           if (typeof msg.total_cost_usd === "number") job.costUsd = (job.costBase ?? 0) + msg.total_cost_usd;
           if (typeof msg.result === "string") resultText = msg.result;
@@ -613,7 +614,50 @@ export class EnrichRunner {
     return true;
   }
 
-  /** Draft fixes as exact text replacements. Writes only its proposal file; the user approves edits. */
+  /**
+   * Let Claude edit a copy of the project, then diff the copy into whole-file edits.
+   * The project itself is untouched until applyFixes, which backs files up for Undo.
+   */
+  private async draftFixes(job: EnrichJob, items: unknown[], single: boolean): Promise<{ data: Remediation | null; error?: string }> {
+    const instructions = agentInstructions("remediator");
+    if (!existsSync(instructions)) throw new Error(`missing ${instructions}`);
+    this.push(job, "Copying the project");
+    const ws = await makeWorkspace(job.root);
+    try {
+      const itemsPath = path.join(ws, ".lens", "items.json");
+      const outPath = path.join(ws, ".lens", "report.json");
+      await writeJsonAtomic(itemsPath, { items }, true);
+      const prompt = [
+        `Follow the agent instructions in ${instructions} (read that file first).`,
+        `Project copy (edit files here): ${ws}`,
+        `Items: ${itemsPath}`,
+        `Report path: ${outPath}`,
+        "If the report write is refused, put the JSON in your final message inside a ```json fence instead.",
+        ...(single ? ["The owner picked this one item to fix. If it has an ownerNote, that is the owner's decision on how to fix it. Follow it."] : []),
+      ].join("\n");
+      const { code, stderr, resultError, resultText } = await this.runClaude(job, prompt, ["Read", "Grep", "Glob", "Edit", "Write"], MODEL_ARGS, ws);
+      if (job.state !== "running") return { data: null };
+      let raw = await readJson<unknown>(outPath);
+      if (!raw) {
+        try {
+          raw = JSON.parse(new RegExp("```json\\s*\\n([\\s\\S]*?)\\n```").exec(resultText)?.[1] ?? "null");
+        } catch {
+          raw = null;
+        }
+      }
+      if (!raw) return { data: null, error: resultError ?? (code ? `Claude Code exited with code ${code}: ${stderr.trim().split("\n").pop() ?? ""}` : "Claude didn't report what it changed") };
+      const parsed = WorkspaceReportSchema.safeParse(raw);
+      if (!parsed.success) return { data: null, error: `the fix report failed validation:\n${formatZodError(parsed.error)}` };
+      this.push(job, "Checking the changes");
+      const { data, ignored } = await collectChanges(job.root, ws, parsed.data);
+      if (ignored.length) this.push(job, `Ignored changes to ${ignored.slice(0, 3).join(", ")}${ignored.length > 3 ? "…" : ""}`);
+      return { data };
+    } finally {
+      await fs.rm(ws, { recursive: true, force: true });
+    }
+  }
+
+  /** Fix items in a copy of the project, then apply every valid change with a backup for Undo. */
   private async runRemediate(job: EnrichJob, source: RemediationSource, checkId?: string, note?: string) {
     if (!checkId && source !== "review") return this.runFixAll(job, source);
     const { root } = job;
@@ -621,42 +665,11 @@ export class EnrichRunner {
     const single = !!checkId && (/^review-\d+$/.test(checkId) || checkId.includes("~"));
     const items = (await remediationItems(root, source, checkId)).map((i) => (single && note ? { ...i, ownerNote: note.slice(0, 600) } : i));
     if (!items.length) throw new Error(source === "audit" ? "nothing in the checklist is failing" : source === "health" ? "that check has nothing to fix" : "the review has no high or medium findings");
-    const dir = paths(root).intermediate;
-    await fs.mkdir(dir, { recursive: true });
-    const itemsPath = path.join(dir, "remediation-items.json");
-    const outPath = path.join(dir, "remediation.json");
-    await writeJsonAtomic(itemsPath, { items }, true);
-    await fs.rm(outPath, { force: true });
-    const instructions = agentInstructions("remediator");
-    if (!existsSync(instructions)) throw new Error(`missing ${instructions}`);
-    const prompt = [
-      `Follow the agent instructions in ${instructions} (read that file first).`,
-      `Project root: ${root}`,
-      `Items: ${itemsPath}`,
-      `Output path: ${outPath}`,
-      "Do not edit project files. Write only the output file.",
-      "If the write is refused, put the JSON in your final message inside a ```json fence instead.",
-      ...(single
-        ? [
-            "The owner picked this one item to fix. If it has an ownerNote, that is the owner's decision on how to fix it. Follow it.",
-          ]
-        : []),
-    ].join("\n");
-    const { code, stderr, resultError, resultText } = await this.runClaude(job, prompt, ["Read", "Grep", "Glob", "Edit(./.lens/intermediate/remediation.json)"], MODEL_ARGS);
+    const { data, error } = await this.draftFixes(job, items, single);
     if (job.state !== "running") return;
-    let raw = await readJson<unknown>(outPath);
-    if (!raw) {
-      try {
-        raw = JSON.parse(new RegExp("```json\\s*\\n([\\s\\S]*?)\\n```").exec(resultText)?.[1] ?? "null");
-      } catch {
-        raw = null;
-      }
-    }
-    if (!raw) throw new Error(resultError ?? (code ? `Claude Code exited with code ${code}: ${stderr.trim().split("\n").pop() ?? ""}` : "no fixes were proposed"));
-    const parsed = RemediationSchema.safeParse(raw);
-    if (!parsed.success) throw new Error(`proposed fixes failed validation:\n${formatZodError(parsed.error)}`);
+    if (!data) throw new Error(error ?? "no fixes were proposed");
     this.push(job, "Checking each edit against the code");
-    const record = buildRecord(root, source, parsed.data, job.costUsd, checkId, `s${Date.now().toString(36)}`);
+    const record = buildRecord(root, source, data, job.costUsd, checkId, `s${Date.now().toString(36)}`);
     // Keep earlier results (and their Undo edits); this run replaces only its own items.
     const prior = await loadRemediation(root, source);
     const review = source === "review" ? await readJson<ReviewRecord>(reviewPath(root)) : null;
@@ -673,7 +686,6 @@ export class EnrichRunner {
       };
       await writeJsonAtomic(remediationPath(root, source), merged, true);
     } else await writeJsonAtomic(remediationPath(root, source), record, true);
-    await fs.rm(outPath, { force: true });
     // Fix means fix: apply every edit that passed validation. Each file is backed up first, so Undo restores it.
     const valid = record.fixes.filter((f) => !f.invalid).map((f) => f.id);
     let applied = 0;
@@ -727,11 +739,6 @@ export class EnrichRunner {
       skipped: (prior?.skipped ?? []).filter((x) => ALREADY_SAFE.test(x.reason) && stable(x.itemId)),
       edits: Object.fromEntries(kept.map((f) => [f.id, prior?.edits?.[f.id] ?? []])),
     };
-    const dir = paths(root).intermediate;
-    await fs.mkdir(dir, { recursive: true });
-    const instructions = agentInstructions("remediator");
-    if (!existsSync(instructions)) throw new Error(`missing ${instructions}`);
-
     while (job.state === "running") {
       const items = (await remediationItems(root, source, undefined, Infinity)).filter((i) => !tried.has(`${i.title}|${i.evidence[0]}`)).slice(0, FIX_ALL_BATCH);
       if (!items.length) break;
@@ -743,47 +750,27 @@ export class EnrichRunner {
       for (const i of items) tried.add(`${i.title}|${i.evidence[0]}`);
       progress.batches++;
       this.push(job, `Batch ${progress.batches}: ${items.length} issues`);
-      const itemsPath = path.join(dir, "remediation-items.json");
-      const outPath = path.join(dir, "remediation.json");
-      await writeJsonAtomic(itemsPath, { items }, true);
-      await fs.rm(outPath, { force: true });
-      const prompt = [
-        `Follow the agent instructions in ${instructions} (read that file first).`,
-        `Project root: ${root}`,
-        `Items: ${itemsPath}`,
-        `Output path: ${outPath}`,
-        "Do not edit project files. Write only the output file.",
-        "If the write is refused, put the JSON in your final message inside a ```json fence instead.",
-      ].join("\n");
       job.costBase = job.costUsd ?? 0;
       const batchBudget = Math.min(remaining, estimateCost("remediate", items.length).limit);
       const saved = job.budgetUsd;
       job.budgetUsd = Math.round(batchBudget * 100) / 100; // per-run cap passed to Claude
-      const { resultError, resultText } = await this.runClaude(job, prompt, ["Read", "Grep", "Glob", "Edit(./.lens/intermediate/remediation.json)"], MODEL_ARGS);
+      const { data, error } = await this.draftFixes(job, items, false);
       job.budgetUsd = saved;
       if (job.state !== "running") break;
-      let raw = await readJson<unknown>(outPath);
-      if (!raw) {
-        try {
-          raw = JSON.parse(new RegExp("```json\\s*\\n([\\s\\S]*?)\\n```").exec(resultText)?.[1] ?? "null");
-        } catch {
-          raw = null;
-        }
-      }
-      const parsed = raw ? RemediationSchema.safeParse(raw) : null;
       progress.attempted += items.length;
-      if (!parsed?.success) {
-        this.push(job, `Batch ${progress.batches} produced no usable fixes${resultError ? `: ${resultError}` : ""}`);
-        if (resultError?.includes("spending") || resultError?.includes("safety limit")) break;
+      if (!data) {
+        this.push(job, `Batch ${progress.batches} produced no usable fixes${error ? `: ${error}` : ""}`);
+        if (error) merged.skipped.push(...items.map((i) => ({ itemId: i.id, reason: error.slice(0, 600) })));
+        await writeJsonAtomic(remediationPath(root, source), merged, true);
+        if (error?.includes("spending") || error?.includes("safety limit")) break;
         continue;
       }
-      const rec = buildRecord(root, source, parsed.data, undefined, undefined, `${runTag}b${progress.batches}`);
+      const rec = buildRecord(root, source, data, undefined, undefined, `${runTag}b${progress.batches}`);
       merged.fixes.push(...rec.fixes);
       merged.skipped.push(...rec.skipped);
       Object.assign(merged.edits, rec.edits);
       merged.costUsd = job.costUsd;
       await writeJsonAtomic(remediationPath(root, source), merged, true);
-      await fs.rm(outPath, { force: true });
       const valid = rec.fixes.filter((f) => !f.invalid).map((f) => f.id);
       let applied: string[] = [];
       if (valid.length) {

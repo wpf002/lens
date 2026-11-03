@@ -322,21 +322,25 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
     const root = meta.root as string;
     const original = await fs.readFile(path.join(root, "main.py"), "utf8");
     const fake = path.join(os.tmpdir(), `fake-remediator-${process.pid}.mjs`);
-    const proposal = {
-      summary: "One fix, one stale, one unsafe.",
-      fixes: [
-        { itemId: "t3-logs", title: "Return 2", explanation: "Demo.", edits: [{ path: "main.py", find: "return 1", replace: "return 2" }] },
-        { itemId: "t3-logs", title: "Stale", explanation: "Demo.", edits: [{ path: "main.py", find: "text that is not there", replace: "x" }] },
-        { itemId: "t3-logs", title: "Escape", explanation: "Demo.", edits: [{ path: "../outside.txt", find: "", replace: "nope" }] },
-        { itemId: "t3-logs", title: "Secrets", explanation: "Demo.", edits: [{ path: ".env", find: "", replace: "KEY=1" }] },
-      ],
-      skipped: [{ itemId: "t1-env", reason: "Needs a hosting setting." }],
-    };
     await fs.writeFile(fake, `#!/usr/bin/env node
 import fs from "node:fs";
+import path from "node:path";
 const prompt = process.argv[process.argv.indexOf("-p") + 1];
-const out = /Output path: (.+)/.exec(prompt)[1].trim();
-fs.writeFileSync(out, ${JSON.stringify(JSON.stringify(proposal))});
+const ws = /Project copy \\(edit files here\\): (.+)/.exec(prompt)[1].trim();
+const out = /Report path: (.+)/.exec(prompt)[1].trim();
+const main = path.join(ws, "main.py");
+fs.writeFileSync(main, fs.readFileSync(main, "utf8").replace("return 1", "return 2"));
+fs.writeFileSync(path.join(ws, ".env"), "KEY=1");
+fs.mkdirSync(path.join(ws, ".git"), { recursive: true });
+fs.writeFileSync(path.join(ws, ".git", "HEAD"), "x");
+fs.writeFileSync(out, JSON.stringify({
+  summary: "One fix.",
+  fixes: [
+    { itemId: "t3-logs", title: "Return 2", explanation: "Demo.", files: ["main.py", ".env"] },
+    { itemId: "t3-logs", title: "Claimed", explanation: "Demo.", files: [] },
+  ],
+  skipped: [{ itemId: "t1-env", reason: "Outside code: needs a hosting setting." }],
+}));
 console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, total_cost_usd: 0.3 }));
 `);
     await fs.chmod(fake, 0o755);
@@ -349,21 +353,20 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
         job = JSON.parse((await get(`${base}/api/enrich/status`, auth())).body);
       }
       expect(job.error).toBeUndefined();
-      expect(job.remediation).toMatchObject({ proposed: 1, invalid: 3, applied: 1 });
+      expect(job.remediation).toMatchObject({ proposed: 1, invalid: 0, applied: 1 });
       const remediation = JSON.parse((await get(`${base}/api/remediation`, auth())).body).records.audit;
       expect(remediation.edits).toBeUndefined(); // raw edits never leave the server
-      const [good, stale, escape, secrets] = remediation.fixes;
+      const good = remediation.fixes.find((f: { title: string }) => f.title === "Return 2");
+      expect(good.files.map((f: { path: string }) => f.path)).toEqual(["main.py"]);
       expect(good.files[0].diff).toContain("+    return 2");
-      expect(stale.invalid).toContain("isn't there anymore");
-      expect(escape.invalid).toMatch(/not allowed|outside/);
-      expect(secrets.invalid).toContain("not allowed");
+      expect(remediation.skipped.some((x: { reason: string }) => x.reason.includes("changed no files"))).toBe(true);
       expect(good.status).toBe("applied"); // Fix applies valid edits itself
       expect(await fs.readFile(path.join(root, "main.py"), "utf8")).toContain("return 2");
+      await expect(fs.stat(path.join(root, ".env"))).rejects.toThrow();
 
-      expect((await post(`${base}/api/remediation/apply`, { ids: [stale.id], source: "audit" })).status).toBe(401);
-      const again = JSON.parse((await post(`${base}/api/remediation/apply`, { ids: [stale.id], source: "audit" }, auth())).body);
-      expect(again.failed.map((f: { id: string }) => f.id)).toEqual([stale.id]);
-      await expect(fs.stat(path.join(root, "..", "outside.txt"))).rejects.toThrow();
+      expect((await post(`${base}/api/remediation/apply`, { ids: [good.id], source: "audit" })).status).toBe(401);
+      const again = JSON.parse((await post(`${base}/api/remediation/apply`, { ids: [good.id], source: "audit" }, auth())).body);
+      expect(again.failed.map((f: { id: string }) => f.id)).toEqual([good.id]);
 
       expect((await post(`${base}/api/remediation/undo`, { id: good.id, source: "audit" }, auth())).status).toBe(200);
       expect(await fs.readFile(path.join(root, "main.py"), "utf8")).toBe(original);
@@ -383,10 +386,14 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
 import fs from "node:fs";
 const prompt = process.argv[process.argv.indexOf("-p") + 1];
 const items = JSON.parse(fs.readFileSync(/Items: (.+)/.exec(prompt)[1].trim(), "utf8")).items;
-const out = /Output path: (.+)/.exec(prompt)[1].trim();
+const ws = /Project copy \\(edit files here\\): (.+)/.exec(prompt)[1].trim();
+const out = /Report path: (.+)/.exec(prompt)[1].trim();
 const fixes = [], skipped = [];
 for (const it of items) {
-  if (it.evidence[0].startsWith("IMPLEMENTATION_SUMMARY.md")) fixes.push({ itemId: it.id, title: "Delete stale summary", explanation: "Nothing links to it.", edits: [{ path: "IMPLEMENTATION_SUMMARY.md", delete: true }] });
+  if (it.evidence[0].startsWith("IMPLEMENTATION_SUMMARY.md")) {
+    fs.writeFileSync(ws + "/IMPLEMENTATION_SUMMARY.md", "");
+    fixes.push({ itemId: it.id, title: "Delete stale summary", explanation: "Nothing links to it.", files: ["IMPLEMENTATION_SUMMARY.md"] });
+  }
   else skipped.push({ itemId: it.id, reason: "Not something to change here." });
 }
 fs.writeFileSync(out, JSON.stringify({ fixes, skipped }));

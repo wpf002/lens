@@ -252,6 +252,19 @@ export const RemediationSchema = z.object({
 });
 export type Remediation = z.infer<typeof RemediationSchema>;
 
+/** What the remediator reports after editing a copy of the project. Lens diffs the copy for the edits. */
+export const WorkspaceReportSchema = z.object({
+  summary: clip(600).optional(),
+  fixes: z.array(z.object({
+    itemId: z.string().max(80),
+    title: clip(140),
+    explanation: clip(600),
+    files: z.array(z.string().max(400)).max(200).default([]),
+  })).transform((a) => a.slice(0, 30)),
+  skipped: z.array(z.object({ itemId: z.string().max(80), reason: clip(600) })).transform((a) => a.slice(0, 60)).default([]),
+});
+export type WorkspaceReport = z.infer<typeof WorkspaceReportSchema>;
+
 export const TriagePatchSchema = z.object({
   findings: z.array(z.object({
     id: z.string(),
