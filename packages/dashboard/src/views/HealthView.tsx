@@ -52,21 +52,21 @@ function CheckRow({ c, statusOf, canFix }: { c: HealthCheck; statusOf: (id: stri
   const asks = rows.filter((r) => r.st.kind === "open" && r.st.reason).length;
   return (
     <li className="border-b border-line last:border-b-0">
-      <button type="button" className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left hover:bg-raised" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+      <div className="flex items-center gap-3 pr-4 hover:bg-raised">
+      <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 py-2.5 pl-4 text-left" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         {open ? <IconChevronDown size={13} className="shrink-0 text-faint" /> : <IconChevronRight size={13} className="shrink-0 text-faint" />}
         <SeverityBadge severity={c.severity as Severity} className="w-[68px] justify-center" />
         <span className={cx("min-w-0 flex-1 text-[13px]", left > 0 ? "text-fg" : "text-muted")}>{c.title}</span>
         {asks > 0 ? <StatusTag st={{ kind: "open", reason: "x" }} /> : left > 0 ? <span className="font-mono text-[12px] text-muted tabular">{left} Open</span> : <StatusTag st={{ kind: "fixed", label: "Closed" }} />}
       </button>
+      {open && canFix && left > 0 && <FixCheck id={c.id} open={Math.min(left, c.hits.length)} />}
+      </div>
       {open && (
         <div className="pb-3 pl-[118px] pr-4 text-[12px] text-muted">
-          <div className="flex items-start gap-3 pb-2">
-            <p className="min-w-0 flex-1 text-fg">
-              <span className="text-faint">Fix: </span>
-              {renderInlineCode(c.fix)}
-            </p>
-            {canFix && left > 0 && <FixCheck id={c.id} open={Math.min(left, c.hits.length)} />}
-          </div>
+          <p className="pb-2 text-fg">
+            <span className="text-faint">Fix: </span>
+            {renderInlineCode(c.fix)}
+          </p>
           <ul className="divide-y divide-line border-y border-line">
             {rows.map(({ h, id, st }) => (
               <HitRow key={id} h={h} id={id} checkId={c.id} st={st} canFix={canFix} />
