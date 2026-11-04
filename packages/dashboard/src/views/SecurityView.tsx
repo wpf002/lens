@@ -31,7 +31,7 @@ function decision(f: Finding, fixed: boolean): { text: string; todo: string } {
     return { text: "Marked public. People use this route before they have an account, so it can't require a login.", todo: "Nothing." };
   if (f.status === "accepted") return { text: "Marked Won't Fix.", todo: "Nothing." };
   if (f.status === "false_positive") return { text: "Checked. The code already handles this.", todo: "Nothing." };
-  return { text: "Not fixed yet.", todo: "Run Fix All, or open the code and fix it." };
+  return { text: "Not fixed yet.", todo: "Run Fix, or open the code and fix it." };
 }
 const STATUS_OPTION: Record<Finding["status"], string> = { open: "Open", confirmed: "Confirmed", false_positive: "No Fix Needed", accepted: "Won't Fix" };
 

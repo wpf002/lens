@@ -111,7 +111,7 @@ function FixCheck({ id, open }: { id: string; open: number }) {
     );
   return (
     <Button size="sm" variant="accent" className="shrink-0" disabled={busy} onClick={() => setAsking(true)}>
-      Fix All {n}
+      Fix {n}
     </Button>
   );
 }
