@@ -433,4 +433,69 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
       delete process.env.LENS_CLAUDE_BIN;
     }
   });
+
+  it("Remediate fixes what the check of its own edits finds, and its edits don't leave files pending", async () => {
+    const fake = path.join(os.tmpdir(), `fake-rounds-${process.pid}.mjs`);
+    const counter = path.join(os.tmpdir(), `fake-rounds-count-${process.pid}`);
+    await fs.rm(counter, { force: true });
+    await fs.writeFile(fake, `#!/usr/bin/env node
+import fs from "node:fs";
+const prompt = process.argv[process.argv.indexOf("-p") + 1];
+const get = (k) => new RegExp(k + ": (.+)").exec(prompt)?.[1].trim();
+const done = () => console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, total_cost_usd: 0.05 }));
+if (get("Findings path")) {
+  const ctx = JSON.parse(fs.readFileSync(get("Context"), "utf8"));
+  let findings = [];
+  if (ctx.mode === "changes") {
+    const n = (fs.existsSync(${JSON.stringify(counter)}) ? Number(fs.readFileSync(${JSON.stringify(counter)}, "utf8")) : 0) + 1;
+    fs.writeFileSync(${JSON.stringify(counter)}, String(n));
+    if (n === 1) findings = [{ title: "Fix added untested code", severity: "low", category: "tests", path: "main.py", line: 1, detail: "Added by Lens.", fix: "Add a test." }];
+  }
+  fs.writeFileSync(get("Findings path"), JSON.stringify({ findings }));
+  done();
+} else {
+  const items = JSON.parse(fs.readFileSync(get("Items"), "utf8")).items;
+  const ws = get("Project copy \\\\(edit files here\\\\)");
+  const fixes = [], skipped = [];
+  for (const it of items) {
+    if (it.id.startsWith("review-") && it.evidence[0].startsWith("main.py")) {
+      fs.appendFileSync(ws + "/main.py", "# " + it.id + "\\n");
+      fixes.push({ itemId: it.id, title: "Fix " + it.title, explanation: "Demo.", files: ["main.py"] });
+    } else skipped.push({ itemId: it.id, reason: "Not something to change here." });
+  }
+  fs.writeFileSync(get("Report path"), JSON.stringify({ fixes, skipped }));
+  done();
+}
+`);
+    await fs.chmod(fake, 0o755);
+    process.env.LENS_CLAUDE_BIN = fake;
+    const wait = async () => {
+      let job: { state: string; error?: string } = { state: "running" };
+      for (let i = 0; i < 200 && job.state === "running"; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        job = JSON.parse((await get(`${base}/api/enrich/status`, auth())).body);
+      }
+      return job;
+    };
+    try {
+      // Start with every file reviewed.
+      expect((await post(`${base}/api/enrich/review`, {}, auth())).status).toBe(202);
+      expect((await wait()).error).toBeUndefined();
+      expect(JSON.parse((await get(`${base}/api/meta`, auth())).body).reviewPending.files).toBe(0);
+
+      expect((await post(`${base}/api/enrich/remediate`, { source: "health" }, auth())).status).toBe(202);
+      const job = await wait();
+      expect(job.error).toBeUndefined();
+      expect(job.state).toBe("done");
+      const { review } = JSON.parse((await get(`${base}/api/review`, auth())).body);
+      const added = review.findings.findIndex((f: { title: string }) => f.title === "Fix added untested code");
+      expect(added).toBeGreaterThanOrEqual(0);
+      const rec = JSON.parse((await get(`${base}/api/remediation`, auth())).body).records.health;
+      const appliedIds = rec.fixes.filter((f: { status: string }) => f.status === "applied").map((f: { itemId: string }) => f.itemId);
+      expect(appliedIds).toContain(`review-${added}`); // low severity, still fixed
+      expect(JSON.parse((await get(`${base}/api/meta`, auth())).body).reviewPending.files).toBe(0);
+    } finally {
+      delete process.env.LENS_CLAUDE_BIN;
+    }
+  });
 });

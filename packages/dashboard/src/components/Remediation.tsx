@@ -92,6 +92,8 @@ function FixRow({ fix, source }: { fix: ProposedFix; source: Source }) {
 /** Confirm, progress, and results of a Fix run for one report. */
 export function Remediation({ source }: { source: Source }) {
   const job = useStore((s) => s.enrichJob);
+  // The server refuses PR and merge while an AI run is changing files.
+  const aiBusy = job.state === "running";
   const mine = useStore((s) => s.remediation[source] ?? null);
   // The Health page shows one Fixes panel; fold in earlier review-only runs.
   const extra = useStore((s) => (source === "health" ? s.remediation.review ?? null : null));
@@ -264,11 +266,11 @@ export function Remediation({ source }: { source: Source }) {
                 </a>
                 <TestsLink pr={pr} />
                 {pushed?.dirty ? (
-                  <Button size="sm" variant="accent" disabled={!!push.busy || op.busy} onClick={() => void step("Updating…", createPullRequest)}>
+                  <Button size="sm" variant="accent" disabled={aiBusy || !!push.busy || op.busy} onClick={() => void step("Updating…", createPullRequest)}>
                     {push.busy ?? "Update Pull Request"}
                   </Button>
                 ) : (
-                  <Button size="sm" variant="accent" disabled={!!push.busy || op.busy || !canMerge(pr)} onClick={() => void step("Merging…", mergePullRequest, true)}>
+                  <Button size="sm" variant="accent" disabled={aiBusy || !!push.busy || op.busy || !canMerge(pr)} onClick={() => void step("Merging…", mergePullRequest, true)}>
                     {push.busy ?? "Merge"}
                   </Button>
                 )}
@@ -284,7 +286,7 @@ export function Remediation({ source }: { source: Source }) {
                   </Button>
                 )}
                 {canPush && (
-                  <Button size="sm" variant="accent" disabled={!!push.busy || op.busy} onClick={() => void step("Creating…", createPullRequest)}>
+                  <Button size="sm" variant="accent" disabled={aiBusy || !!push.busy || op.busy} onClick={() => void step("Creating…", createPullRequest)}>
                     {push.busy ?? "Create Pull Request"}
                   </Button>
                 )}

@@ -156,6 +156,13 @@ export async function saveCoverage(root: string, coverage: Coverage): Promise<vo
   await writeJsonAtomic(coveragePath(root), coverage, true);
 }
 
+/** Files whose reviewed hash matches what's on disk now. */
+export async function coveredFiles(root: string): Promise<Set<string>> {
+  const coverage = await loadCoverage(root);
+  const hashes = await hashFiles(root, Object.keys(coverage));
+  return new Set(Object.keys(coverage).filter((rel) => hashes.get(rel) === coverage[rel]));
+}
+
 /** Content hash of each file. Files that can't be read are left out. */
 export async function hashFiles(root: string, rels: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
