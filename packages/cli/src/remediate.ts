@@ -129,6 +129,20 @@ export function buildRecord(root: string, source: RemediationSource, data: Remed
   return { generatedAt: new Date().toISOString(), source, checkId, costUsd, summary: data.summary, fixes, skipped: data.skipped, edits };
 }
 
+/** Lens couldn't fix it, or stopped first. */
+export const UNADDRESSED_REASON = "Lens couldn't fix this.";
+
+/**
+ * Give every item Lens sent to Claude an outcome. An item with no fix and no skip
+ * would otherwise show as plain Open after a run that was meant to settle it.
+ */
+export function markUnaddressed(rec: Pick<RemediationRecord, "fixes" | "skipped">, itemIds: string[], reason = UNADDRESSED_REASON): number {
+  const settled = new Set([...rec.fixes.filter((f) => f.status === "applied" || f.invalid).map((f) => f.itemId), ...rec.skipped.map((x) => x.itemId)]);
+  const missing = [...new Set(itemIds)].filter((id) => !settled.has(id));
+  rec.skipped.push(...missing.map((itemId) => ({ itemId, reason })));
+  return missing.length;
+}
+
 export async function loadRemediation(root: string, source: RemediationSource): Promise<RemediationRecord | null> {
   const rec = await readJson<RemediationRecord>(remediationPath(root, source));
   if (rec) return rec;
@@ -172,6 +186,8 @@ export async function applyFixes(root: string, source: RemediationSource, ids: s
       applied.push(id);
     } catch (e) {
       failed.push({ id, error: (e as Error).message });
+      // Recorded so the item shows why it's still open.
+      fix.invalid = (e as Error).message.slice(0, 600);
     }
   }
   await writeJsonAtomic(remediationPath(root, source), rec, true);

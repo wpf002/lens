@@ -434,6 +434,35 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
     }
   });
 
+  it("Remediate gives every item it sent a reason when Claude drops it", async () => {
+    const fake = path.join(os.tmpdir(), `fake-drop-${process.pid}.mjs`);
+    await fs.writeFile(fake, `#!/usr/bin/env node
+import fs from "node:fs";
+const prompt = process.argv[process.argv.indexOf("-p") + 1];
+const get = (k) => new RegExp(k + ": (.+)").exec(prompt)?.[1].trim();
+if (get("Findings path")) fs.writeFileSync(get("Findings path"), JSON.stringify({ findings: [] }));
+else fs.writeFileSync(get("Report path"), JSON.stringify({ fixes: [], skipped: [] }));
+console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, total_cost_usd: 0.05 }));
+`);
+    await fs.chmod(fake, 0o755);
+    process.env.LENS_CLAUDE_BIN = fake;
+    try {
+      expect((await post(`${base}/api/enrich/remediate`, { source: "health" }, auth())).status).toBe(202);
+      let job: { state: string; error?: string } = { state: "running" };
+      for (let i = 0; i < 200 && job.state === "running"; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        job = JSON.parse((await get(`${base}/api/enrich/status`, auth())).body);
+      }
+      expect(job.error).toBeUndefined();
+      const rec = JSON.parse((await get(`${base}/api/remediation`, auth())).body).records.health;
+      const reasons = new Map(rec.skipped.map((x: { itemId: string; reason: string }) => [x.itemId, x.reason]));
+      expect(reasons.size).toBeGreaterThan(0);
+      expect([...reasons.values()].every((r) => typeof r === "string" && r.length > 0)).toBe(true);
+    } finally {
+      delete process.env.LENS_CLAUDE_BIN;
+    }
+  });
+
   it("Remediate fixes what the check of its own edits finds, and its edits don't leave files pending", async () => {
     const fake = path.join(os.tmpdir(), `fake-rounds-${process.pid}.mjs`);
     const counter = path.join(os.tmpdir(), `fake-rounds-count-${process.pid}`);

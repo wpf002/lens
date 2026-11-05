@@ -64,7 +64,7 @@ function scrub(msg: string): string {
   if (/workflow/i.test(out) && /refusing|scope|permission/i.test(out)) return WORKFLOW_REJECTED;
   if (/Authentication failed|could not read Username|Repository not found|403/i.test(out)) {
     out = t
-      ? "GitHub refused access to this repo, or it doesn't exist."
+      ? "GitHub refused access to this repo. Reconnect GitHub and try again."
       : "Repo not found or private. Connect GitHub to open private repos.";
   }
   return out.slice(0, 300);

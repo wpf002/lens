@@ -13,7 +13,7 @@ import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_pro
 import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyFixes, buildRecord, loadRemediation, remediationPath, type RemediationSource } from "./remediate.js";
+import { applyFixes, buildRecord, loadRemediation, markUnaddressed, remediationPath, type RemediationSource } from "./remediate.js";
 import { collectChanges, makeWorkspace } from "./workspace.js";
 import { AuditVerdictsSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type KnowledgeGraph } from "@lens/core";
 
@@ -686,7 +686,8 @@ export class EnrichRunner {
     const ledger = await loadReview(root);
     const items = added.map((i) => ({ i, f: ledger.findings[i]! })).map(({ i, f }) => ({ id: `review-${i}`, title: f.title, evidence: [`${f.path}${f.line ? `:${f.line}` : ""} ${f.detail}`], fix: f.fix }));
     const remaining = job.budgetUsd - (job.costUsd ?? 0);
-    if (!items.length || remaining < MIN_RUN_USD) return;
+    if (!items.length) return;
+    if (remaining < MIN_RUN_USD) return this.settleItems(root, source, items.map((i) => i.id), "Lens stopped first: reached the spending limit.");
     this.push(job, `Fixing ${items.length} problem${items.length === 1 ? "" : "s"} in Lens's changes`);
     const saved = job.budgetUsd;
     job.costBase = job.costUsd ?? 0;
@@ -696,18 +697,26 @@ export class EnrichRunner {
     if (job.state !== "running") return;
     if (!data) {
       this.push(job, `No fix for the problems in Lens's changes${error ? `: ${error.split("\n")[0]}` : ""}`);
-      return;
+      return this.settleItems(root, source, items.map((i) => i.id), error?.split("\n")[0]?.slice(0, 600));
     }
     const rec = buildRecord(root, source, data, undefined, undefined, `c${Date.now().toString(36)}`);
     const prior = await loadRemediation(root, source);
     const merged = prior ? { ...prior, generatedAt: rec.generatedAt, costUsd: job.costUsd, fixes: [...prior.fixes, ...rec.fixes], skipped: [...prior.skipped, ...rec.skipped], edits: { ...prior.edits, ...rec.edits } } : rec;
     await writeJsonAtomic(remediationPath(root, source), merged, true);
     const valid = rec.fixes.filter((f) => !f.invalid).map((f) => f.id);
-    if (!valid.length) return;
-    const { applied } = await applyFixes(root, source, valid);
-    if (job.remediation) job.remediation.applied = (job.remediation.applied ?? 0) + applied.length;
-    this.push(job, "Rescanning");
-    await scanAndSave(root);
+    if (valid.length) {
+      const { applied } = await applyFixes(root, source, valid);
+      if (job.remediation) job.remediation.applied = (job.remediation.applied ?? 0) + applied.length;
+      this.push(job, "Rescanning");
+      await scanAndSave(root);
+    }
+    await this.settleItems(root, source, items.map((i) => i.id));
+  }
+
+  /** Every item a run sent to Claude ends fixed or with a reason on the row. */
+  private async settleItems(root: string, source: RemediationSource, itemIds: string[], reason?: string): Promise<void> {
+    const rec = await loadRemediation(root, source);
+    if (rec && markUnaddressed(rec, itemIds, reason || undefined)) await writeJsonAtomic(remediationPath(root, source), rec, true);
   }
 
   /**
@@ -794,6 +803,7 @@ export class EnrichRunner {
       this.push(job, "Rescanning");
       await scanAndSave(root);
     }
+    await this.settleItems(root, source, items.map((i) => i.id));
     job.remediation = { source, proposed: valid.length, invalid: record.fixes.filter((f) => f.invalid).length, skipped: record.skipped.length, applied };
     const added = await this.reviewOwnChanges(job, changedPaths(record, valid), covered);
     if (added.length) await this.fixFindings(job, source, added);
@@ -867,7 +877,7 @@ export class EnrichRunner {
         progress.attempted += items.length;
         if (!data) {
           this.push(job, `Batch ${progress.batches} produced no usable fixes${error ? `: ${error}` : ""}`);
-          if (error) merged.skipped.push(...items.map((i) => ({ itemId: i.id, reason: error.slice(0, 600) })));
+          markUnaddressed(merged, items.map((i) => i.id), error?.slice(0, 600) || undefined);
           await writeJsonAtomic(remediationPath(root, source), merged, true);
           if (error?.includes("spending") || error?.includes("safety limit")) break;
           continue;
@@ -881,9 +891,14 @@ export class EnrichRunner {
         const valid = rec.fixes.filter((f) => !f.invalid).map((f) => f.id);
         let applied: string[] = [];
         if (valid.length) {
-          applied = (await applyFixes(root, source, valid)).applied;
+          const result = await applyFixes(root, source, valid);
+          applied = result.applied;
           // applyFixes updated statuses on disk; keep the in-memory record in step.
           for (const f of merged.fixes) if (applied.includes(f.id)) f.status = "applied";
+          for (const { id, error } of result.failed) {
+            const f = merged.fixes.find((x) => x.id === id);
+            if (f && !f.invalid) f.invalid = error.slice(0, 600);
+          }
           this.push(job, `Applied ${applied.length}; rescanning`);
           await scanAndSave(root);
         }
@@ -892,6 +907,7 @@ export class EnrichRunner {
           progress.stopped = "three batches in a row produced nothing to apply";
           break;
         }
+        markUnaddressed(merged, items.map((i) => i.id));
       }
     };
     const covered = await coveredFiles(root);
@@ -904,6 +920,13 @@ export class EnrichRunner {
       const added = await this.reviewOwnChanges(job, changedPaths(merged, appliedNow), covered);
       if (!added.length) break;
       progress.total += added.length;
+      // The last check's findings still get a fix pass.
+      if (round === FIX_ROUNDS - 1) await fixPending();
+    }
+    // Anything still open after the run says why: Lens stopped first, or couldn't fix it.
+    if (job.state === "running") {
+      const left = (await pending()).map((i) => i.id);
+      markUnaddressed(merged, left, progress.stopped ? `Lens stopped first: ${progress.stopped}.` : undefined);
     }
     merged.costUsd = job.costUsd;
     await writeJsonAtomic(remediationPath(root, source), merged, true);
