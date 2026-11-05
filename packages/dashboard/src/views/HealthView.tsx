@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { checkHitIds, reviewKey, type HealthCheck, type Severity } from "@lens/core/browser";
+import { checkHitIds, outsideRemediateReason, reviewKey, type HealthCheck, type Severity } from "@lens/core/browser";
 import type { ReviewRecord } from "../api";
 import { Evidence } from "../components/Checklist";
 import { IconChevronDown, IconChevronRight } from "../components/icons";
@@ -404,7 +404,7 @@ export function HealthView() {
     return { kind: "open", reason: manual.get(id) };
   };
   const hitStatus = (id: string): ItemStatus =>
-    wontFix.has(id) ? { kind: "wontfix" } : fixed.has(id) ? { kind: "fixed", label: fixedLabel } : safe.has(id) ? { kind: "safe", reason: safe.get(id)! } : { kind: "open", reason: manual.get(id) };
+    wontFix.has(id) ? { kind: "wontfix" } : fixed.has(id) ? { kind: "fixed", label: fixedLabel } : safe.has(id) ? { kind: "safe", reason: safe.get(id)! } : { kind: "open", reason: manual.get(id) ?? outsideRemediateReason(id.split("~")[0]!) };
   const findings = (review?.findings ?? []).map((f, i) => ({ f, i, st: statusOf(f, i) })).sort((a, b) => SEV_ORDER[a.f.severity] - SEV_ORDER[b.f.severity]);
   const canReview = mode === "server" && !!meta?.canEnrich;
   // One list: review findings and automatic checks, Needs You first, then by severity.

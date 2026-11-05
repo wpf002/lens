@@ -15,7 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyFixes, buildRecord, loadRemediation, markUnaddressed, remediationPath, type RemediationSource } from "./remediate.js";
 import { collectChanges, makeWorkspace } from "./workspace.js";
-import { AuditVerdictsSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type KnowledgeGraph } from "@lens/core";
+import { AuditVerdictsSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, FIXABLE_CHECKS, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type KnowledgeGraph } from "@lens/core";
 
 export type EnrichTask = "domain" | "audit" | "summaries" | "review" | "remediate";
 
@@ -923,7 +923,6 @@ export class EnrichRunner {
     if (job.state === "running") {
       const left = (await pending()).map((i) => i.id);
       markUnaddressed(merged, left, progress.stopped ? `Lens stopped first: ${progress.stopped}.` : undefined);
-      if (!onlyCheck) markUnaddressed(merged, await outsideRemediate(root), OUTSIDE_REMEDIATE_REASON);
     }
     merged.costUsd = job.costUsd;
     await writeJsonAtomic(remediationPath(root, source), merged, true);
@@ -1013,16 +1012,6 @@ export async function fixAllPlan(root: string, source: "audit" | "health"): Prom
   return { first, firstLimit: pre.limit, items, estimate: { low: r(pre.low + fix.low), high: r(pre.high + fix.high), limit: r(Math.min(MAX_REVIEW_USD + 150, pre.limit + fix.limit + FIX_CHECK_RESERVE_USD)) } };
 }
 
-/** Reason on check hits Remediate never sends: refactors and checks without a batch fix. */
-export const OUTSIDE_REMEDIATE_REASON = "Too large for Remediate. Use Fix on this row.";
-
-/** Open hits of checks Remediate skips, so they show Needs You instead of plain Open after a run. */
-async function outsideRemediate(root: string): Promise<string[]> {
-  const g = await loadGraph(root);
-  const wontFix = new Set(await loadWontFix(root));
-  return (g?.health?.checks ?? []).filter((c) => !FIXABLE_CHECKS.has(c.id) && c.count > 0).flatMap((c) => checkHitIds(c)).filter((id) => !wontFix.has(id));
-}
-
 /** Files the given fixes changed, without deletions. */
 function changedPaths(record: { edits: Record<string, Array<{ path: string; delete?: boolean }>> }, fixIds: string[]): string[] {
   return [...new Set(fixIds.flatMap((id) => (record.edits[id] ?? []).filter((e) => !e.delete).map((e) => e.path)))];
@@ -1056,8 +1045,7 @@ export async function fixableCount(root: string, source: "audit" | "health" = "h
 }
 
 /** Failing checklist items (scanner + AI audit merged) or the review's high/medium findings. */
-/** Automatic checks Fix All includes. Any check can still be fixed from its own row. */
-export const FIXABLE_CHECKS = new Set(["untested", "swallowed-errors", "debug-leftovers", "stubs", "mock-data", "type-escapes", "duplicates", "dead-functions", "unused-deps", "dead-files", "stale-docs"]);
+export { FIXABLE_CHECKS };
 /** Hits handed to one run, so a check with hundreds of hits doesn't become one huge bill. */
 export const HEALTH_BATCH = 15;
 /** checkId for a run that repairs tests a Lens pull request broke. */

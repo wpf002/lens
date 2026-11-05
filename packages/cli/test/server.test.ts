@@ -3,8 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
-import { checkHitIds, paths, scanAndSave } from "@lens/core";
-import { FIXABLE_CHECKS, OUTSIDE_REMEDIATE_REASON } from "../src/enrich.js";
+import { paths, scanAndSave } from "@lens/core";
 import { startServer } from "../src/server.js";
 
 const FIX = path.resolve(__dirname, "../../core/test/fixtures/vuln-app");
@@ -486,9 +485,6 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
     // Written before the ledger's ids were stable: its review-<index> named a different finding.
     const old = new Date(Date.parse(now) - 60_000).toISOString();
     await fs.writeFile(path.join(lens, "remediation-review.json"), JSON.stringify({ generatedAt: old, source: "review", fixes: [{ id: "old1", itemId: `review-${index}`, title: "Old fix", explanation: "Old.", status: "applied" }], skipped: [], edits: {} }));
-    // An oversized file: a check Remediate never sends.
-    await fs.writeFile(path.join(root, "huge.ts"), Array.from({ length: 900 }, (_, i) => `export const v${i} = ${i};`).join("\n"));
-    await scanAndSave(root);
     process.env.LENS_CLAUDE_BIN = fake;
     try {
       expect((await post(`${base}/api/enrich/remediate`, { source: "health" }, auth())).status).toBe(202);
@@ -501,14 +497,8 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
       const rec = JSON.parse((await get(`${base}/api/remediation`, auth())).body).records.health;
       const reasons = new Map<string, string>(rec.skipped.map((x: { itemId: string; reason: string }) => [x.itemId, x.reason]));
       expect(reasons.get(`review-${index}`)).toBeTruthy();
-      const graph = JSON.parse(await fs.readFile(paths(root).graph, "utf8"));
-      const outside = (graph.health.checks as Array<{ id: string; count: number; hits: Array<{ path: string; detail: string }> }>).filter((c) => !FIXABLE_CHECKS.has(c.id) && c.count > 0).flatMap((c) => checkHitIds(c));
-      expect(outside.length).toBeGreaterThan(0);
-      for (const id of outside) expect(reasons.get(id)).toBe(OUTSIDE_REMEDIATE_REASON);
     } finally {
       delete process.env.LENS_CLAUDE_BIN;
-      await fs.rm(path.join(root, "huge.ts"), { force: true });
-      await scanAndSave(root);
     }
   });
 
