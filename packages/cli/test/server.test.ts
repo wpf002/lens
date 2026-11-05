@@ -3,7 +3,8 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
-import { scanAndSave } from "@lens/core";
+import { checkHitIds, paths, scanAndSave } from "@lens/core";
+import { FIXABLE_CHECKS, OUTSIDE_REMEDIATE_REASON } from "../src/enrich.js";
 import { startServer } from "../src/server.js";
 
 const FIX = path.resolve(__dirname, "../../core/test/fixtures/vuln-app");
@@ -460,6 +461,54 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
       expect([...reasons.values()].every((r) => typeof r === "string" && r.length > 0)).toBe(true);
     } finally {
       delete process.env.LENS_CLAUDE_BIN;
+    }
+  });
+
+  it("Remediate settles review findings that an older record claims fixed, and rows it never sends", async () => {
+    const fake = path.join(os.tmpdir(), `fake-stale-${process.pid}.mjs`);
+    await fs.writeFile(fake, `#!/usr/bin/env node
+import fs from "node:fs";
+const prompt = process.argv[process.argv.indexOf("-p") + 1];
+const get = (k) => new RegExp(k + ": (.+)").exec(prompt)?.[1].trim();
+if (get("Findings path")) fs.writeFileSync(get("Findings path"), JSON.stringify({ findings: [] }));
+else fs.writeFileSync(get("Report path"), JSON.stringify({ fixes: [], skipped: [] }));
+console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, total_cost_usd: 0.05 }));
+`);
+    await fs.chmod(fake, 0o755);
+    const root = JSON.parse((await get(`${base}/api/meta`, auth())).body).root as string;
+    const lens = paths(root).dir;
+    const now = new Date().toISOString();
+    const review = JSON.parse(await fs.readFile(path.join(lens, "review.json"), "utf8").catch(() => "null")) ?? { generatedAt: now, report: "CODE_REVIEW.md", findings: [] };
+    const index = review.findings.length;
+    review.findings.push({ title: "Stale id finding", severity: "high", category: "bug", path: "main.py", line: 1, detail: "Still broken.", fix: "Fix it.", foundAt: now });
+    review.stableSince = now;
+    await fs.writeFile(path.join(lens, "review.json"), JSON.stringify(review));
+    // Written before the ledger's ids were stable: its review-<index> named a different finding.
+    const old = new Date(Date.parse(now) - 60_000).toISOString();
+    await fs.writeFile(path.join(lens, "remediation-review.json"), JSON.stringify({ generatedAt: old, source: "review", fixes: [{ id: "old1", itemId: `review-${index}`, title: "Old fix", explanation: "Old.", status: "applied" }], skipped: [], edits: {} }));
+    // An oversized file: a check Remediate never sends.
+    await fs.writeFile(path.join(root, "huge.ts"), Array.from({ length: 900 }, (_, i) => `export const v${i} = ${i};`).join("\n"));
+    await scanAndSave(root);
+    process.env.LENS_CLAUDE_BIN = fake;
+    try {
+      expect((await post(`${base}/api/enrich/remediate`, { source: "health" }, auth())).status).toBe(202);
+      let job: { state: string; error?: string } = { state: "running" };
+      for (let i = 0; i < 200 && job.state === "running"; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        job = JSON.parse((await get(`${base}/api/enrich/status`, auth())).body);
+      }
+      expect(job.error).toBeUndefined();
+      const rec = JSON.parse((await get(`${base}/api/remediation`, auth())).body).records.health;
+      const reasons = new Map<string, string>(rec.skipped.map((x: { itemId: string; reason: string }) => [x.itemId, x.reason]));
+      expect(reasons.get(`review-${index}`)).toBeTruthy();
+      const graph = JSON.parse(await fs.readFile(paths(root).graph, "utf8"));
+      const outside = (graph.health.checks as Array<{ id: string; count: number; hits: Array<{ path: string; detail: string }> }>).filter((c) => !FIXABLE_CHECKS.has(c.id) && c.count > 0).flatMap((c) => checkHitIds(c));
+      expect(outside.length).toBeGreaterThan(0);
+      for (const id of outside) expect(reasons.get(id)).toBe(OUTSIDE_REMEDIATE_REASON);
+    } finally {
+      delete process.env.LENS_CLAUDE_BIN;
+      await fs.rm(path.join(root, "huge.ts"), { force: true });
+      await scanAndSave(root);
     }
   });
 

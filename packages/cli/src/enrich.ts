@@ -831,10 +831,6 @@ export class EnrichRunner {
       job.review = undefined;
     }
     const total = onlyCheck ? (await pending()).length : await fixableCount(root, source);
-    if (!total) {
-      job.remediation = { source, proposed: 0, invalid: 0, skipped: 0, applied: 0 };
-      return this.finish(job, "done");
-    }
     const progress = { attempted: 0, total, fixed: 0, batches: 0 } as NonNullable<EnrichJob["fixAll"]>;
     job.fixAll = progress;
     const tried = new Set<string>();
@@ -927,6 +923,7 @@ export class EnrichRunner {
     if (job.state === "running") {
       const left = (await pending()).map((i) => i.id);
       markUnaddressed(merged, left, progress.stopped ? `Lens stopped first: ${progress.stopped}.` : undefined);
+      if (!onlyCheck) markUnaddressed(merged, await outsideRemediate(root), OUTSIDE_REMEDIATE_REASON);
     }
     merged.costUsd = job.costUsd;
     await writeJsonAtomic(remediationPath(root, source), merged, true);
@@ -1016,6 +1013,16 @@ export async function fixAllPlan(root: string, source: "audit" | "health"): Prom
   return { first, firstLimit: pre.limit, items, estimate: { low: r(pre.low + fix.low), high: r(pre.high + fix.high), limit: r(Math.min(MAX_REVIEW_USD + 150, pre.limit + fix.limit + FIX_CHECK_RESERVE_USD)) } };
 }
 
+/** Reason on check hits Remediate never sends: refactors and checks without a batch fix. */
+export const OUTSIDE_REMEDIATE_REASON = "Too large for Remediate. Use Fix on this row.";
+
+/** Open hits of checks Remediate skips, so they show Needs You instead of plain Open after a run. */
+async function outsideRemediate(root: string): Promise<string[]> {
+  const g = await loadGraph(root);
+  const wontFix = new Set(await loadWontFix(root));
+  return (g?.health?.checks ?? []).filter((c) => !FIXABLE_CHECKS.has(c.id) && c.count > 0).flatMap((c) => checkHitIds(c)).filter((id) => !wontFix.has(id));
+}
+
 /** Files the given fixes changed, without deletions. */
 function changedPaths(record: { edits: Record<string, Array<{ path: string; delete?: boolean }>> }, fixIds: string[]): string[] {
   return [...new Set(fixIds.flatMap((id) => (record.edits[id] ?? []).filter((e) => !e.delete).map((e) => e.path)))];
@@ -1075,11 +1082,13 @@ export async function remediationItems(root: string, source: RemediationSource, 
   }
   if (source === "health" && !checkId) {
     // Review findings not fixed yet, then the worst fixable automatic-check hits, up to FIX_ALL_LIMIT.
-    const applied = new Set<string>();
+    // Review ids count only from records newer than the ledger's stable ids, as the dashboard does.
+    // An older record's "review-3" names a different finding, and trusting it hid that finding from every run.
+    const applied = new Set<string>([...(await reviewClosed(root)).fixed].map((i) => `review-${i}`));
     for (const s of ["review", "health"] as const) {
       const r = await loadRemediation(root, s);
-      for (const f of r?.fixes ?? []) if (f.status === "applied") applied.add(f.itemId);
-      for (const x of r?.skipped ?? []) if (ALREADY_SAFE.test(x.reason)) applied.add(x.itemId);
+      for (const f of r?.fixes ?? []) if (f.status === "applied" && !f.itemId.startsWith("review-")) applied.add(f.itemId);
+      for (const x of r?.skipped ?? []) if (ALREADY_SAFE.test(x.reason) && !x.itemId.startsWith("review-")) applied.add(x.itemId);
     }
     const wontFix = new Set(await loadWontFix(root));
     const out: Array<{ id: string; title: string; evidence: string[]; fix?: string }> = [];
