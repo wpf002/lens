@@ -261,9 +261,11 @@ export async function pushPending(root: string): Promise<void> {
 }
 
 /** Move uncommitted fixes off a finished fixes branch onto the latest base branch. */
-async function restartFromBase(root: string, old: string): Promise<void> {
+export async function restartFromBase(root: string, old: string): Promise<void> {
   const base = (await git(root, ["config", "--get", "lens.base"]).catch(() => "")) || "main";
   const dirty = !!(await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"]));
+  // A patch download leaves new files marked intent-to-add, and git stash refuses those ("not uptodate. Cannot merge").
+  await git(root, ["reset", "-q"]);
   if (dirty) await git(root, ["stash", "push", "-u", "-q", "--", ".", ":(exclude).lens"]);
   try {
     await git(root, ["fetch", "-q", "--no-tags", "origin", base]);
@@ -334,7 +336,12 @@ export async function listRepos(workspace: string): Promise<string[]> {
 export async function fixesPatch(root: string): Promise<string> {
   await git(root, ["add", "-A", "-N", "--", "."]).catch(() => undefined);
   await git(root, ["reset", "-q", "--", ".lens"]).catch(() => undefined);
-  return git(root, ["diff", "--binary", "HEAD", "--", ".", ":(exclude).lens"]);
+  try {
+    return await git(root, ["diff", "--binary", "HEAD", "--", ".", ":(exclude).lens"]);
+  } finally {
+    // Drop the intent-to-add marks so later stashes and checkouts work.
+    await git(root, ["reset", "-q"]);
+  }
 }
 
 /**
