@@ -478,7 +478,7 @@ export function HealthView() {
         </div>
         {rows.length > 0 ? (
           <section className="mt-3">
-            <h3 className="eyebrow flex items-center gap-3 border-b border-line px-4 py-1.5">
+            <h3 className="eyebrow flex items-center gap-3 border-b border-line px-5 py-2">
               Issues
               <span className="font-mono normal-case tracking-normal text-faint">
                 {asking > 0 && <span className="text-accent">{asking} Need You · </span>}
@@ -489,7 +489,7 @@ export function HealthView() {
             {!openRows.length && <p className="px-4 py-3 text-[12.5px] text-guarded">All closed.</p>}
             {closedRows.length > 0 && (
               <>
-                <button type="button" className="eyebrow flex w-full items-center gap-1 border-t border-line px-4 py-2 hover:!text-fg" onClick={() => setShowClosed((v) => !v)} aria-expanded={showClosed}>
+                <button type="button" className="eyebrow flex w-full items-center gap-1 border-t border-line px-5 py-2 hover:!text-fg" onClick={() => setShowClosed((v) => !v)} aria-expanded={showClosed}>
                   {showClosed ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />} Closed <span className="font-mono text-faint">{closedRows.length}</span>
                 </button>
                 {showClosed && <ul className="border-t border-line">{closedRows.map(renderRow)}</ul>}

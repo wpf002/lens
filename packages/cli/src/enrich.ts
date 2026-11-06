@@ -589,6 +589,8 @@ export class EnrichRunner {
     const progress = { findings: 0, report: REVIEW_REPORT, batchesDone: 0, batchesTotal: batches.length } as NonNullable<EnrichJob["review"]>;
     if (!scoped) job.review = progress;
     if (!batches.length) {
+      // Every file is covered at its current hash, so the existing findings are current as of now.
+      if (!scoped) await markReviewCurrent(root);
       this.push(job, "No new or changed files to review");
       return [];
     }
@@ -960,6 +962,13 @@ async function loadReview(root: string): Promise<ReviewRecord> {
   const now = new Date().toISOString();
   if (!rec) return { generatedAt: now, report: REVIEW_REPORT, findings: [], stableSince: now };
   return { ...rec, stableSince: rec.stableSince ?? rec.generatedAt };
+}
+
+/** Stamp an existing review as up to date, so a merge with nothing left to review stops showing "Before #N". */
+export async function markReviewCurrent(root: string, now = new Date().toISOString()): Promise<void> {
+  const rec = await readJson<ReviewRecord>(reviewPath(root));
+  if (!rec) return;
+  await writeJsonAtomic(reviewPath(root), { ...rec, stableSince: rec.stableSince ?? rec.generatedAt, generatedAt: now }, true);
 }
 
 async function saveReview(root: string, record: ReviewRecord): Promise<void> {
