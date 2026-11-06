@@ -9,6 +9,7 @@ import path from "node:path";
 import type { GraphEdge, GraphNode } from "../types.js";
 import type { ImportInfo, SymbolInfo } from "../extract.js";
 import { stripComments } from "../security/analyze.js";
+import { healthScore } from "./score.js";
 
 export type HealthSeverity = "high" | "medium" | "low";
 export type HealthCategory = "errors" | "dead-code" | "duplication" | "leftovers" | "types" | "structure" | "tests" | "dependencies" | "docs";
@@ -460,7 +461,5 @@ export function buildHealth(input: HealthInput): HealthReport {
     add({ id: "stale-docs", title: "Stale Docs", category: "docs", severity: "low", hits, fix: "Delete notes that described one session's work, or fold what's still true into the README or docs/." });
   }
 
-  const WEIGHT: Record<HealthSeverity, [number, number]> = { high: [6, 5], medium: [1.5, 10], low: [0.4, 20] };
-  const penalty = checks.reduce((a, c) => a + WEIGHT[c.severity][0] * Math.min(c.count, WEIGHT[c.severity][1]), 0);
-  return { generatedAt: new Date().toISOString(), score: Math.max(0, Math.round(100 - penalty)), checks };
+  return { generatedAt: new Date().toISOString(), score: healthScore(checks.map((c) => ({ severity: c.severity, open: c.count }))), checks };
 }

@@ -23,3 +23,4 @@ export * from "./query.js";
 export * from "./security/osv.js";
 export * from "./security/checklist.js";
 export * from "./quality/health.js";
+export * from "./quality/score.js";

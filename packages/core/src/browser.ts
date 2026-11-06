@@ -4,3 +4,4 @@ export * from "./search.js";
 export * from "./graph-utils.js";
 export type { ChecklistItem, CheckStatus } from "./security/checklist.js";
 export type { HealthCategory, HealthCheck, HealthHit, HealthReport, HealthSeverity } from "./quality/health.js";
+export { healthScore, type ScoreGroup } from "./quality/score.js";

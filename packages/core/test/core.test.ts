@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import {
+  healthScore,
   extractStructure, scanProject, scanAndSave, loadGraph, loadMeta, applyPatch, PatchValidationError, parseUnifiedDiff, computeImpact,
   GraphSearch, buildKnowledgeGraph, embedInDashboard, validateGraph, buildBatches, KnowledgeGraphSchema, globToRegExp, stripComments, isPlaceholderDbUrl, siteUrl,
   type KnowledgeGraph,
@@ -170,6 +171,15 @@ describe("code health", () => {
     expect(by.get("stale-docs")?.hits.map((h) => h.path)).toEqual(["IMPLEMENTATION_SUMMARY.md"]);
     expect(by.get("untested")?.severity).toBe("high"); // no tests at all
     expect(graph.health!.score).toBeLessThan(100);
+  });
+
+  // Regression: the Health header showed the scan-time score, so closing rows never changed it.
+  it("scores only what's still open", () => {
+    const allOpen = healthScore([{ severity: "high", open: 1 }, { severity: "low", open: 5 }]);
+    expect(allOpen).toBe(92);
+    expect(healthScore([{ severity: "high", open: 0 }, { severity: "low", open: 5 }])).toBe(98);
+    expect(healthScore([])).toBe(100);
+    expect(healthScore([{ severity: "high", open: 50 }])).toBe(70); // capped per group
   });
 });
 

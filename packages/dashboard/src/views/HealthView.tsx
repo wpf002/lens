@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { checkHitIds, reviewKey, type HealthCheck, type Severity } from "@lens/core/browser";
+import { checkHitIds, healthScore, reviewKey, type HealthCheck, type ScoreGroup, type Severity } from "@lens/core/browser";
 import type { ReviewRecord } from "../api";
 import { Evidence } from "../components/Checklist";
 import { IconChevronDown, IconChevronRight } from "../components/icons";
@@ -369,7 +369,7 @@ export function HealthView() {
   const [showClosed, setShowClosed] = useState(false);
   const health = model.graph.health;
 
-  const { checks, counts, manual, fixed, safe, wontFix } = useMemo(() => {
+  const { checks, counts, score, manual, fixed, safe, wontFix } = useMemo(() => {
     // Review ids are stable since stableSince; older records used other numbering. Check-hit ids are content hashes.
     const closed = new Set<string>(wontFixList);
     const fixed = new Set<string>();
@@ -393,17 +393,24 @@ export function HealthView() {
     }
     const checks = (health?.checks ?? []).filter((c) => c.count > 0);
     const counts = { high: 0, medium: 0, low: 0 };
-    for (const c of checks) counts[c.severity] += Math.max(0, c.count - checkHitIds(c).filter((id) => closed.has(id)).length);
+    const open: ScoreGroup[] = [];
+    for (const c of checks) {
+      const hits = Math.max(0, c.count - checkHitIds(c).filter((id) => closed.has(id)).length);
+      counts[c.severity] += hits;
+      open.push({ severity: c.severity, open: hits });
+    }
     (review?.findings ?? []).forEach((f, i) => {
-      if (!f.resolvedAt && !closed.has(`review-${i}`) && !wontFix.has(reviewKey(f))) counts[f.severity] += 1;
+      if (f.resolvedAt || closed.has(`review-${i}`) || wontFix.has(reviewKey(f))) return;
+      counts[f.severity] += 1;
+      open.push({ severity: f.severity, open: 1 });
     });
-    return { checks, counts, manual, fixed, safe, wontFix };
+    // Scored from open rows, so fixes and review findings move it. The scan-time score only saw automatic checks.
+    return { checks, counts, score: healthScore(open), manual, fixed, safe, wontFix };
   }, [health, review, reviewFixes, healthFixes, wontFixList]);
 
   if (!health) {
     return <EmptyState title="No health report" body="Rescan this project with the current version of Lens to run the code health checks." />;
   }
-  const score = health.score;
   const fixedLabel = push?.pr?.state === "merged" && !push.dirty ? "Merged" : push?.pr?.state === "open" ? `In PR #${push.pr.number}` : "Fixed";
   const statusOf = (f: ReviewRecord["findings"][number], i: number): ItemStatus => {
     const id = `review-${i}`;
