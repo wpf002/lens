@@ -184,6 +184,8 @@ export interface ExposurePath {
   entryId: string;
   /** Node ids from entry to finding node, inclusive. */
   path: string[];
+  /** True when request input was traced along this path into the sink. */
+  tainted?: boolean;
 }
 
 export interface SecurityReport {

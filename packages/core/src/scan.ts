@@ -21,6 +21,7 @@ import { fileNodeKind, isTestPath } from "./languages.js";
 import { detectEntryPoints, detectMounts, type EntryPoint, type Mount } from "./security/entrypoints.js";
 import { taintRegexFor } from "./security/rules.js";
 import { scanFile, finalizeSecurity, stripComments, type RawFinding } from "./security/analyze.js";
+import type { FunctionSource } from "./security/taint.js";
 import {
   buildHeuristicLayers, buildHeuristicTour, detectFrameworks, fileComplexity, functionComplexity, heuristicLayer, isFileKind, listPreview,
 } from "./heuristics.js";
@@ -66,6 +67,25 @@ const COMMON_NAMES = new Set([
   "update", "delete", "has", "add", "remove", "create", "next", "render", "use", "new", "handle", "process", "start", "stop", "execute", "resolve", "reject",
   "Error", "Promise", "Map", "Set", "Array", "Object", "String", "Number", "Boolean", "Date", "Math", "JSON", "require", "super", "self", "this",
 ]);
+
+/** Comment-stripped function bodies keyed by graph node id, for interprocedural taint. */
+function functionSources(recs: FileRec[], symId: (path: string, s: SymbolInfo) => string): Map<string, FunctionSource> {
+  const out = new Map<string, FunctionSource>();
+  for (const r of recs) {
+    const symbols = r.structure?.symbols.filter((s) => s.kind === "function") ?? [];
+    if (!symbols.length || isTestPath(r.f.path)) continue;
+    const lines = stripComments(r.src, r.f.lang.id).split("\n");
+    for (const s of symbols) {
+      const id = symId(r.f.path, s);
+      if (out.has(id)) continue;
+      out.set(id, {
+        lang: r.f.lang.id, startLine: s.lines[0], lines: lines.slice(s.lines[0] - 1, s.lines[1]), params: s.params,
+        receiverParam: r.f.lang.id === "python" && !!s.owner && /^(self|cls)$/.test(s.params[0] ?? ""),
+      });
+    }
+  }
+  return out;
+}
 
 export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promise<ScanResult> {
   const t0 = Date.now();
@@ -530,7 +550,7 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
       const inner = (symsByFile.get(p) ?? []).filter((s) => s.lines && s.lines[0] <= line && s.lines[1] >= line).sort((a, b) => b.lines![0] - a.lines![0])[0];
       return inner?.id ?? byPath.get(p)?.nodeId ?? `file:${p}`;
     };
-    security = finalizeSecurity({ graph: { nodes: nodeList, edges }, raw: recs.flatMap((r) => r.raw), locate, previous: prevGraph?.security });
+    security = finalizeSecurity({ graph: { nodes: nodeList, edges }, raw: recs.flatMap((r) => r.raw), locate, previous: prevGraph?.security, functions: functionSources(recs, symId) });
     security.checklist = buildChecklist({
       root,
       files: recs.map((r) => ({ path: r.f.path, src: r.src })),

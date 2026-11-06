@@ -106,6 +106,33 @@ describe("scan (vuln fixture)", () => {
     expect(path.at(-1)).toBe("function:src/services/userService.ts:findUser");
   });
 
+  const tracedPath = (findingId: string) =>
+    g.security!.exposure.find((e) => e.findingId === findingId && e.tainted)?.path ?? [];
+
+  it("traces request input across two files into a SQL sink", () => {
+    const f = g.security!.findings.find((x) => x.path === "src/db/reportQueries.ts" && x.line === 4)!;
+    expect(f.tainted).toBe(true);
+    expect(f.severity).toBe("critical");
+    expect(f.reachableFrom.some((id) => id.includes("/reports/:reportId"))).toBe(true);
+    const path = tracedPath(f.id);
+    expect(path).toContain("function:src/services/reportService.ts:loadReport");
+    expect(path.at(-1)).toBe("function:src/db/reportQueries.ts:queryReport");
+  });
+
+  it("traces request input across two files into an exec sink that needs taint", () => {
+    const f = g.security!.findings.find((x) => x.path === "src/lib/shell.ts" && x.line === 4)!;
+    expect(f.rule).toBe("js-spawn-tainted");
+    expect(f.tainted).toBe(true);
+    const path = tracedPath(f.id);
+    expect(path).toContain("function:src/services/reportService.ts:renderReport");
+    expect(path.at(-1)).toBe("function:src/lib/shell.ts:convertToPdf");
+    expect(f.message).toContain("renderReport → convertToPdf");
+  });
+
+  it("does not flag an exec sink whose input was sanitized upstream", () => {
+    expect(g.security!.findings.some((x) => x.path === "src/lib/shell.ts" && x.line === 8)).toBe(false);
+  });
+
   it("builds the pre-launch checklist from scanner findings and repo files", () => {
     const list = g.security!.checklist!;
     const by = new Map(list.map((c) => [c.id, c]));

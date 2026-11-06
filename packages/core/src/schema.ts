@@ -119,7 +119,7 @@ export const KnowledgeGraphSchema = z.object({
     rulesVersion: z.string(),
     entryPoints: z.array(z.string()),
     findings: z.array(FindingSchema),
-    exposure: z.array(z.object({ findingId: z.string(), entryId: z.string(), path: z.array(z.string()) })),
+    exposure: z.array(z.object({ findingId: z.string(), entryId: z.string(), path: z.array(z.string()), tainted: z.boolean().optional() })),
     summary: z.object({
       bySeverity: z.record(z.string(), z.number()),
       unguardedEndpoints: z.number(),
