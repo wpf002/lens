@@ -5,7 +5,7 @@
  */
 import http from "node:http";
 import https from "node:https";
-import type { LookupFunction } from "node:net";
+import net, { type LookupFunction } from "node:net";
 import { ProbeRefused, isSameOrigin, type ResolvedAddress } from "./allowlist.js";
 import { PROBE_MAX_REQUESTS_HARD, PROBE_RATE_LIMIT_MAX, type AccountHeaders } from "./config.js";
 import { PROBE_ORIGIN, type PlannedRequest } from "./plan.js";
@@ -14,6 +14,11 @@ export const PROBE_TIMEOUT_MS = 5_000;
 export const PROBE_BODY_CAP_BYTES = 256 * 1024;
 export const PROBE_MAX_SERVER_ERRORS = 10;
 export const PROBE_MAX_RETRY_AFTER_MS = 30_000;
+/** Stop when this many requests in a row fail to connect: the app went down or was never up. */
+export const PROBE_MAX_CONSECUTIVE_FAILURES = 5;
+/** Pause after a failed connection so a dev server restarting on file change can come back. */
+export const PROBE_CONNECTION_RETRY_DELAY_MS = 1_000;
+const CONNECT_CHECK_TIMEOUT_MS = 2_000;
 const DEFAULT_RETRY_AFTER_MS = 1_000;
 const USER_AGENT = "lens-probe";
 
@@ -57,6 +62,30 @@ export interface RunOptions {
 export interface RunResult {
   exchanges: Exchange[];
   stoppedReason?: string;
+}
+
+function acceptsConnections(address: ResolvedAddress, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: address.address, family: address.family, port, timeout: CONNECT_CHECK_TIMEOUT_MS });
+    const done = (ok: boolean) => {
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.once("connect", () => done(true));
+    socket.once("timeout", () => done(false));
+    socket.once("error", () => done(false));
+  });
+}
+
+/**
+ * Pick the first vetted address with something listening on the target port.
+ * localhost resolves to both ::1 and 127.0.0.1, and many dev servers bind only one.
+ * Opens a TCP connection and closes it; sends no HTTP.
+ */
+export async function findListeningAddress(addresses: ResolvedAddress[], target: URL): Promise<ResolvedAddress> {
+  const port = Number(target.port || (target.protocol === "https:" ? 443 : 80));
+  for (const address of addresses) if (await acceptsConnections(address, port)) return address;
+  throw new ProbeRefused(`Nothing is listening on ${target.host}. Start the app, then run the probe again.`);
 }
 
 const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -142,6 +171,7 @@ export async function runProbes(requests: PlannedRequest[], options: RunOptions)
   const exchanges: Exchange[] = [];
   let sent = 0;
   let serverErrors = 0;
+  let consecutiveFailures = 0;
   let nextSlot = now();
 
   const sendPaced = async (request: PlannedRequest, url: URL, headers: Record<string, string>) => {
@@ -164,6 +194,7 @@ export async function runProbes(requests: PlannedRequest[], options: RunOptions)
         await sleep(retryAfterMs(response.headers["retry-after"]));
         response = await sendPaced(request, url, headers);
       }
+      consecutiveFailures = 0;
       exchanges.push({ request, response });
       options.log?.({ ...entry, status: response.status, ms: response.ms });
       if (response.status >= 500 && ++serverErrors >= PROBE_MAX_SERVER_ERRORS) {
@@ -173,6 +204,10 @@ export async function runProbes(requests: PlannedRequest[], options: RunOptions)
       const message = error instanceof Error ? error.message : String(error);
       exchanges.push({ request, error: message });
       options.log?.({ ...entry, error: message });
+      if (++consecutiveFailures >= PROBE_MAX_CONSECUTIVE_FAILURES) {
+        return { exchanges, stoppedReason: `stopped after ${consecutiveFailures} failed connections in a row (${message})` };
+      }
+      await sleep(PROBE_CONNECTION_RETRY_DELAY_MS);
     }
   }
   return { exchanges };

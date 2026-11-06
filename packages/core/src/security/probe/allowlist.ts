@@ -78,6 +78,11 @@ const systemLookup: LookupAll = (host) => lookup(host, { all: true });
  * so a DNS change mid-run can't move traffic to another machine.
  */
 export async function resolveTarget(host: string, lookupAll: LookupAll = systemLookup): Promise<ResolvedAddress> {
+  return (await resolveTargetAddresses(host, lookupAll))[0]!;
+}
+
+/** Every address the target resolves to, each checked against the same rules. */
+export async function resolveTargetAddresses(host: string, lookupAll: LookupAll = systemLookup): Promise<ResolvedAddress[]> {
   const h = normalizeHost(host);
   const literal = net.isIP(h);
   const addresses = literal ? [{ address: h, family: literal }] : await lookupAll(h);
@@ -87,6 +92,5 @@ export async function resolveTarget(host: string, lookupAll: LookupAll = systemL
     if (mustBeLoopback && !isLoopback(a.address)) throw new ProbeRefused(`${h} resolves to ${a.address}, which isn't loopback.`);
     if (isForbiddenAddress(a.address)) throw new ProbeRefused(`${h} resolves to ${a.address}, a link-local or unspecified address.`);
   }
-  const first = addresses[0]!;
-  return { address: first.address, family: first.family === 6 ? 6 : 4 };
+  return addresses.map((a) => ({ address: a.address, family: a.family === 6 ? 6 : 4 }));
 }

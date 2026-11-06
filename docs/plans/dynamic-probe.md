@@ -91,3 +91,6 @@ Not in this change: a dashboard button. The CLI writes the graph, so results sho
 - Server actions are skipped: calling one needs the framework's action id, which the graph doesn't hold.
 - Regex-style routes (`re_path`, bare `*`) are skipped because they can't be filled in.
 - `lens probe` appends one line per request to `.lens/probe-log.jsonl` (gitignored). The log holds method, path, status, and timing, never headers.
+- Before sending, `lens probe` opens a TCP connection to each vetted address and pins the first one that accepts. `localhost` resolves to `::1` and `127.0.0.1`, and most dev servers bind only one. With nothing listening it stops before sending anything.
+- A failed connection pauses the run 1s so a dev server restarting on a file change can come back. Five failures in a row end the run.
+- First live run (brefach_studio, local API, 367 GETs): all requests answered, 1 new finding (missing security headers). With `API_SECRET` unset locally, every route answers without credentials. That's the local config, so auth results only mean something with the secret set.

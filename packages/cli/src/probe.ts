@@ -7,8 +7,8 @@ import { randomBytes } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { promises as fs, readFileSync } from "node:fs";
 import {
-  ProbeConfigSchema, applyProbeResults, checkTarget, evaluateExchanges, formatZodError, paths, planProbes,
-  resolveAccounts, resolveTarget, runProbes, type KnowledgeGraph, type ProbeConfig, type ProbeLogEntry, type ProbePlan,
+  ProbeConfigSchema, applyProbeResults, checkTarget, evaluateExchanges, findListeningAddress, formatZodError, paths, planProbes,
+  resolveAccounts, resolveTargetAddresses, runProbes, type KnowledgeGraph, type ProbeConfig, type ProbeLogEntry, type ProbePlan,
 } from "@lens/core";
 
 export const PROBE_CONFIG_FILE = "probe.json";
@@ -85,16 +85,17 @@ export async function runProbeCommand(root: string, graph: KnowledgeGraph, optio
   const target = parseTarget(options.target);
   const config = await loadProbeConfig(root);
   checkTarget({ target, stagingHost: options.stagingHost, homepageHost: hostOf(graph.project.homepage) });
-  const pinned = await resolveTarget(target.hostname);
+  const addresses = await resolveTargetAddresses(target.hostname);
   const accounts = resolveAccounts(config, process.env);
   const plan = planProbes(graph, config, { runId: randomBytes(RUN_ID_BYTES).toString("hex"), accountsConfigured: !!accounts });
 
   if (options.dryRun) {
-    if (options.json) io.out({ target: target.origin, pinnedAddress: pinned.address, ...plan });
+    if (options.json) io.out({ target: target.origin, addresses: addresses.map((a) => a.address), ...plan });
     else io.out(describePlan(plan, target).join("\n"));
     return false;
   }
 
+  const pinned = await findListeningAddress(addresses, target);
   const prompt = `Send ${plan.requests.length} requests to ${target.origin} (${pinned.address}) at ${config.rateLimit}/s?`;
   if (!options.yes) {
     if (!io.isTty) throw new ProbeCommandError("Pass --yes to probe without a terminal prompt.");

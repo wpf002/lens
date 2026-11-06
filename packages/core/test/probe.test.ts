@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import {
-  ProbeConfigSchema, ProbeRefused, applyProbeResults, assertRequestAllowed, checkTarget, evaluateExchanges, planProbes,
+  ProbeConfigSchema, ProbeRefused, applyProbeResults, assertRequestAllowed, checkTarget, evaluateExchanges, findListeningAddress, planProbes,
   resolveAccounts, resolveTarget, runProbes,
   type Finding, type GraphNode, type KnowledgeGraph, type PlannedRequest, type ProbeConfig, type ResolvedAddress,
 } from "../src/index.js";
@@ -212,6 +212,23 @@ describe("probe client", () => {
     const errors = await runProbes(Array.from({ length: 15 }, () => get("/boom")), baseOptions());
     expect(errors.exchanges).toHaveLength(10);
     expect(errors.stoppedReason).toMatch(/server errors/);
+  });
+  it("picks the address with a listener and refuses when nothing listens", async () => {
+    const both: ResolvedAddress[] = [{ address: "::1", family: 6 }, { address: "127.0.0.1", family: 4 }];
+    await expect(findListeningAddress(both, target)).resolves.toEqual({ address: "127.0.0.1", family: 4 });
+    const closed = await new Promise<number>((resolve) => {
+      const probe = http.createServer().listen(0, "127.0.0.1", () => {
+        const port = (probe.address() as AddressInfo).port;
+        probe.close(() => resolve(port));
+      });
+    });
+    await expect(findListeningAddress(both, new URL(`http://localhost:${closed}`))).rejects.toThrow(/Nothing is listening/);
+  });
+  it("stops after repeated connection failures", async () => {
+    const down = new URL("http://127.0.0.1:1");
+    const result = await runProbes(Array.from({ length: 20 }, () => get("/")), { ...baseOptions(), target: down });
+    expect(result.exchanges).toHaveLength(5);
+    expect(result.stoppedReason).toMatch(/failed connections/);
   });
   it("sends account headers only from the resolved env", async () => {
     expect(() => resolveAccounts(config(), {})).toThrow(/PROBE_A/);
