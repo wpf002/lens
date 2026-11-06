@@ -37,6 +37,7 @@ export const paths = (root: string) => {
     diff: path.join(dir, "diff.json"),
     ignore: path.join(dir, ".lensignore"),
     intermediate: path.join(dir, "intermediate"),
+    registryCache: path.join(dir, "registry-cache.json"),
   };
 };
 

@@ -57,13 +57,14 @@ program
   .option("--full", "ignore previous graph and fingerprints")
   .option("--exclude <globs>", "comma-separated gitignore-style patterns")
   .option("--no-security", "skip the security pass")
+  .option("--offline", "skip npm/PyPI registry lookups for supply-chain checks")
   .option("--json", "print the result summary as JSON")
   .action(async (dir, o) => {
     const root = resolveDir(dir);
     if (!existsSync(root)) fail(`No such directory: ${root}`);
     const r = await scanAndSave(root, {
       full: o.full, exclude: o.exclude ? String(o.exclude).split(",").map((s: string) => s.trim()).filter(Boolean) : undefined,
-      noSecurity: o.security === false, onProgress: o.json ? undefined : log,
+      noSecurity: o.security === false, offline: o.offline === true, onProgress: o.json ? undefined : log,
     });
     const g = r.graph;
     const summary = {

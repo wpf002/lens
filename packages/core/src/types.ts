@@ -160,7 +160,7 @@ export interface Finding {
   category:
     | "injection" | "command-exec" | "code-exec" | "xss" | "ssrf" | "path-traversal"
     | "deserialization" | "secrets" | "crypto" | "tls" | "auth" | "config"
-    | "redirect" | "mass-assignment" | "dependency";
+    | "redirect" | "mass-assignment" | "dependency" | "supply-chain";
   cwe?: string;
   severity: Severity;
   confidence: Confidence;

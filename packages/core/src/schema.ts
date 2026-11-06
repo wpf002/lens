@@ -279,7 +279,7 @@ export const TriagePatchSchema = z.object({
   added: z.array(z.object({
     rule: z.string().regex(/^[a-z0-9-]+$/),
     title: prose(120),
-    category: z.enum(["injection", "command-exec", "code-exec", "xss", "ssrf", "path-traversal", "deserialization", "secrets", "crypto", "tls", "auth", "config", "redirect", "mass-assignment", "dependency"]),
+    category: z.enum(["injection", "command-exec", "code-exec", "xss", "ssrf", "path-traversal", "deserialization", "secrets", "crypto", "tls", "auth", "config", "redirect", "mass-assignment", "dependency", "supply-chain"]),
     cwe: z.string().regex(/^CWE-\d+$/).optional(),
     severity,
     confidence: z.enum(["high", "medium", "low"]),

@@ -1,0 +1,61 @@
+/**
+ * Widely used npm and PyPI packages. A dependency close in spelling to one of
+ * these, but not on the list itself, is a typosquat candidate. Packages here are
+ * also trusted to run install scripts and are never flagged as new.
+ */
+
+export const POPULAR_NPM: ReadonlySet<string> = new Set([
+  "react", "react-dom", "preact", "vue", "svelte", "solid-js", "angular", "@angular/core", "next", "nuxt", "gatsby", "astro", "remix", "@remix-run/react",
+  "express", "koa", "fastify", "hapi", "@hapi/hapi", "hono", "nestjs", "@nestjs/core", "@nestjs/common", "restify", "polka", "connect",
+  "lodash", "lodash-es", "underscore", "ramda", "immer", "immutable", "rxjs", "date-fns", "dayjs", "moment", "luxon", "uuid", "nanoid", "ms",
+  "axios", "node-fetch", "cross-fetch", "got", "ky", "superagent", "undici", "request", "isomorphic-fetch", "form-data", "qs", "query-string",
+  "chalk", "picocolors", "kleur", "colors", "debug", "commander", "yargs", "minimist", "meow", "inquirer", "prompts", "ora", "cli-progress",
+  "dotenv", "cross-env", "env-cmd", "rimraf", "mkdirp", "glob", "fast-glob", "globby", "minimatch", "micromatch", "chokidar", "fs-extra", "graceful-fs",
+  "typescript", "ts-node", "tsx", "tslib", "@types/node", "@types/react", "@types/react-dom", "@types/express", "@types/jest",
+  "babel-core", "@babel/core", "@babel/preset-env", "@babel/preset-react", "@babel/runtime", "babel-loader", "babel-cli", "@babel/cli",
+  "webpack", "webpack-cli", "webpack-dev-server", "rollup", "vite", "esbuild", "parcel", "turbo", "nx", "lerna", "swc", "@swc/core", "terser", "uglify-js",
+  "jest", "vitest", "mocha", "chai", "sinon", "jasmine", "ava", "tap", "supertest", "nock", "cypress", "playwright", "@playwright/test", "puppeteer",
+  "eslint", "prettier", "stylelint", "husky", "lint-staged", "nodemon", "concurrently", "npm-run-all", "pm2", "forever",
+  "jsonwebtoken", "jose", "bcrypt", "bcryptjs", "argon2", "passport", "passport-jwt", "passport-local", "next-auth", "helmet", "cors", "csurf", "express-session",
+  "cookie-parser", "body-parser", "multer", "morgan", "compression", "express-rate-limit", "http-proxy-middleware", "serve-static",
+  "mongoose", "mongodb", "pg", "mysql", "mysql2", "sqlite3", "better-sqlite3", "redis", "ioredis", "sequelize", "typeorm", "prisma", "@prisma/client", "knex", "drizzle-orm",
+  "zod", "joi", "yup", "ajv", "valibot", "class-validator", "superstruct",
+  "socket.io", "socket.io-client", "ws", "graphql", "apollo-server", "@apollo/client", "@apollo/server", "graphql-tag", "urql",
+  "redux", "react-redux", "@reduxjs/toolkit", "zustand", "jotai", "recoil", "mobx", "mobx-react", "xstate", "swr", "@tanstack/react-query", "react-query",
+  "react-router", "react-router-dom", "styled-components", "@emotion/react", "@emotion/styled", "tailwindcss", "postcss", "autoprefixer", "sass", "less",
+  "classnames", "clsx", "framer-motion", "react-hook-form", "formik", "react-select", "react-icons", "lucide-react", "@mui/material", "antd", "bootstrap",
+  "jquery", "d3", "chart.js", "three", "leaflet", "highlight.js", "marked", "markdown-it", "remark", "rehype", "unified", "handlebars", "ejs", "pug", "mustache",
+  "cheerio", "jsdom", "xml2js", "fast-xml-parser", "js-yaml", "yaml", "csv-parse", "papaparse", "semver", "async", "bluebird", "p-limit", "p-queue",
+  "winston", "pino", "bunyan", "log4js", "sharp", "jimp", "canvas", "node-gyp", "nan", "node-sass", "fsevents", "core-js", "regenerator-runtime",
+  "electron", "electron-builder", "aws-sdk", "@aws-sdk/client-s3", "firebase", "firebase-admin", "@supabase/supabase-js", "stripe", "twilio", "nodemailer",
+  "openai", "@anthropic-ai/sdk", "ai", "langchain", "@langchain/core", "@google/generative-ai", "cohere-ai",
+  "crypto-js", "node-forge", "tweetnacl", "elliptic", "bn.js", "ethers", "web3", "buffer", "events", "util", "path-browserify", "process", "readable-stream",
+  "inherits", "safe-buffer", "string_decoder", "object-assign", "is-number", "kind-of", "isarray", "once", "wrappy", "inflight", "deepmerge", "fast-deep-equal",
+  "json5", "source-map", "source-map-support", "esprima", "acorn", "estraverse", "escodegen", "recast", "jscodeshift", "browserslist", "caniuse-lite",
+  "tslint", "react-dnd", "@faker-js/faker", "chance", "validator", "sanitize-html", "dompurify", "xss",
+  "serve", "http-server", "live-server", "open", "execa", "cross-spawn", "shelljs", "zx", "node-cron", "cron", "bull", "bullmq", "agenda",
+]);
+
+export const POPULAR_PYPI: ReadonlySet<string> = new Set([
+  "requests", "urllib3", "httpx", "aiohttp", "httplib2", "certifi", "idna", "charset-normalizer", "chardet", "six", "setuptools", "wheel", "pip",
+  "numpy", "pandas", "scipy", "matplotlib", "seaborn", "plotly", "scikit-learn", "scikit-image", "statsmodels", "sympy", "numba", "polars", "pyarrow",
+  "tensorflow", "keras", "torch", "torchvision", "torchaudio", "jax", "transformers", "tokenizers", "datasets", "accelerate", "diffusers", "sentence-transformers",
+  "openai", "anthropic", "langchain", "langchain-core", "langchain-openai", "llama-index", "tiktoken", "huggingface-hub", "cohere", "google-generativeai",
+  "django", "djangorestframework", "django-cors-headers", "django-environ", "django-allauth", "flask", "flask-cors", "flask-sqlalchemy", "flask-login",
+  "fastapi", "starlette", "uvicorn", "gunicorn", "werkzeug", "jinja2", "markupsafe", "itsdangerous", "click", "typer", "rich", "colorama", "tqdm",
+  "pydantic", "pydantic-core", "pydantic-settings", "marshmallow", "attrs", "dataclasses-json", "python-dotenv", "pyyaml", "toml", "tomli", "orjson", "ujson", "simplejson",
+  "sqlalchemy", "alembic", "psycopg2", "psycopg2-binary", "psycopg", "asyncpg", "pymysql", "mysqlclient", "pymongo", "motor", "redis", "celery", "kombu", "rq",
+  "boto3", "botocore", "s3transfer", "awscli", "google-cloud-storage", "google-api-python-client", "google-auth", "azure-core", "azure-storage-blob",
+  "cryptography", "pyopenssl", "pycryptodome", "bcrypt", "passlib", "pyjwt", "python-jose", "authlib", "oauthlib", "requests-oauthlib", "paramiko",
+  "pytest", "pytest-cov", "pytest-asyncio", "pytest-mock", "coverage", "tox", "nox", "hypothesis", "mock", "faker", "factory-boy", "responses",
+  "black", "flake8", "pylint", "mypy", "ruff", "isort", "autopep8", "yapf", "pre-commit", "bandit",
+  "beautifulsoup4", "lxml", "html5lib", "scrapy", "selenium", "playwright", "pillow", "opencv-python", "imageio",
+  "python-dateutil", "pytz", "tzdata", "arrow", "pendulum", "dateparser", "babel",
+  "packaging", "pyparsing", "filelock", "platformdirs", "virtualenv", "poetry", "pipenv", "twine", "build", "hatchling", "flit",
+  "docker", "kubernetes", "ansible", "fabric", "invoke", "psutil", "watchdog", "schedule", "apscheduler", "grpcio", "protobuf",
+  "websockets", "websocket-client", "pyzmq", "tornado", "twisted", "gevent", "eventlet", "greenlet", "uvloop", "anyio", "sniffio", "h11",
+  "jsonschema", "openpyxl", "xlrd", "xlsxwriter", "python-docx", "pypdf", "pypdf2", "reportlab", "markdown", "mistune", "pygments", "docutils", "sphinx",
+  "networkx", "joblib", "dill", "cloudpickle", "msgpack", "cachetools", "tenacity", "backoff", "retry", "wrapt", "decorator", "deprecated", "typing-extensions",
+  "sentry-sdk", "loguru", "structlog", "prometheus-client", "opentelemetry-api", "stripe", "twilio", "slack-sdk", "discord.py", "tweepy",
+  "streamlit", "gradio", "dash", "bokeh", "jupyter", "notebook", "jupyterlab", "ipython", "ipykernel", "nltk", "spacy", "gensim", "xgboost", "lightgbm", "catboost",
+]);

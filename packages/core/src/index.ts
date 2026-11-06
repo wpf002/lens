@@ -22,5 +22,8 @@ export * from "./embeddings.js";
 export * from "./query.js";
 export * from "./security/osv.js";
 export * from "./security/checklist.js";
+export * from "./security/supply-chain.js";
+export * from "./security/manifests.js";
+export { RegistryClient, type RegistryFetch, type SkipReason } from "./security/registry.js";
 export * from "./quality/health.js";
 export * from "./quality/score.js";
