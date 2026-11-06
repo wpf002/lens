@@ -10,9 +10,11 @@ import type { GraphEdge, GraphNode } from "../types.js";
 import type { ImportInfo, SymbolInfo } from "../extract.js";
 import { stripComments } from "../security/analyze.js";
 import { healthScore } from "./score.js";
+import { CODE_LANGS, GENERATED, JS_LANGS, MAX_HITS, lineOf, push } from "./common.js";
+import { aiTellChecks } from "./tells.js";
 
 export type HealthSeverity = "high" | "medium" | "low";
-export type HealthCategory = "errors" | "dead-code" | "duplication" | "leftovers" | "types" | "structure" | "tests" | "dependencies" | "docs";
+export type HealthCategory = "errors" | "dead-code" | "duplication" | "leftovers" | "types" | "structure" | "tests" | "dependencies" | "docs" | "habits";
 
 export interface HealthHit {
   path: string;
@@ -56,12 +58,8 @@ export interface HealthInput {
   deps: Record<string, string>;
 }
 
-const MAX_HITS = 40;
-const CODE_LANGS = new Set(["typescript", "tsx", "javascript", "python", "go", "rust", "java", "kotlin", "ruby", "php", "csharp", "swift", "dart"]);
-const JS_LANGS = new Set(["typescript", "tsx", "javascript"]);
 const ENTRY_RE = /(^|\/)(src\/)?(index|main|app|server|cli|__main__|__init__|manage|wsgi|asgi|program|Application|conftest|setup|vite\.config|next\.config|tailwind\.config|postcss\.config|eslint\.config|vitest\.config|jest\.config)\.[a-z]+$/i;
 const FRAMEWORK_ROUTE_DIR = /(^|\/)(pages|app|routes|api|migrations|alembic|scripts|bin|cmd)\//;
-const GENERATED = /(^|\/)(dist|build|out|vendor|generated|__generated__|\.next)\//;
 
 /** Names frameworks call by convention; never "dead". */
 const CONVENTION_NAMES = new Set([
@@ -70,12 +68,6 @@ const CONVENTION_NAMES = new Set([
   "getServerSideProps", "getStaticProps", "getStaticPaths", "lifespan", "startup", "shutdown",
   "render", "constructor", "configure", "register", "init", "run", "app", "create_app",
 ]);
-
-const lineOf = (src: string, index: number) => src.slice(0, index).split("\n").length;
-
-function push(hits: HealthHit[], h: HealthHit) {
-  if (hits.length < MAX_HITS) hits.push(h);
-}
 
 /** Count every identifier token across the project (comments stripped), for "is this name used anywhere?". */
 function identifierCounts(files: HealthFile[]): Map<string, number> {
@@ -141,6 +133,9 @@ const PY_IMPORT_NAME: Record<string, string> = {
 };
 /** Packages used from the command line, config, or as plugins rather than imported. */
 const TOOLING = /^(@types\/|typescript$|eslint|@eslint\/|prettier|vite$|@vitejs\/|vitest|@vitest\/|jest|@jest\/|ts-jest|tailwindcss|@tailwindcss\/|postcss|autoprefixer|husky|lint-staged|ts-node|tsx$|nodemon|concurrently|turbo$|rimraf|cross-env|npm-run-all|@testing-library\/|playwright|@playwright\/|cypress|webpack|babel|@babel\/|rollup|esbuild|swc|@swc\/|uvicorn|gunicorn|pytest|black$|ruff$|mypy|flake8|isort|coverage|pre-commit|hypercorn|wheel$|setuptools|pip-tools|types-)/i;
+
+/** Packages that wrap a single expression the language already has. */
+const TRIVIAL_PACKAGES = new Set(["left-pad", "is-number", "is-odd", "is-even", "is-array", "is-string", "is-boolean", "is-function", "is-object", "is-plain-object", "is-undefined", "is-null", "isarray", "is-positive", "is-negative", "is-integer", "array-flatten", "array-uniq", "noop", "noop2", "object-assign"]);
 
 /**
  * Direct dependencies only: package.json, and requirements.in / pyproject when present
@@ -428,10 +423,11 @@ export function buildHealth(input: HealthInput): HealthReport {
       const jsHit = used.has(name);
       const py = (PY_IMPORT_NAME[name.toLowerCase()] ?? name).toLowerCase().replace(/-/g, "_").replace(/\[.*$/, "");
       const pyHit = used.has(py) || used.has(py.split("_")[0]!);
+      if (TRIVIAL_PACKAGES.has(name) && jsHit) push(hits, { path: "", detail: `${name} replaces a one-line check; inline it` });
       if (jsHit || pyHit) continue;
       push(hits, { path: "", detail: `${name} is declared but never imported` });
     }
-    add({ id: "unused-deps", title: "Possibly Unused Dependencies", category: "dependencies", severity: "low", hits, fix: "Remove packages nothing imports. Each one adds install time and supply-chain risk." });
+    add({ id: "unused-deps", title: "Unneeded Dependencies", category: "dependencies", severity: "low", hits, fix: "Remove packages nothing imports, and inline one-line packages. Each one adds install time and supply-chain risk." });
   }
 
   /* ---------- docs ---------- */
@@ -460,6 +456,8 @@ export function buildHealth(input: HealthInput): HealthReport {
     }
     add({ id: "stale-docs", title: "Stale Docs", category: "docs", severity: "low", hits, fix: "Delete notes that described one session's work, or fold what's still true into the README or docs/." });
   }
+
+  for (const c of aiTellChecks({ root, files, code, prod })) add(c);
 
   return { generatedAt: new Date().toISOString(), score: healthScore(checks.map((c) => ({ severity: c.severity, open: c.count }))), checks };
 }

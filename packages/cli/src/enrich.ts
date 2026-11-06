@@ -167,7 +167,7 @@ async function recordDuration(root: string, kind: "audit" | "review", ms: number
 export const MAX_BUDGET_USD = 20;
 const TIMEOUT_MS = 45 * 60_000;
 /** Checks whose fixes are refactors: each item gets its own Claude run and a larger cap. */
-export const REFACTOR_CHECKS = new Set(["oversized", "hotspots", "import-cycles"]);
+export const REFACTOR_CHECKS = new Set(["oversized", "hotspots", "import-cycles", "fragmented"]);
 export const REFACTOR_ITEM_LIMIT_USD = 8;
 const REFACTOR_ITEM_LOW_USD = 1;
 const REFACTOR_ITEM_HIGH_USD = 4;
