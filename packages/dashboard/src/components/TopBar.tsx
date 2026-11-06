@@ -1,6 +1,8 @@
 import { useStore } from "../store";
 import { VIEW_LABEL, VIEW_ORDER, type ViewId } from "../types";
+import { useMemo } from "react";
 import { activeFilterCount } from "../utils/filters";
+import { appliedFixItemIds, urgentOpenCount } from "../utils/security";
 import { useModel } from "../views/hooks";
 import { ExportMenu } from "./ExportMenu";
 import { IconDiff, IconFilter, IconHelp, IconLayers, IconFolder, IconMenu, IconRoute, IconX, LensMark } from "./icons";
@@ -17,7 +19,8 @@ function ViewTabs({ vertical }: { vertical?: boolean }) {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
   const views = useVisibleViews();
-  const hot = (model.graph.security?.findings ?? []).filter((f) => (f.severity === "critical" || f.severity === "high") && f.status !== "false_positive" && f.status !== "accepted").length;
+  const auditFixes = useStore((s) => s.remediation.audit);
+  const hot = useMemo(() => urgentOpenCount(model.graph.security?.findings ?? [], appliedFixItemIds(auditFixes)), [model, auditFixes]);
   return (
     <div role="tablist" aria-label="Views" className={cx("flex", vertical ? "flex-col gap-0.5" : "h-8 items-center gap-0.5 rounded-md border border-line bg-panel-2 p-0.5")}>
       {views.map((v) => {

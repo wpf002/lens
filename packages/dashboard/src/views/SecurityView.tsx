@@ -7,7 +7,7 @@ import { EmptyState, SeverityBadge, cx } from "../components/ui";
 import { FixAllButton } from "../components/Remediation";
 import { useStore } from "../store";
 import { AUTH_COLOR, SEVERITIES, SEVERITY_COLOR } from "../utils/colors";
-import { buildSecurity, endpointCounts, filterFindings, isClosedFinding, mergeChecklist, splitFindings } from "../utils/security";
+import { appliedFixItemIds, buildSecurity, endpointCounts, filterFindings, isClosedFinding, mergeChecklist, splitFindings } from "../utils/security";
 import { useCompiledFilters, useModel, useOverlayInput } from "./hooks";
 
 const STATUSES: Finding["status"][] = ["open", "confirmed", "false_positive", "accepted"];
@@ -57,7 +57,7 @@ export function SecurityView() {
   const remediation = useStore((s) => s.remediation.audit);
   const checklist = useMemo(() => mergeChecklist(model.graph.security?.checklist ?? [], audit), [model, audit]);
   const gaps = checklist.filter((c) => c.status === "fail").length;
-  const fixed = useMemo(() => new Set((remediation?.fixes ?? []).filter((f) => f.status === "applied").map((f) => f.itemId)), [remediation]);
+  const fixed = useMemo(() => appliedFixItemIds(remediation), [remediation]);
   const isFixed = (f: Finding) => fixed.has(findingItemId(f));
   const sec = model.graph.security;
   const vm = useMemo(() => buildSecurity(model, cf, sf), [model, cf, sf]);

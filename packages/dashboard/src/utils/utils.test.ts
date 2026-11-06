@@ -12,7 +12,7 @@ import { columnLayout, computeLayout, fallbackElk, shelfPack, type ElkLike } fro
 import { toMermaid } from "./mermaid";
 import { buildModel, commonDir } from "./model";
 import { computeOverlay } from "./overlay";
-import { buildSecurity, DEFAULT_SECURITY_FILTER, filterFindings, findingFocus, splitFindings } from "./security";
+import { buildSecurity, DEFAULT_SECURITY_FILTER, filterFindings, findingFocus, splitFindings, urgentOpenCount } from "./security";
 import { findingItemId } from "@lens/core/browser";
 import { buildFileTree } from "./tree";
 import { validateGraph } from "./validate";
@@ -145,6 +145,11 @@ describe("security view", () => {
     const { open, closed } = splitFindings(all, new Set([findingItemId(all[3]!)]));
     expect(open.map((f) => f.id)).toEqual(["C"]);
     expect(closed.map((f) => f.id).sort()).toEqual(["A", "B", "D"]);
+  });
+  it("Security tab count skips high findings Lens already fixed", () => {
+    const high = { ...graph.security!.findings[0]!, severity: "high" as const, status: "open" as const };
+    expect(urgentOpenCount([high], new Set())).toBe(1);
+    expect(urgentOpenCount([high], new Set([findingItemId(high)]))).toBe(0);
   });
 });
 

@@ -1,5 +1,5 @@
 import { effectiveAuth, findingItemId, publicByTriage, type ChecklistItem, type EndpointMeta, type Finding, type GraphNode, type Severity } from "@lens/core/browser";
-import type { AuditRecord } from "../api";
+import type { AuditRecord, RemediationRecord } from "../api";
 import type { VEdge, VNode, ViewModel } from "../types";
 import { SEVERITY_RANK, layerColor } from "./colors";
 import type { CompiledFilters } from "./filters";
@@ -20,6 +20,15 @@ export function filterFindings(findings: Finding[], f: SecurityFilter): Finding[
       (!f.categories.length || f.categories.includes(x.category)) &&
       (!f.statuses.length || f.statuses.includes(x.status)),
   );
+}
+
+export function appliedFixItemIds(record: RemediationRecord | null | undefined): Set<string> {
+  return new Set((record?.fixes ?? []).filter((f) => f.status === "applied").map((f) => f.itemId));
+}
+
+/** Open critical and high findings: the number on the Security tab. */
+export function urgentOpenCount(findings: Finding[], fixedItemIds: ReadonlySet<string>): number {
+  return findings.filter((f) => (f.severity === "critical" || f.severity === "high") && !isClosedFinding(f, fixedItemIds)).length;
 }
 
 /** Fixed, No Fix Needed, and Won't Fix rows. They aren't work, so they leave the main list and the counts. */
