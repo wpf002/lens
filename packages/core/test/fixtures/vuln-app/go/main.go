@@ -13,7 +13,7 @@ func reportHandler(w http.ResponseWriter, r *http.Request) {
 
 func archiveHandler(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("name")
-	store.Archive(name)
+	store.Archive("/tmp", name)
 }
 
 func main() {

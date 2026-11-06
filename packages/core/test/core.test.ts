@@ -151,7 +151,7 @@ describe("scan (vuln fixture)", () => {
     expect(tracedPath(f.id)).toEqual([]);
   });
 
-  it("traces Go request input across packages into SQL and shell sinks", () => {
+  it("traces Go request input across packages into SQL and shell sinks, including grouped params", () => {
     const sql = g.security!.findings.find((x) => x.path === "go/store/store.go" && x.line === 11)!;
     expect(sql.tainted).toBe(true);
     expect(tracedPath(sql.id)).toEqual(["endpoint:go/main.go:ANY /report", "function:go/main.go:reportHandler", "function:go/store/store.go:Find"]);

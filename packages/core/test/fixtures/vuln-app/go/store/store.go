@@ -13,6 +13,6 @@ func Find(id string) string {
 	return ""
 }
 
-func Archive(name string) {
-	exec.Command("sh", "-c", "tar czf /tmp/"+name+".tgz /var/reports").Run()
+func Archive(dir, name string) {
+	exec.Command("sh", "-c", "tar czf "+dir+"/"+name+".tgz /var/reports").Run()
 }

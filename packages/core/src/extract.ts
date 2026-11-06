@@ -174,14 +174,23 @@ function signatureOf(n: SyntaxNode): string {
   return text.replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
+/** Parameters recorded per function. */
+const MAX_PARAMS = 12;
+
 function paramsOf(n: SyntaxNode): string[] {
   const p = n.childForFieldName("parameters") ?? findDesc(n, (x) => /parameters|parameter_list|formal_parameters|function_value_parameters/.test(x.type), 3);
   if (!p) return [];
   const out: string[] = [];
-  for (let i = 0; i < p.namedChildCount && out.length < 12; i++) {
+  for (let i = 0; i < p.namedChildCount && out.length < MAX_PARAMS; i++) {
     const c = p.namedChild(i)!;
     if (/comment/.test(c.type)) continue;
-    const nm = c.childForFieldName("name") ?? c.childForFieldName("pattern") ?? (NAME_TYPES.has(c.type) ? c : firstNamed(c, NAME_TYPES));
+    // Go groups names that share a type (`a, b string`) under one declaration with several name fields.
+    const names = c.childrenForFieldName("name").filter((x): x is SyntaxNode => !!x);
+    if (names.length > 1) {
+      for (const x of names) if (out.length < MAX_PARAMS) out.push(x.text.slice(0, 40));
+      continue;
+    }
+    const nm = names[0] ?? c.childForFieldName("pattern") ?? (NAME_TYPES.has(c.type) ? c : firstNamed(c, NAME_TYPES));
     out.push((nm ?? c).text.slice(0, 40));
   }
   return out;
