@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  template:
+    spec:
+      hostNetwork: true
+      containers:
+        - name: api
+          image: example/api:1.0
+          securityContext:
+            privileged: true
+            allowPrivilegeEscalation: true
+            runAsUser: 0
+          env:
+            - name: DB_PASSWORD
+              value: fixture-password
+          volumeMounts:
+            - name: docker
+              mountPath: /var/run/docker.sock
+      volumes:
+        - name: docker
+          hostPath:
+            path: /var/run/docker.sock

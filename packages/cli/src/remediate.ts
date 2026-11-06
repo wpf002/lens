@@ -144,6 +144,34 @@ export function markUnaddressed(rec: Pick<RemediationRecord, "fixes" | "skipped"
   return missing.length;
 }
 
+const WORKFLOW_EVIDENCE = /^\.github\/workflows\/[^\s:]+(?::(\d+))?\s*(.*)$/;
+const REASON_MAX = 600;
+
+/**
+ * GitHub rejects pushes that touch .github/workflows without the workflow scope, so Lens
+ * never edits those files. Items whose evidence is all in workflows go straight to the
+ * owner with the exact file, line, and change; everything else goes to Claude.
+ */
+export function splitWorkflowItems<T>(items: T[]): { forClaude: T[]; ownerOnly: Remediation["skipped"] } {
+  const forClaude: T[] = [];
+  const ownerOnly: Remediation["skipped"] = [];
+  for (const item of items) {
+    const { id, evidence } = (item ?? {}) as { id?: unknown; evidence?: unknown };
+    const lines = Array.isArray(evidence) ? evidence.filter((e): e is string => typeof e === "string") : [];
+    if (typeof id !== "string" || !lines.length || !lines.every((e) => WORKFLOW_EVIDENCE.test(e))) {
+      forClaude.push(item);
+      continue;
+    }
+    const where = lines.map((e) => {
+      const [, line, message] = WORKFLOW_EVIDENCE.exec(e)!;
+      const file = e.split(/[\s:]/)[0];
+      return `${file}${line ? ` line ${line}` : ""}: ${message}`;
+    });
+    ownerOnly.push({ itemId: id, reason: `Outside code: GitHub won't accept workflow changes from Lens. Edit ${where.join(" Also ")}`.slice(0, REASON_MAX) });
+  }
+  return { forClaude, ownerOnly };
+}
+
 export async function loadRemediation(root: string, source: RemediationSource): Promise<RemediationRecord | null> {
   const rec = await readJson<RemediationRecord>(remediationPath(root, source));
   if (rec) return rec;

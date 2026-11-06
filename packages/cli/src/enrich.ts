@@ -13,7 +13,7 @@ import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_pro
 import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyFixes, buildRecord, loadRemediation, markUnaddressed, remediationPath, type RemediationSource } from "./remediate.js";
+import { applyFixes, buildRecord, loadRemediation, markUnaddressed, remediationPath, splitWorkflowItems, type RemediationSource } from "./remediate.js";
 import { collectChanges, makeWorkspace } from "./workspace.js";
 import { AuditVerdictsSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type KnowledgeGraph } from "@lens/core";
 
@@ -738,7 +738,14 @@ export class EnrichRunner {
    * Let Claude edit a copy of the project, then diff the copy into whole-file edits.
    * The project itself is untouched until applyFixes, which backs files up for Undo.
    */
-  private async draftFixes(job: EnrichJob, items: unknown[], single: boolean): Promise<{ data: Remediation | null; error?: string }> {
+  private async draftFixes(job: EnrichJob, allItems: unknown[], single: boolean): Promise<{ data: Remediation | null; error?: string }> {
+    const { forClaude: items, ownerOnly } = splitWorkflowItems(allItems);
+    if (!items.length) return { data: { fixes: [], skipped: ownerOnly } };
+    const { data, error } = await this.draftFixesWithClaude(job, items, single);
+    return { data: data ? { ...data, skipped: [...ownerOnly, ...data.skipped] } : null, error };
+  }
+
+  private async draftFixesWithClaude(job: EnrichJob, items: unknown[], single: boolean): Promise<{ data: Remediation | null; error?: string }> {
     const instructions = agentInstructions("remediator");
     if (!existsSync(instructions)) throw new Error(`missing ${instructions}`);
     this.push(job, "Copying the project");
