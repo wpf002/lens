@@ -27,6 +27,8 @@ export interface TestGate {
   attempts: number;
   /** Set by the server while a repair run is going. */
   repairing?: boolean;
+  /** When Lens asked GitHub to re-run stale base-commit checks for this head commit. */
+  baseRerunAt?: number;
 }
 export interface RunResult {
   name: string;
@@ -46,6 +48,10 @@ export const MAX_TEST_REPAIRS = 2;
 const CI_START_GRACE_MS = 10 * 60_000;
 const MAX_TESTS_LISTED = 50;
 const EXCERPT_CHARS = 3_000;
+/** A base-commit pass older than this may hide drift (a new package release, an expired cert), so it's re-run before Lens is blamed. */
+const BASE_STALE_MS = 6 * 60 * 60_000;
+/** How long to wait for those re-runs before comparing anyway. */
+const BASE_RERUN_WAIT_MS = 30 * 60_000;
 const FAILED_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
 
 const gatePath = (root: string) => path.join(paths(root).dir, "test-gate.json");
@@ -111,7 +117,12 @@ export function compareRuns(head: RunResult[], base: RunResult[]): { broken: Bro
   return { broken, preexisting };
 }
 
-type CheckRun = { id: number; name: string; status: string; conclusion: string | null; output?: { title?: string | null; summary?: string | null; text?: string | null } };
+type CheckRun = { id: number; name: string; status: string; conclusion: string | null; completed_at?: string | null; output?: { title?: string | null; summary?: string | null; text?: string | null } };
+
+/** Base-commit runs that passed long enough ago that a failure on the PR may be drift, not Lens. */
+export function staleBaseRuns<T extends { name: string; completed_at?: string | null }>(broken: BrokenCheck[], baseRuns: T[], now: number): T[] {
+  return baseRuns.filter((r) => broken.some((b) => b.name === r.name) && !!r.completed_at && now - Date.parse(r.completed_at) > BASE_STALE_MS);
+}
 
 async function checkRuns(repo: string, sha: string): Promise<CheckRun[]> {
   const res = (await githubApi(`/repos/${repo}/commits/${sha}/check-runs?per_page=100`)) as { check_runs: CheckRun[] };
@@ -150,10 +161,20 @@ export async function testGate(root: string, input: GateInput, now = Date.now())
   if (runs.some((r) => r.status !== "completed")) return base;
   const head = await Promise.all(runs.map((r) => runResult(input.repo, r)));
   const failedNames = new Set(head.filter((r) => r.failed).map((r) => r.name));
-  const baseRuns = failedNames.size ? (await checkRuns(input.repo, input.baseSha).catch(() => [])).filter((r) => failedNames.has(r.name) && r.status === "completed") : [];
+  const allBase = failedNames.size ? (await checkRuns(input.repo, input.baseSha).catch(() => [])).filter((r) => failedNames.has(r.name)) : [];
+  const requested = saved?.pr === input.pr && saved.sha === input.headSha ? saved.baseRerunAt : undefined;
+  // Re-runs requested for this head commit are still going.
+  if (requested && now - requested < BASE_RERUN_WAIT_MS && allBase.some((r) => r.status !== "completed")) return base;
+  const baseRuns = allBase.filter((r) => r.status === "completed");
   const before = await Promise.all(baseRuns.map((r) => runResult(input.repo, r)));
   const { broken, preexisting } = compareRuns(head, before);
-  return save(root, { ...base, state: broken.length ? "broken" : "passed", broken, preexisting });
+  const stale = requested ? [] : staleBaseRuns(broken, baseRuns, now);
+  if (stale.length) {
+    // Check runs from Actions are jobs, so each re-runs on its own. Without permission to re-run, compare as before.
+    const asked = await Promise.all(stale.map((r) => githubApi(`/repos/${input.repo}/actions/jobs/${r.id}/rerun`, "POST").then(() => true, () => false)));
+    if (asked.some(Boolean)) return save(root, { ...base, baseRerunAt: now });
+  }
+  return save(root, { ...base, state: broken.length ? "broken" : "passed", broken, preexisting, ...(requested ? { baseRerunAt: requested } : {}) });
 }
 
 async function save(root: string, gate: TestGate): Promise<TestGate> {

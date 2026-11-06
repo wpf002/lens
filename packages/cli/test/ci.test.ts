@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { compareRuns, errorExcerpt, failedTests, repairItems, type TestGate } from "../src/ci.js";
+import { compareRuns, errorExcerpt, failedTests, repairItems, staleBaseRuns, type TestGate } from "../src/ci.js";
 import { mergeBlock } from "../src/cloud.js";
 
 const PYTEST_LOG = [
@@ -46,6 +46,17 @@ describe("test gate", () => {
       { name: "lint", tests: [], excerpt: "lint" },
     ]);
     expect(preexisting).toBe(1);
+  });
+
+  it("re-runs a base-commit pass that's hours old before blaming Lens (lockfile drift on PR #23)", () => {
+    const now = Date.parse("2026-11-06T17:12:00Z");
+    const broken = [{ name: "Backend tests & audit", tests: [], excerpt: "requirements.txt is out of date" }];
+    const base = [
+      { id: 1, name: "Backend tests & audit", completed_at: "2026-11-05T17:25:00Z" },
+      { id: 2, name: "Frontend tests & audit", completed_at: "2026-11-05T17:25:00Z" },
+    ];
+    expect(staleBaseRuns(broken, base, now).map((r) => r.id)).toEqual([1]);
+    expect(staleBaseRuns(broken, [{ ...base[0]!, completed_at: "2026-11-06T16:00:00Z" }], now)).toEqual([]);
   });
 
   it("blocks Merge while tests run or when Lens broke some", () => {
