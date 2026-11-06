@@ -7,7 +7,7 @@ import { EmptyState, SeverityBadge, cx } from "../components/ui";
 import { FixAllButton } from "../components/Remediation";
 import { useStore } from "../store";
 import { AUTH_COLOR, SEVERITIES, SEVERITY_COLOR } from "../utils/colors";
-import { appliedFixItemIds, buildSecurity, endpointCounts, filterFindings, isClosedFinding, mergeChecklist, splitFindings } from "../utils/security";
+import { appliedFixItemIds, buildSecurity, endpointCounts, filterFindings, inputPath, isClosedFinding, mergeChecklist, splitFindings, traceLimitsText } from "../utils/security";
 import { useCompiledFilters, useModel, useOverlayInput } from "./hooks";
 
 const STATUSES: Finding["status"][] = ["open", "confirmed", "false_positive", "accepted"];
@@ -86,6 +86,7 @@ export function SecurityView() {
     const closed = fixedNow || f.status === "accepted" || f.status === "false_positive";
     const route = ROUTE.exec(f.message)?.[0];
     const d = decision(f, fixedNow);
+    const traced = on ? inputPath(sec.exposure, f.id, (id) => model.idx.nodes.get(id)?.name ?? id) : null;
     return (
       <Fragment key={f.id}>
         <tr
@@ -128,6 +129,15 @@ export function SecurityView() {
               <dl className="grid max-w-[640px] grid-cols-[110px_1fr] gap-x-4 gap-y-1.5 text-[12.5px]">
                 <dt className="text-muted">Issue</dt>
                 <dd className="text-fg">{PLAIN[f.rule] ?? f.message}</dd>
+                {traced && (
+                  <>
+                    <dt className="text-muted">Input Path</dt>
+                    <dd className="font-mono text-[11.5px] text-fg">
+                      {traced.steps.join(" → ")}
+                      {traced.more > 0 && <span className="text-muted" title={`${traced.more} more endpoints pass input here`}> +{traced.more}</span>}
+                    </dd>
+                  </>
+                )}
                 <dt className="text-muted">Decision</dt>
                 <dd className="text-fg">{d.text}</dd>
                 <dt className="text-muted">Next Step</dt>
@@ -190,6 +200,13 @@ export function SecurityView() {
             </div>
           ))}
         </div>
+        {sec.taint?.truncated && (
+          <div className="flex items-center">
+            <span className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-[11.5px] text-muted" title={traceLimitsText(sec.taint.limits)}>
+              <IconDroplet size={12} /> Trace Partial
+            </span>
+          </div>
+        )}
         {checklist.length > 0 && (
           <div className="ml-auto flex items-center gap-2">
             <FixAllButton

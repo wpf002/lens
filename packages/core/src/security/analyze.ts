@@ -6,7 +6,7 @@ import { effectiveAuth, indexGraph, publicByTriage } from "../graph-utils.js";
 import {
   GENERIC_SECRET_RE, RULES, RULES_VERSION, SECRET_PATTERNS, isPlaceholder, isPlaceholderDbUrl, redact, shannonEntropy, taintRegexFor,
 } from "./rules.js";
-import { sinkTainted, traceTaint, type FunctionSource, type TaintState } from "./taint.js";
+import { isTaintCategory, traceTaint, type FunctionSource, type TaintState } from "./taint.js";
 
 /** Lines that define a regex rather than execute anything: `pattern: /…/`, `const X_RE = /…/`, `new RegExp(…)`. */
 const REGEX_DEF = /^\s*(?:(?:pattern|re|regex|unless|match|test|rule)\s*:\s*\/|(?:export\s+)?(?:const|let|var)\s+\w*(?:RE|Re|REGEX|Regex|PATTERN|Pattern)\w*\s*[:=][^=]*\/)|\bnew\s+RegExp\s*\(\s*["'`/]/;
@@ -180,8 +180,6 @@ export function scanFile(input: FileScanInput): RawFinding[] {
 
 /* ---------------- graph-level pass ---------------- */
 
-const TAINTABLE = new Set<Finding["category"]>(["injection", "command-exec", "code-exec", "ssrf", "path-traversal", "deserialization", "xss", "redirect"]);
-
 export interface FinalizeInput {
   graph: Pick<KnowledgeGraph, "nodes" | "edges">;
   raw: RawFinding[];
@@ -228,18 +226,20 @@ export function finalizeSecurity({ graph, raw, locate, previous, functions = new
   };
   const tracedState = (r: RawFinding, nodeId: string): { fnId?: string; state?: TaintState } => {
     const fnId = enclosingFunction(nodeId);
-    if (!fnId || !TAINTABLE.has(r.category)) return { fnId };
-    const state = taint.tainted.get(fnId);
-    return { fnId, state: state && sinkTainted(functions.get(fnId)!, state, r.line) ? state : undefined };
+    if (!fnId || !isTaintCategory(r.category)) return { fnId };
+    return { fnId, state: taint.reached(fnId, r.line, r.category) };
   };
+  const nodeName = (id: string) => idx.nodes.get(id)?.name ?? id;
 
   const prevStatus = new Map((previous?.findings ?? []).map((f) => [fingerprint(f), f]));
   const findings: Finding[] = [];
   const exposure: ExposurePath[] = [];
-  raw.forEach(({ needsTaint, ...r }) => {
-    const nodeId = locate(r.path, r.line, r.rule);
-    const { fnId, state: traced } = tracedState(r, nodeId);
-    if (needsTaint && !traced) return;
+  raw.forEach(({ needsTaint, ...raw }) => {
+    const nodeId = locate(raw.path, raw.line, raw.rule);
+    const { fnId, state: traced } = tracedState(raw, nodeId);
+    const r = { ...raw };
+    // A capped trace can't rule out input reaching a function it never got to.
+    const untracedAfterCap = taint.truncated && !(fnId && taint.tainted.has(fnId));
     const reachableFrom: string[] = [];
     for (const [ep, prev] of reach) {
       // The finding node itself, or the enclosing function reached via calls.
@@ -251,7 +251,13 @@ export function finalizeSecurity({ graph, raw, locate, previous, functions = new
       if (!hit) continue;
       reachableFrom.push(ep);
     }
-    if (traced && !reachableFrom.includes(traced.entryId)) reachableFrom.unshift(traced.entryId);
+    if (needsTaint && !traced) {
+      if (!untracedAfterCap || !reachableFrom.length) return;
+      r.confidence = "low";
+      r.message += " Input tracing stopped at a limit before this function, so this may be unreachable by input.";
+    }
+    const tracedEntries = [...(traced?.entries ?? [])];
+    reachableFrom.unshift(...tracedEntries.map(([ep]) => ep).filter((ep) => !reachableFrom.includes(ep)));
     const id = `F${String(findings.length + 1).padStart(4, "0")}`;
     let severity = r.severity;
     let tainted = r.tainted;
@@ -260,12 +266,13 @@ export function finalizeSecurity({ graph, raw, locate, previous, functions = new
       tainted = true;
       severity = bump(severity);
       // Inline handlers share the endpoint's name; drop the repeat.
-      const names = traced.path.map((id) => idx.nodes.get(id)?.name ?? id).filter((n, i, all) => n !== all[i - 1]).join(" → ");
-      message += ` Request input reaches this sink through ${names.slice(0, MAX_TAINT_PATH_TEXT)}.`;
+      const names = tracedEntries[0]![1].map(nodeName).filter((n, i, all) => n !== all[i - 1]).join(" → ");
+      const more = tracedEntries.length > 1 ? ` (+${tracedEntries.length - 1} more endpoints)` : "";
+      message += ` Request input reaches this sink through ${names.slice(0, MAX_TAINT_PATH_TEXT)}${more}.`;
     }
     // Fallback when tracing never reached the sink's function: some function on an exposure path reads request input.
-    const traceCovered = !!fnId && (taint.tainted.has(fnId) || taint.clean.has(fnId));
-    if (!tainted && !traceCovered && reachableFrom.length && TAINTABLE.has(r.category)) {
+    const traceCovered = !!fnId && !untracedAfterCap && (taint.tainted.has(fnId) || taint.clean.has(fnId));
+    if (!tainted && !traceCovered && reachableFrom.length && isTaintCategory(r.category)) {
       for (const ep of reachableFrom) {
         const prev = reach.get(ep)!;
         let cur: string | undefined = prev.has(nodeId) ? nodeId : idx.parent.get(nodeId);
@@ -293,12 +300,12 @@ export function finalizeSecurity({ graph, raw, locate, previous, functions = new
       if (old.status === "confirmed") f.severity = old.severity;
     }
     findings.push(f);
-    if (traced) {
-      const path = traced.path.at(-1) === nodeId ? traced.path : [...traced.path, nodeId];
-      exposure.push({ findingId: id, entryId: traced.entryId, path, tainted: true });
+    for (const [entryId, entryPath] of tracedEntries) {
+      const path = entryPath.at(-1) === nodeId ? entryPath : [...entryPath, nodeId];
+      exposure.push({ findingId: id, entryId, path, tainted: true });
     }
     for (const ep of reachableFrom.slice(0, 5)) {
-      if (ep === traced?.entryId) continue;
+      if (traced?.entries.has(ep)) continue;
       const prev = reach.get(ep)!;
       let cur: string | undefined = prev.has(nodeId) ? nodeId : idx.parent.get(nodeId);
       const path: string[] = [];
@@ -325,6 +332,7 @@ export function finalizeSecurity({ graph, raw, locate, previous, functions = new
     entryPoints: entryIds,
     findings,
     exposure,
+    taint: { truncated: taint.truncated, limits: taint.limits, tracedFunctions: taint.tainted.size },
     summary: summarize(findings, endpoints),
   };
 }

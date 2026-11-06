@@ -12,7 +12,7 @@ import { columnLayout, computeLayout, fallbackElk, shelfPack, type ElkLike } fro
 import { toMermaid } from "./mermaid";
 import { buildModel, commonDir } from "./model";
 import { computeOverlay } from "./overlay";
-import { buildSecurity, DEFAULT_SECURITY_FILTER, filterFindings, findingFocus, splitFindings, urgentOpenCount } from "./security";
+import { buildSecurity, DEFAULT_SECURITY_FILTER, filterFindings, findingFocus, inputPath, splitFindings, traceLimitsText, urgentOpenCount } from "./security";
 import { findingItemId } from "@lens/core/browser";
 import { buildFileTree } from "./tree";
 import { validateGraph } from "./validate";
@@ -273,5 +273,22 @@ describe("misc utils", () => {
     expect(g.nodes).toHaveLength(1);
     expect(g.edges).toEqual([]);
     expect(g.nodes[0]!.tags).toEqual([]);
+  });
+});
+
+describe("inputPath", () => {
+  const names: Record<string, string> = { "endpoint:a": "GET /a", "function:h": "GET /a", "function:s": "save" };
+  const nameOf = (id: string) => names[id] ?? id;
+  it("names the first traced path, drops repeated inline names, and counts the rest", () => {
+    const exposure = [
+      { findingId: "F1", entryId: "endpoint:a", path: ["endpoint:a", "function:s"] },
+      { findingId: "F1", entryId: "endpoint:a", path: ["endpoint:a", "function:h", "function:s"], tainted: true },
+      { findingId: "F1", entryId: "endpoint:b", path: ["endpoint:b", "function:s"], tainted: true },
+    ];
+    expect(inputPath(exposure, "F1", nameOf)).toEqual({ steps: ["GET /a", "save"], more: 1 });
+    expect(inputPath(exposure, "F2", nameOf)).toBeNull();
+  });
+  it("lists the caps that cut a trace short", () => {
+    expect(traceLimitsText(["depth", "body"])).toContain("call depth cap, long function bodies");
   });
 });

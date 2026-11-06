@@ -1,4 +1,4 @@
-import { effectiveAuth, findingItemId, publicByTriage, type ChecklistItem, type EndpointMeta, type Finding, type GraphNode, type Severity } from "@lens/core/browser";
+import { effectiveAuth, findingItemId, publicByTriage, type ChecklistItem, type EndpointMeta, type Finding, type ExposurePath, type GraphNode, type Severity, type TaintLimit } from "@lens/core/browser";
 import type { AuditRecord, RemediationRecord } from "../api";
 import type { VEdge, VNode, ViewModel } from "../types";
 import { SEVERITY_RANK, layerColor } from "./colors";
@@ -103,6 +103,28 @@ export function findingFocus(model: GraphModel, findingId: string): string[] {
   if (f) out.add(f.nodeId);
   for (const x of model.graph.security?.exposure ?? []) if (x.findingId === findingId) for (const id of x.path) out.add(id);
   return [...out];
+}
+
+/** Node names from the first endpoint whose input was traced into the finding, plus how many other endpoints reach it. */
+export function inputPath(exposure: ExposurePath[], findingId: string, nameOf: (id: string) => string): { steps: string[]; more: number } | null {
+  const traced = exposure.filter((x) => x.findingId === findingId && x.tainted);
+  if (!traced.length) return null;
+  // Inline handlers share the endpoint's name.
+  const steps = traced[0]!.path.map(nameOf).filter((n, i, all) => n !== all[i - 1]);
+  return { steps, more: traced.length - 1 };
+}
+
+const LIMIT_LABEL: Record<TaintLimit, string> = {
+  visits: "visit cap",
+  depth: "call depth cap",
+  body: "long function bodies",
+  "call-sites": "call site cap",
+  entries: "endpoints per function cap",
+};
+
+/** Tooltip for a trace cut short by its caps. */
+export function traceLimitsText(limits: TaintLimit[]): string {
+  return `Input tracing stopped at: ${limits.map((l) => LIMIT_LABEL[l]).join(", ")}. Findings outside the trace may still take input.`;
 }
 
 export function buildSecurity(model: GraphModel, cf: CompiledFilters, sf: SecurityFilter): ViewModel {

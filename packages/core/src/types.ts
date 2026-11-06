@@ -188,12 +188,23 @@ export interface ExposurePath {
   tainted?: boolean;
 }
 
+/** Cap that cut a taint trace short (see security/taint.ts). */
+export type TaintLimit = "visits" | "depth" | "body" | "call-sites" | "entries";
+
+export interface TaintTraceMeta {
+  /** A cap stopped taint from spreading; findings outside the trace may still take input. */
+  truncated: boolean;
+  limits: TaintLimit[];
+  tracedFunctions: number;
+}
+
 export interface SecurityReport {
   generatedAt: string;
   rulesVersion: string;
   entryPoints: string[];
   findings: Finding[];
   exposure: ExposurePath[];
+  taint?: TaintTraceMeta;
   summary: {
     bySeverity: Record<Severity, number>;
     unguardedEndpoints: number;

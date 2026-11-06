@@ -5,10 +5,11 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import {
   healthScore,
-  extractStructure, scanProject, scanAndSave, loadGraph, loadMeta, applyPatch, PatchValidationError, parseUnifiedDiff, computeImpact,
+  extractStructure, finalizeSecurity, scanProject, scanAndSave, loadGraph, loadMeta, applyPatch, PatchValidationError, parseUnifiedDiff, computeImpact,
   GraphSearch, buildKnowledgeGraph, embedInDashboard, validateGraph, buildBatches, KnowledgeGraphSchema, globToRegExp, stripComments, isPlaceholderDbUrl, siteUrl,
-  type KnowledgeGraph,
+  type KnowledgeGraph, type GraphNode, type GraphEdge,
 } from "../src/index.js";
+import { MAX_TAINT_DEPTH, traceTaint, type FunctionSource } from "../src/security/taint.js";
 
 const FIX = path.join(__dirname, "fixtures");
 
@@ -131,6 +132,37 @@ describe("scan (vuln fixture)", () => {
 
   it("does not flag an exec sink whose input was sanitized upstream", () => {
     expect(g.security!.findings.some((x) => x.path === "src/lib/shell.ts" && x.line === 8)).toBe(false);
+  });
+
+  it("traces Python input across files into SQL and shell sinks, from every endpoint", () => {
+    const sql = g.security!.findings.find((x) => x.path === "py/report_store.py" && x.line === 6)!;
+    expect(sql.tainted).toBe(true);
+    const entries = g.security!.exposure.filter((e) => e.findingId === sql.id && e.tainted).map((e) => e.entryId);
+    expect(entries).toEqual(["endpoint:py/reports.py:GET /reports/<key>", "endpoint:py/reports.py:GET /reports/<key>/raw"]);
+    expect(sql.reachableFrom).toEqual(expect.arrayContaining(entries));
+    const exec = g.security!.findings.find((x) => x.path === "py/export_job.py" && x.line === 5)!;
+    expect(exec.tainted).toBe(true);
+    expect(tracedPath(exec.id)).toContain("function:py/reports.py:start_export");
+  });
+
+  it("treats an int() keyword argument as clean in Python", () => {
+    const f = g.security!.findings.find((x) => x.path === "py/report_store.py" && x.line === 11)!;
+    expect(f.tainted).toBe(false);
+    expect(tracedPath(f.id)).toEqual([]);
+  });
+
+  it("traces Go request input across packages into SQL and shell sinks", () => {
+    const sql = g.security!.findings.find((x) => x.path === "go/store/store.go" && x.line === 11)!;
+    expect(sql.tainted).toBe(true);
+    expect(tracedPath(sql.id)).toEqual(["endpoint:go/main.go:ANY /report", "function:go/main.go:reportHandler", "function:go/store/store.go:Find"]);
+    const exec = g.security!.findings.find((x) => x.rule === "go-exec")!;
+    expect(exec.tainted).toBe(true);
+    expect(exec.message).toContain("archiveHandler → Archive");
+  });
+
+  it("reports that the fixture trace ran within its limits", () => {
+    expect(g.security!.taint).toMatchObject({ truncated: false, limits: [] });
+    expect(g.security!.taint!.tracedFunctions).toBeGreaterThan(5);
   });
 
   it("builds the pre-launch checklist from scanner findings and repo files", () => {
@@ -373,3 +405,114 @@ describe("misc", () => {
   });
 });
 
+
+describe("traceTaint", () => {
+  type Fn = { lines: string[]; params: string[]; lang?: string };
+  const node = (id: string, kind: GraphNode["kind"], extra: Partial<GraphNode> = {}): GraphNode => ({
+    id, kind, name: id.split(":").pop()!, summary: "", summarySource: "heuristic", tags: [], complexity: "simple", ...extra,
+  });
+  /** One endpoint routed to `handler`; `calls` lists resolved call edges. Each function starts at line 1. */
+  function build(fns: Record<string, Fn>, calls: Array<[string, string]> = [], handlers = ["handler"]) {
+    const nodes = new Map<string, GraphNode>();
+    const out = new Map<string, GraphEdge[]>();
+    const functions = new Map<string, FunctionSource>();
+    const edge = (source: string, target: string, kind: GraphEdge["kind"]) =>
+      out.set(source, [...(out.get(source) ?? []), { source, target, kind, weight: 1, origin: "static" }]);
+    for (const [name, f] of Object.entries(fns)) {
+      const id = `function:${name}`;
+      nodes.set(id, node(id, "function"));
+      functions.set(id, { lang: f.lang ?? "typescript", startLine: 1, lines: f.lines, params: f.params });
+    }
+    const endpoints = handlers.map((h) => {
+      const ep = node(`endpoint:GET /${h}`, "endpoint", { endpoint: { route: `/${h}`, auth: "unguarded", entryType: "http" } });
+      nodes.set(ep.id, ep);
+      edge(ep.id, `function:${h}`, "routes");
+      return ep;
+    });
+    for (const [a, b] of calls) edge(`function:${a}`, `function:${b}`, "calls");
+    return { nodes, out, endpoints, functions };
+  }
+  const trace = (...args: Parameters<typeof build>) => traceTaint(build(...args));
+
+  it("clears taint only for the category a sanitizer covers", () => {
+    const t = trace({
+      handler: { params: ["req", "res"], lines: ["function handler(req, res) {", "  const safe = escapeHtml(req.query.q);", "  db.query(`SELECT ${safe}`);", "  res.send(safe);", "}"] },
+    });
+    expect(t.reached("function:handler", 3, "injection")).toBeTruthy();
+    expect(t.reached("function:handler", 4, "xss")).toBeUndefined();
+  });
+
+  it("trusts a repo helper only when its returns are sanitized", () => {
+    const t = trace({
+      handler: { params: ["req"], lines: ["function handler(req) {", "  exec(toId(req.query.id));", "  exec(tidy(req.query.id));", "}"] },
+      toId: { params: ["value"], lines: ["function toId(value) {", "  return Number(value);", "}"] },
+      tidy: { params: ["value"], lines: ["function tidy(value) {", "  return value.trim();", "}"] },
+    });
+    expect(t.reached("function:handler", 2, "command-exec")).toBeUndefined();
+    expect(t.reached("function:handler", 3, "command-exec")).toBeTruthy();
+  });
+
+  it("no longer treats generic escape or sanitize names as sanitizers", () => {
+    const t = trace({
+      handler: { params: ["req"], lines: ["function handler(req) {", "  exec(sanitizeInput(req.body.cmd));", "  exec(quote(req.body.cmd));", "}"] },
+    });
+    expect(t.reached("function:handler", 2, "command-exec")).toBeTruthy();
+    expect(t.reached("function:handler", 3, "command-exec")).toBeTruthy();
+  });
+
+  it("follows a call the resolver missed by matching the function name", () => {
+    const t = trace({
+      handler: { params: ["req"], lines: ["function handler(req) {", "  return jobs.runJob(req.body.name);", "}"] },
+      runJob: { params: ["name"], lines: ["function runJob(name) {", "  exec(`make ${name}`);", "}"] },
+    });
+    expect(t.reached("function:runJob", 2, "command-exec")?.entries.get("endpoint:GET /handler")).toEqual([
+      "endpoint:GET /handler", "function:handler", "function:runJob",
+    ]);
+  });
+
+  it("binds destructured, keyword, and rest parameters", () => {
+    const t = trace({
+      handler: { params: ["{ body }"], lines: ["function handler({ body }) {", "  exec(body.cmd);", "  logAll('x', body.a);", "}"] },
+      logAll: { params: ["...parts"], lines: ["function logAll(...parts) {", "  exec(parts.join(' '));", "}"] },
+      pyHandler: { lang: "python", params: ["key"], lines: ["def pyHandler(key):", "    return load(limit=5, name=key)"] },
+      load: { lang: "python", params: ["name", "limit"], lines: ["def load(name, limit):", "    os.system(name)", "    os.system(limit)"] },
+    }, [["handler", "logAll"], ["pyHandler", "load"]], ["handler", "pyHandler"]);
+    expect(t.reached("function:handler", 2, "command-exec")).toBeTruthy();
+    expect(t.reached("function:logAll", 2, "command-exec")).toBeTruthy();
+    expect(t.reached("function:load", 2, "command-exec")).toBeTruthy();
+    expect(t.reached("function:load", 3, "command-exec")).toBeUndefined();
+  });
+
+  it("records every endpoint that reaches a function", () => {
+    const t = trace({
+      a: { params: ["req"], lines: ["function a(req) {", "  sink(req.query.x);", "}"] },
+      b: { params: ["req"], lines: ["function b(req) {", "  sink(req.query.y);", "}"] },
+      sink: { params: ["v"], lines: ["function sink(v) {", "  exec(v);", "}"] },
+    }, [["a", "sink"], ["b", "sink"]], ["a", "b"]);
+    expect([...t.tainted.get("function:sink")!.entries.keys()]).toEqual(["endpoint:GET /a", "endpoint:GET /b"]);
+  });
+
+  it("reports truncation when the call chain exceeds the depth cap", () => {
+    const fns: Record<string, Fn> = { handler: { params: ["req"], lines: ["function handler(req) {", "  f0(req.body);", "}"] } };
+    for (let i = 0; i <= MAX_TAINT_DEPTH + 1; i++) fns[`f${i}`] = { params: ["v"], lines: [`function f${i}(v) {`, `  f${i + 1}(v);`, "}"] };
+    const t = trace(fns);
+    expect(t.truncated).toBe(true);
+    expect(t.limits).toContain("depth");
+  });
+
+  it("keeps a taint-only candidate past a truncated trace at low confidence", () => {
+    const fns: Record<string, Fn> = { handler: { params: ["req"], lines: ["function handler(req) {", "  f0(req.body);", "}"] } };
+    const last = MAX_TAINT_DEPTH + 1;
+    for (let i = 0; i <= last; i++) fns[`f${i}`] = { params: ["v"], lines: [`function f${i}(v) {`, `  f${i + 1}(v);`, "}"] };
+    const calls = Object.keys(fns).filter((n) => n !== `f${last}`).map((n, i): [string, string] => [n, `f${i}`]);
+    const { nodes, out, functions } = build(fns, calls);
+    const edges = [...out.values()].flat();
+    const raw = { rule: "js-spawn-tainted", title: "t", category: "command-exec" as const, severity: "high" as const, confidence: "high" as const, path: "x.ts", line: 2, message: "m.", needsTaint: true };
+    const sec = finalizeSecurity({ graph: { nodes: [...nodes.values()], edges }, raw: [raw], locate: () => `function:f${last}`, functions });
+    expect(sec.taint?.truncated).toBe(true);
+    expect(sec.findings).toHaveLength(1);
+    expect(sec.findings[0]!.confidence).toBe("low");
+    const untruncated = finalizeSecurity({ graph: { nodes: [...nodes.values()], edges }, raw: [{ ...raw }], locate: () => "function:f0", functions: new Map([["function:f0", functions.get("function:f0")!]]) });
+    expect(untruncated.findings).toHaveLength(0);
+  });
+});
