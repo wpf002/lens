@@ -94,7 +94,7 @@ async function api(p: string, token: string, method = "GET", body?: unknown): Pr
   }
   if (!res.ok) {
     const err = (await res.json().catch(() => null)) as { message?: string; errors?: Array<{ message?: string }> } | null;
-    // 422s put the reason in errors[], e.g. "No commits between main and lens/fixes-…".
+    // 422s put the reason in errors[], e.g. "No commits between main and fix/…".
     const msg = [err?.message, ...(err?.errors ?? []).map((e) => e.message)].filter(Boolean).join(": ");
     throw new Error(`GitHub: ${msg ? msg.slice(0, 200) : res.status}`);
   }
@@ -106,6 +106,24 @@ export function githubApi(p: string, method = "GET", body?: unknown): Promise<un
   const t = githubToken();
   if (!t) throw new Error("Connect GitHub first.");
   return api(p, t, method, body);
+}
+
+export interface GitIdentity {
+  name: string;
+  email: string;
+}
+
+let identityCache: { token: string; identity: GitIdentity } | null = null;
+
+/** The connected account as a commit author, with GitHub's private noreply email. Null when not connected. */
+export async function githubIdentity(): Promise<GitIdentity | null> {
+  const t = githubToken();
+  if (!t) return null;
+  if (identityCache?.token === t) return identityCache.identity;
+  const user = (await api("/user", t)) as { id: number; login: string; name: string | null };
+  const identity = { name: user.name?.trim() || user.login, email: `${user.id}+${user.login}@users.noreply.github.com` };
+  identityCache = { token: t, identity };
+  return identity;
 }
 
 /** Plain-text GitHub download (Actions job logs). Returns null when GitHub has no log for it. */
