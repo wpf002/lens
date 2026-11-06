@@ -1,9 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fixesPatch, pushFixes, pushPending, restartFromBase } from "../src/cloud.js";
+import { createPullRequest, fixesPatch, isFixesBranch, pushFixes, pushPending, restartFromBase } from "../src/cloud.js";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" }).trim();
 
@@ -124,5 +124,79 @@ describe("pushFixes", () => {
     expect(await fs.readFile(path.join(root, ".lens/graph.json"), "utf8")).toBe("{}");
     expect(run(root, "status", "--porcelain")).toBe("M a.js\n?? new.py");
     await fs.rm(tmp, { recursive: true, force: true });
+  });
+
+  describe("in the owner's name", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    });
+
+    /** A repo with one pushed commit on main and a local author, so commits don't fall back to the global git config. */
+    async function ownerRepo() {
+      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "lens-push-"));
+      const remote = path.join(tmp, "remote.git");
+      const root = path.join(tmp, "work");
+      run(tmp, "init", "-q", "--bare", "-b", "main", remote);
+      run(tmp, "init", "-q", "-b", "main", root);
+      run(root, "config", "user.name", "Repo Owner");
+      run(root, "config", "user.email", "owner@example.com");
+      await fs.writeFile(path.join(root, "a.js"), "1\n");
+      run(root, "add", "-A");
+      run(root, "commit", "-qm", "init");
+      run(root, "remote", "add", "origin", remote);
+      run(root, "push", "-q", "-u", "origin", "main");
+      return { tmp, remote, root };
+    }
+
+    it("names the branch after the fix, tracks it in git config, and commits as the repo's author", async () => {
+      vi.stubEnv("GITHUB_TOKEN", "");
+      const { tmp, remote, root } = await ownerRepo();
+      await fs.writeFile(path.join(root, "a.js"), "2\n");
+
+      const { branch } = await pushFixes(root, [{ title: "Escape user input in the search query.", files: ["a.js"] }]);
+
+      expect(branch).toMatch(/^fix\/escape-user-input-search-\d{8}$/);
+      expect(run(root, "config", "--get", "lens.branch")).toBe(branch);
+      expect(await isFixesBranch(root, branch)).toBe(true);
+      const log = run(remote, "log", "-1", "--format=%an <%ae>%n%B", branch);
+      expect(log).toBe("Repo Owner <owner@example.com>\nEscape user input in the search query");
+      expect(log).not.toMatch(/lens|claude|co-authored/i);
+
+      await fs.writeFile(path.join(root, "b.js"), "x\n");
+      expect((await pushFixes(root)).branch).toBe(branch);
+      expect(run(remote, "log", "-1", "--format=%s", branch)).toBe("Update b.js");
+      await fs.rm(tmp, { recursive: true, force: true });
+    });
+
+    it("commits as the connected GitHub account and titles the pull request from the fixes", async () => {
+      vi.stubEnv("GITHUB_TOKEN", "test-token");
+      const calls: Array<{ url: string; body: unknown }> = [];
+      vi.stubGlobal("fetch", async (url: string, init?: { method?: string; body?: string }) => {
+        calls.push({ url, body: init?.body ? JSON.parse(init.body) : null });
+        if (url.endsWith("/user")) return Response.json({ id: 42, login: "octo", name: "Octo Cat" });
+        if (init?.method === "POST") return Response.json({ number: 7, html_url: "https://github.com/octo/app/pull/7" }, { status: 201 });
+        return Response.json([]);
+      });
+      const { tmp, remote, root } = await ownerRepo();
+      run(root, "remote", "set-url", "origin", "https://github.com/octo/app.git");
+      run(root, "remote", "set-url", "--push", "origin", remote);
+      await fs.writeFile(path.join(root, "a.js"), "2\n");
+      const fixes = [
+        { title: "Validate the upload size", files: ["a.js"] },
+        { title: "Fixed by Lens: close the file handle", files: ["a.js"] },
+      ];
+
+      const pr = await createPullRequest(root, fixes);
+
+      expect(pr.number).toBe(7);
+      const branch = run(root, "rev-parse", "--abbrev-ref", "HEAD");
+      expect(run(remote, "log", "-1", "--format=%an <%ae>", branch)).toBe("Octo Cat <42+octo@users.noreply.github.com>");
+      const sent = calls.find((c) => c.url.endsWith("/pulls"))?.body as { title: string; body: string };
+      expect(sent.title).toBe("Validate the upload size and 1 more fix");
+      expect(sent.body).toContain("- Close the file handle");
+      expect(`${sent.title}\n${sent.body}`).not.toMatch(/lens|claude|\bAI\b/i);
+      await fs.rm(tmp, { recursive: true, force: true });
+    });
   });
 });
