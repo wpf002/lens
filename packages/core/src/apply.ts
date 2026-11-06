@@ -250,9 +250,7 @@ export function applyPatch(g: KnowledgeGraph, meta: LensMeta, kind: PatchKind, d
         g.security.findings.push(f);
         report.applied++;
       }
-      const SEV = ["critical", "high", "medium", "low", "info"];
-      g.security.findings.sort((a, b) => SEV.indexOf(a.severity) - SEV.indexOf(b.severity) || a.path.localeCompare(b.path) || a.line - b.line);
-      g.security.summary = summarize(g.security.findings, g.nodes.filter((n) => n.kind === "endpoint"));
+      resortAndSummarize(g);
       break;
     }
   }
@@ -273,6 +271,15 @@ export function globToRegExp(glob: string): RegExp {
     else re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
   }
   return new RegExp(`^${re}$`);
+}
+
+const SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"];
+
+/** Re-sort findings by severity and recompute the summary after findings change. */
+export function resortAndSummarize(g: KnowledgeGraph): void {
+  if (!g.security) return;
+  g.security.findings.sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity) || a.path.localeCompare(b.path) || a.line - b.line);
+  g.security.summary = summarize(g.security.findings, g.nodes.filter((n) => n.kind === "endpoint"));
 }
 
 export function locateNode(g: KnowledgeGraph, path: string, line: number): string | undefined {

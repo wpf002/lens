@@ -7,7 +7,8 @@ import { execFile } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { createHmac, randomBytes } from "node:crypto";
-import { githubApi, githubToken } from "./github.js";
+import { githubApi, githubIdentity, githubToken, type GitIdentity } from "./github.js";
+import { branchNameFor, commitMessage, fixesTouching, pullRequestText, type AppliedFix } from "./commit-text.js";
 import { brokenCount, testGate, type TestGate } from "./ci.js";
 
 export interface RepoRef {
@@ -43,7 +44,7 @@ function git(cwd: string, args: string[], timeout = 5 * 60_000): Promise<string>
     execFile(
       "git",
       // HTTP/2 drops large pushes to GitHub ("RPC failed; curl 92"); HTTP/1.1 with a big buffer doesn't.
-      [...authArgs(), "-c", "http.version=HTTP/1.1", "-c", "http.postBuffer=524288000", "-c", "user.name=Lens", "-c", "user.email=lens@users.noreply.github.com", ...args],
+      [...authArgs(), "-c", "http.version=HTTP/1.1", "-c", "http.postBuffer=524288000", ...args],
       { cwd, timeout, maxBuffer: 20_000_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
       (err, stdout, stderr) => {
         if (err) return reject(new Error(scrub(stderr.trim() || err.message)));
@@ -83,31 +84,85 @@ export async function cloneOrUpdate(workspace: string, r: RepoRef): Promise<stri
   }
   const dirty = await git(dir, ["status", "--porcelain", "--", ".", ":(exclude).lens"]);
   const branch = await git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "");
-  if (!dirty && !branch.startsWith("lens/fixes-")) await git(dir, ["pull", "--ff-only", "--no-tags"]).catch(() => undefined);
+  if (!dirty && !(await isFixesBranch(dir, branch))) await git(dir, ["pull", "--ff-only", "--no-tags"]).catch(() => undefined);
   return dir;
 }
 
+/** Branches named before Lens tracked its branch in git config. */
+const LEGACY_PREFIX = "lens/fixes-";
+const BRANCH_KEY = "lens.branch";
+const MAX_RENAMES = 3;
+
+/** A git config value, or "" when unset. `--default` keeps a missing key from failing and logging. */
+const gitConfig = (root: string, key: string) => git(root, ["config", "--default", "", "--get", key]);
+
+/** The branch Lens commits fixes to: the one recorded in git config, or an older `lens/fixes-*` branch. */
+export async function isFixesBranch(root: string, branch: string): Promise<boolean> {
+  if (!branch || branch === "HEAD") return false;
+  if (branch.startsWith(LEGACY_PREFIX)) return true;
+  return branch === (await gitConfig(root, BRANCH_KEY));
+}
+
+async function forgetBranch(root: string, branch: string): Promise<void> {
+  if ((await gitConfig(root, BRANCH_KEY)) === branch) await git(root, ["config", "--unset", BRANCH_KEY]).catch(() => undefined);
+}
+
+const branchExists = async (root: string, name: string) => (await git(root, ["branch", "--list", name])) !== "";
+
+/** `name`, or `name-2`, `name-3`… when a local branch already has it. */
+async function freeBranchName(root: string, name: string, from = 1): Promise<string> {
+  for (let n = from; ; n++) {
+    const candidate = n === 1 ? name : `${name}-${n}`;
+    if (!(await branchExists(root, candidate))) return candidate;
+  }
+}
+
+/** Commits go out under the owner's name: the connected GitHub account, else the repo's git config, else the last author. */
+export async function authorIdentity(root: string): Promise<GitIdentity> {
+  const connected = await githubIdentity().catch((e: unknown) => {
+    console.error(`[github] couldn't read the connected account: ${e instanceof Error ? e.message : e}`);
+    return null;
+  });
+  if (connected) return connected;
+  const name = await gitConfig(root, "user.name");
+  const email = await gitConfig(root, "user.email");
+  if (name && email) return { name, email };
+  const [lastName, lastEmail] = (await git(root, ["log", "-1", "--format=%an%x00%ae"]).catch(() => "")).split("\0");
+  if (lastName && lastEmail) return { name: lastName, email: lastEmail };
+  throw new Error("No commit author for this repo. Connect GitHub or set git user.name and user.email.");
+}
+
+async function commit(root: string, message: string): Promise<void> {
+  const author = await authorIdentity(root);
+  await git(root, ["-c", `user.name=${author.name}`, "-c", `user.email=${author.email}`, "commit", "-q", "-m", message]);
+}
+
+const stagedPaths = async (root: string) => (await git(root, ["diff", "--cached", "--name-only"])).split("\n").filter(Boolean);
+
 /**
  * Commit every change in the working tree and push it. The first push creates a
- * `lens/fixes-*` branch and the working copy stays on it, so later fixes and
- * pushes add commits to the same branch.
+ * `fix/<topic>-<date>` branch, recorded as lens.branch, and the working copy stays
+ * on it, so later fixes and pushes add commits to the same branch.
  */
-export async function pushFixes(root: string): Promise<{ branch: string; compareUrl: string | null; files: number }> {
+export async function pushFixes(root: string, fixes: AppliedFix[] = []): Promise<{ branch: string; compareUrl: string | null; files: number }> {
   const status = await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"]);
   if (!status) throw new Error("No changes to push.");
-  const files = status.split("\n").filter(Boolean).length;
+  await git(root, ["add", "-A"]);
+  await git(root, ["reset", "-q", "--", ".lens"]).catch(() => undefined);
+  const changed = await stagedPaths(root);
+  const files = changed.length;
+  const touching = fixesTouching(fixes, changed);
   let branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
-  if (!branch.startsWith("lens/fixes-")) {
-    const next = newBranchName();
+  if (!(await isFixesBranch(root, branch))) {
+    const next = await freeBranchName(root, branchNameFor(touching, changed));
     await git(root, ["config", "lens.base", branch]);
     await git(root, ["config", "--unset", "lens.merged"]).catch(() => undefined);
-    await git(root, ["checkout", "-b", next]);
+    await git(root, ["checkout", "-q", "-b", next]);
+    await git(root, ["config", BRANCH_KEY, next]);
     branch = next;
   }
   const base = (await git(root, ["config", "--get", "lens.base"]).catch(() => "")) || "main";
-  await git(root, ["add", "-A"]);
-  await git(root, ["reset", "-q", "--", ".lens"]).catch(() => undefined);
-  await git(root, ["commit", "-m", `Lens fixes (${files} file${files === 1 ? "" : "s"})`]);
+  await commit(root, commitMessage(touching, changed));
   const pushed = await pushBranch(root, branch);
   branch = pushed.branch;
   const dropped = pushed.dropped;
@@ -124,7 +179,6 @@ const DIVERGED = /non-fast-forward|fetch first|\[rejected\]/i;
 const PUSH_RETRY_DELAYS_MS = [2_000, 8_000, 20_000];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const newBranchName = () => `lens/fixes-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}-${randomBytes(2).toString("hex")}`;
 
 /** `git push`, retried with backoff when the connection drops. */
 async function pushWithRetry(root: string, branch: string): Promise<void> {
@@ -145,13 +199,14 @@ async function pushWithRetry(root: string, branch: string): Promise<void> {
 async function dropWorkflowChanges(root: string): Promise<number> {
   const touched = (await git(root, ["diff", "--name-only", "HEAD~1", "HEAD", "--", WORKFLOWS])).split("\n").filter(Boolean);
   if (!touched.length) return 0;
+  const message = await git(root, ["log", "-1", "--format=%B"]);
   await git(root, ["reset", "-q", "--soft", "HEAD~1"]);
   await git(root, ["reset", "-q", "--", WORKFLOWS]);
   await git(root, ["checkout", "--", WORKFLOWS]).catch(() => undefined);
   await git(root, ["clean", "-fdq", "--", WORKFLOWS]);
   const left = await git(root, ["diff", "--cached", "--name-only"]);
   if (!left) throw new Error("The only changes were to .github/workflows, which GitHub won't accept from Lens.");
-  await git(root, ["commit", "-m", `Lens fixes (${left.split("\n").length} files)`]);
+  await commit(root, message);
   return touched.length;
 }
 
@@ -163,6 +218,7 @@ async function dropWorkflowChanges(root: string): Promise<number> {
 async function pushBranch(root: string, start: string): Promise<{ branch: string; dropped: number }> {
   let branch = start;
   let dropped = 0;
+  let renames = 0;
   for (;;) {
     try {
       await pushWithRetry(root, branch);
@@ -172,9 +228,12 @@ async function pushBranch(root: string, start: string): Promise<{ branch: string
       if (e.message.startsWith(WORKFLOW_REJECTED) && dropped === 0) {
         dropped = await dropWorkflowChanges(root);
         if (!dropped) throw e;
-      } else if (DIVERGED.test(e.message) && branch === start) {
-        branch = newBranchName();
+      } else if (DIVERGED.test(e.message) && renames < MAX_RENAMES) {
+        renames++;
+        const legacy = start.startsWith(LEGACY_PREFIX);
+        branch = await freeBranchName(root, legacy ? branchNameFor([], []) : start, legacy ? 1 : 2);
         await git(root, ["branch", "-m", branch]);
+        await git(root, ["config", BRANCH_KEY, branch]);
       } else throw e;
     }
   }
@@ -189,7 +248,7 @@ export interface PullRequest {
   tests?: TestGate;
 }
 export interface PushInfo {
-  /** The `lens/fixes-*` branch, or null once merged. */
+  /** The branch holding the fixes, or null once merged. */
   branch: string | null;
   dirty: boolean;
   pr: PullRequest | null;
@@ -234,7 +293,7 @@ async function mergedTime(root: string, n: number): Promise<string | undefined> 
 export async function pushState(root: string): Promise<PushInfo | null> {
   const branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "");
   const dirty = !!(await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"]).catch(() => ""));
-  if (!branch.startsWith("lens/fixes-")) {
+  if (!(await isFixesBranch(root, branch))) {
     const merged = await git(root, ["config", "--get", "lens.merged"]).catch(() => "");
     const [n, url, saved] = merged.split(" ");
     if (!n || !url) return null;
@@ -247,16 +306,15 @@ export async function pushState(root: string): Promise<PushInfo | null> {
   return { branch, dirty, pr };
 }
 
-/** Push any new fixes, then open a pull request into the base branch. */
 /** Commit and push new fixes, or re-push a commit whose earlier push failed. */
-export async function pushPending(root: string): Promise<void> {
+export async function pushPending(root: string, fixes: AppliedFix[] = []): Promise<void> {
   let st = await pushState(root);
   // That branch's pull request was merged or closed (maybe outside Lens); start the new fixes from the base branch.
   if (st?.branch && st.pr && st.pr.state !== "open") {
     await restartFromBase(root, st.branch);
     st = await pushState(root);
   }
-  if (!st?.branch || st.dirty) await pushFixes(root);
+  if (!st?.branch || st.dirty) await pushFixes(root, fixes);
   else await pushBranch(root, st.branch);
 }
 
@@ -279,16 +337,22 @@ export async function restartFromBase(root: string, old: string): Promise<void> 
     throw new Error(`These fixes conflict with the latest ${base}. Undo them and run Fix again. (${e instanceof Error ? e.message.slice(0, 200) : e})`);
   }
   await git(root, ["branch", "-D", old]).catch(() => undefined);
+  await forgetBranch(root, old);
 }
 
-export async function createPullRequest(root: string, body: string): Promise<PullRequest> {
-  await pushPending(root);
+/** Push any new fixes, then open a pull request into the base branch. */
+const PR_BODY_MAX = 60_000;
+
+export async function createPullRequest(root: string, fixes: AppliedFix[]): Promise<PullRequest> {
+  await pushPending(root, fixes);
   const branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
   const r = await repoOf(root);
   const existing = await findPr(root, r, branch);
   if (existing?.state === "open") return existing;
   const base = (await git(root, ["config", "--get", "lens.base"]).catch(() => "")) || "main";
-  const p = (await githubApi(`/repos/${r.owner}/${r.name}/pulls`, "POST", { title: "Lens fixes", head: branch, base, body: body.slice(0, 60_000) })) as { number: number; html_url: string };
+  const changed = (await git(root, ["diff", "--name-only", `${base}...HEAD`]).catch(() => "")).split("\n").filter(Boolean);
+  const { title, body } = pullRequestText(changed.length ? fixesTouching(fixes, changed) : fixes, changed);
+  const p = (await githubApi(`/repos/${r.owner}/${r.name}/pulls`, "POST", { title, head: branch, base, body: body.slice(0, PR_BODY_MAX) })) as { number: number; html_url: string };
   return { number: p.number, url: p.html_url, state: "open" };
 }
 
@@ -303,7 +367,7 @@ export function mergeBlock(tests: TestGate | undefined): string | null {
 /** Squash-merge the open pull request, then move the working copy back to the updated base branch. */
 export async function mergePullRequest(root: string): Promise<PullRequest> {
   const branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
-  if (!branch.startsWith("lens/fixes-")) throw new Error("No fixes branch to merge.");
+  if (!(await isFixesBranch(root, branch))) throw new Error("No fixes branch to merge.");
   if (await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"])) throw new Error("There are fixes not in the pull request yet. Update it first.");
   const r = await repoOf(root);
   const pr = await findPr(root, r, branch);
@@ -316,6 +380,7 @@ export async function mergePullRequest(root: string): Promise<PullRequest> {
   await git(root, ["checkout", base]);
   await git(root, ["pull", "--ff-only", "--no-tags", "origin", base]);
   await git(root, ["branch", "-D", branch]).catch(() => undefined);
+  await forgetBranch(root, branch);
   const mergedAt = new Date().toISOString();
   await git(root, ["config", "lens.merged", `${pr.number} ${pr.url} ${mergedAt}`]);
   return { number: pr.number, url: pr.url, state: "merged", mergedAt };

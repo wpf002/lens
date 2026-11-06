@@ -14,6 +14,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import type { Finding, GraphNode, SecurityReport } from "../types.js";
+import type { SupplyChainStatus } from "./supply-chain.js";
 
 export type CheckStatus = "pass" | "fail" | "clear" | "unverified" | "manual" | "na";
 
@@ -35,6 +36,8 @@ export interface ChecklistInput {
   deps: Record<string, string>;
   endpoints: GraphNode[];
   security: SecurityReport;
+  /** Registry check coverage; absent when supply-chain checks didn't run. */
+  supplyChain?: SupplyChainStatus;
 }
 
 const read = (root: string, rel: string): string | null => {
@@ -83,6 +86,21 @@ function grep(files: ChecklistInput["files"], re: RegExp, filter?: (p: string) =
 }
 
 const isCode = (p: string) => /\.(m?[jt]sx?|py|go|rb|php|java|kt|cs|rs)$/.test(p) && !/(^|\/)(tests?|__tests__|spec|fixtures?)\//.test(p) && !/\.(test|spec)\./.test(p);
+
+function realDepsItem(deps: Record<string, string>, hits: Finding[], status: SupplyChainStatus | undefined): ChecklistItem {
+  const base = { id: "t3-realdeps", tier: 3 as const, title: "Every dependency real, maintained, correctly named" };
+  const count = Object.keys(deps).length;
+  if (!count && !status?.packages && !hits.length) return { ...base, status: "na", evidence: ["No dependency manifests."], source: "repo" };
+  if (hits.length) {
+    return { ...base, status: "fail", source: "scanner", evidence: hits.slice(0, 8).map((f) => `${at(f)} ${f.title}`), fix: "Run Remediate to replace, pin, or remove the flagged dependencies." };
+  }
+  if (!status) return { ...base, status: "unverified", source: "ai", evidence: [`${count} dependencies. Registry checks didn't run.`] };
+  const gaps: string[] = [];
+  if (status.skipped) gaps.push(`Registry checks skipped for ${status.skipped} of ${status.packages} packages (${status.skippedReason ?? "unknown"}). Rescan online to finish them.`);
+  if (status.unsupported.length) gaps.push(`No registry checks for ${status.unsupported.join(", ")}.`);
+  if (gaps.length) return { ...base, status: "unverified", source: "scanner", evidence: gaps };
+  return { ...base, status: "clear", source: "scanner", evidence: [`${status.checked} packages checked against their registries: no typosquats, missing, new, or deprecated packages.`] };
+}
 
 export function buildChecklist(input: ChecklistInput): ChecklistItem[] {
   const { root, files, deps, endpoints, security } = input;
@@ -221,7 +239,7 @@ export function buildChecklist(input: ChecklistInput): ChecklistItem[] {
     const scanning = [exists(root, ".github/dependabot.yml") || exists(root, ".github/dependabot.yaml") ? ".github/dependabot.yml" : "", exists(root, "renovate.json") || exists(root, ".github/renovate.json") ? "renovate.json" : "", /\b(pnpm|npm|yarn) audit|pip-audit|osv-scanner|snyk|trivy|safety check/.test(ci) ? "audit step in CI" : ""].filter(Boolean);
     add({ id: "t3-depscan", tier: 3, title: "Dependency scanning (Dependabot, Renovate, or an audit step)", status: scanning.length ? "pass" : "fail", evidence: scanning.length ? scanning : ["No Dependabot/Renovate config or audit step in CI."], fix: scanning.length ? undefined : "Add .github/dependabot.yml, or run `lens security --osv` in CI.", source: "repo" });
   }
-  add({ id: "t3-realdeps", tier: 3, title: "Every dependency real, maintained, correctly named", status: Object.keys(deps).length ? "unverified" : "na", evidence: [Object.keys(deps).length ? `${Object.keys(deps).length} dependencies. Run \`lens security --osv\` for known CVEs; typo-squats need review.` : "No dependency manifests."], source: "ai" });
+  add(realDepsItem(deps, openBy((f) => f.category === "supply-chain"), input.supplyChain));
   {
     const agentFiles = ["CLAUDE.md", "AGENTS.md", ".mcp.json", ".cursorrules", ".cursor", ".claude", ".windsurfrules", "GEMINI.md", ".github/copilot-instructions.md"].filter((p) => exists(root, p));
     add({ id: "t3-agentcfg", tier: 3, title: "CLAUDE.md, skills and MCP configs reviewed for commands and secrets", status: agentFiles.length ? "unverified" : "na", evidence: agentFiles.length ? agentFiles.map((p) => `${p} present`) : ["No agent config files."], source: agentFiles.length ? "ai" : "repo" });

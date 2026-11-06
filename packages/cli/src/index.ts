@@ -10,9 +10,10 @@ import {
   buildBatches, architectureContext, tourContext, domainContext, securityContext,
   diffImpact, isGitRepo, saveDiff, GraphSearch, indexGraph, neighbors, shortestPath, explain, graphStats, findNode,
   toMermaid, toDot, embedInDashboard, onboardingMarkdown, buildKnowledgeGraph, buildEmbeddings, osvScan, DEFAULT_IGNORES,
-  EDGE_KINDS, NODE_KINDS, type EdgeKind, type KnowledgeGraph, type NodeKind, type PatchKind, type EmbeddingStore, type Severity,
+  EDGE_KINDS, NODE_KINDS, ProbeRefused, type EdgeKind, type KnowledgeGraph, type NodeKind, type PatchKind, type EmbeddingStore, type Severity,
 } from "@lens/core";
 import { startServer, dashboardHtmlPath } from "./server.js";
+import { ProbeCommandError, askYesNo, runProbeCommand } from "./probe.js";
 import { cloneOrUpdate, parseRepo, reposDir, sessionToken } from "./cloud.js";
 import { fileURLToPath } from "node:url";
 
@@ -57,13 +58,14 @@ program
   .option("--full", "ignore previous graph and fingerprints")
   .option("--exclude <globs>", "comma-separated gitignore-style patterns")
   .option("--no-security", "skip the security pass")
+  .option("--offline", "skip npm/PyPI registry lookups for supply-chain checks")
   .option("--json", "print the result summary as JSON")
   .action(async (dir, o) => {
     const root = resolveDir(dir);
     if (!existsSync(root)) fail(`No such directory: ${root}`);
     const r = await scanAndSave(root, {
       full: o.full, exclude: o.exclude ? String(o.exclude).split(",").map((s: string) => s.trim()).filter(Boolean) : undefined,
-      noSecurity: o.security === false, onProgress: o.json ? undefined : log,
+      noSecurity: o.security === false, offline: o.offline === true, onProgress: o.json ? undefined : log,
     });
     const g = r.graph;
     const summary = {
@@ -532,6 +534,28 @@ program
     const root = resolveDir(dir);
     await fs.rm(paths(root).intermediate, { recursive: true, force: true });
     out({ removed: paths(root).intermediate });
+  });
+
+/* ---------------- probe ---------------- */
+program
+  .command("probe")
+  .description("Send safe dynamic checks to a local or staging copy of the app")
+  .argument("[dir]")
+  .requiredOption("--target <url>", "base URL of the running app (localhost, *.localhost, *.test, or --staging-host)")
+  .option("--staging-host <host>", "allow this staging host; must match --target")
+  .option("--dry-run", "print the requests without sending them")
+  .option("--yes", "skip the confirmation prompt")
+  .option("--json", "print the result as JSON")
+  .action(async (dir, o) => {
+    const root = resolveDir(dir);
+    const g = await requireGraph(root);
+    try {
+      const changed = await runProbeCommand(root, g, o, { out, log, isTty: !!process.stdin.isTTY, confirm: askYesNo });
+      if (changed) await saveGraph(root, g);
+    } catch (e) {
+      if (e instanceof ProbeCommandError || e instanceof ProbeRefused) fail(e.message);
+      throw e;
+    }
   });
 
 program.parseAsync().catch((e: Error) => fail(e.message));

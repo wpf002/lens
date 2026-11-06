@@ -10,6 +10,8 @@ import {
   type KnowledgeGraph, type GraphNode, type GraphEdge,
 } from "../src/index.js";
 import { MAX_TAINT_DEPTH, traceTaint, type FunctionSource } from "../src/security/taint.js";
+import { commentLines, forwardTarget, weakTestReason } from "../src/quality/tells.js";
+import { isPolicyJson, scanInfra } from "../src/security/infra.js";
 
 const FIX = path.join(__dirname, "fixtures");
 
@@ -92,6 +94,55 @@ describe("scan (vuln fixture)", () => {
     for (const r of ["js-exec-shell", "prisma-raw-unsafe", "py-unsafe-deser", "py-sql-format", "open-redirect", "jwt-no-verify", "webhook-no-signature", "react-dangerous-html", "secret-stripe-live-key", "secret-db-url-password", "debug-enabled"]) {
       expect(rules, r).toContain(r);
     }
+  });
+
+  it("finds the planted infrastructure misconfigurations", () => {
+    const hits = (path: string) => new Set(g.security!.findings.filter((f) => f.path === path).map((f) => f.rule));
+    const expectRules = (path: string, rules: string[]) => {
+      const found = hits(path);
+      for (const r of rules) expect(found, `${path}: ${r}`).toContain(r);
+    };
+    expectRules("Dockerfile", ["docker-root-user", "docker-no-healthcheck"]);
+    expectRules("Dockerfile.worker", ["docker-latest-tag", "docker-secret-env", "curl-pipe-shell", "docker-add-url", "docker-root-user"]);
+    expectRules("infra/main.tf", [
+      "tf-public-acl", "tf-public-access-block-off", "tf-open-ingress", "tf-public-db", "tf-hardcoded-credential",
+      "tf-unencrypted", "tf-unencrypted-storage", "iam-wildcard-action", "iam-wildcard-resource",
+    ]);
+    expectRules("k8s/deployment.yaml", [
+      "k8s-privileged", "k8s-host-namespace", "k8s-host-path", "docker-socket-mount", "k8s-run-as-root-explicit",
+      "k8s-allow-privilege-escalation", "k8s-plain-env-secret", "k8s-no-resource-limits",
+    ]);
+    expectRules("deploy/app.yaml", ["k8s-run-as-root", "k8s-privilege-escalation-default", "k8s-secret-manifest"]);
+    expectRules("iam/policy.json", ["iam-wildcard-action", "tf-public-principal"]);
+    expectRules(".github/workflows/ci.yml", ["gha-prt-checkout", "gha-unpinned-action", "gha-script-injection", "gha-secret-echo", "gha-write-all", "curl-pipe-shell"]);
+  });
+
+  it("keeps infra checks precise", () => {
+    const at = (path: string, rule: string) => g.security!.findings.filter((f) => f.path === path && f.rule === rule);
+    // Port 443 open to the world and the egress block are fine; only the SSH ingress is flagged.
+    expect(at("infra/main.tf", "tf-open-ingress").map((f) => f.line)).toEqual([20]);
+    // Action "*" on Resource "*" is full admin; the Deny statement is ignored.
+    const admin = at("infra/main.tf", "iam-wildcard-action");
+    expect(admin.map((f) => [f.line, f.severity])).toEqual([[56, "critical"]]);
+    // The second stage builds FROM an earlier stage, not an unpinned image.
+    expect(at("Dockerfile.worker", "docker-latest-tag").map((f) => f.line)).toEqual([1]);
+    // Explicit runAsUser: 0 is reported once by the line rule, not again as a missing setting.
+    expect(at("k8s/deployment.yaml", "k8s-run-as-root")).toEqual([]);
+    expect(at(".github/workflows/ci.yml", "gha-unpinned-action").map((f) => f.line)).toEqual([13]);
+    expect(at(".github/workflows/ci.yml", "gha-prt-checkout")[0]?.severity).toBe("critical");
+  });
+
+  it("treats CloudTrail logs that quote a policy as data, not a policy", () => {
+    const log = '{"eventVersion": "1.11", "requestParameters": {"policy": {"Statement": [{"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject"}]}}}';
+    expect(isPolicyJson("samples/ct.json", log)).toBe(false);
+    expect(isPolicyJson("iam/policy.json", '{"Statement": [{"Effect": "Allow", "Action": "*"}]}')).toBe(true);
+  });
+
+  it("accepts an entrypoint that chowns a volume as root and then drops to another user", () => {
+    const rules = (raw: string) => scanInfra({ path: "Dockerfile", lang: "dockerfile", cleaned: raw, raw }).map((f) => f.rule);
+    const base = 'FROM node:22-slim\nHEALTHCHECK CMD ["true"]\n';
+    expect(rules(`${base}CMD ["node", "index.js"]\n`)).toContain("docker-root-user");
+    expect(rules(`${base}ENTRYPOINT ["/bin/sh", "-c", "chown -R node /data && exec setpriv --reuid=node --regid=node --init-groups \\"$@\\"", "x"]\nCMD ["node", "index.js"]\n`)).not.toContain("docker-root-user");
   });
 
   it("does not flag the parameterized $queryRaw tagged template", () => {
@@ -239,6 +290,120 @@ describe("code health", () => {
     expect(healthScore([{ severity: "high", open: 0 }, { severity: "low", open: 5 }])).toBe(98);
     expect(healthScore([])).toBe(100);
     expect(healthScore([{ severity: "high", open: 50 }])).toBe(70); // capped per group
+  });
+});
+
+describe("AI tells", () => {
+  const TELLS = ["narrating-comments", "ai-attribution", "restating-comments", "emoji", "comment-habits", "readme-boilerplate", "scaffold-leftovers", "inconsistent-libs", "forwarding-wrappers", "blanket-try", "weak-tests", "fragmented"];
+
+  async function project(files: Record<string, string>) {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-tells-"));
+    for (const [rel, src] of Object.entries(files)) {
+      await fs.mkdir(path.dirname(path.join(dir, rel)), { recursive: true });
+      await fs.writeFile(path.join(dir, rel), src);
+    }
+    const { graph } = await scanProject(dir, { full: true });
+    await fs.rm(dir, { recursive: true, force: true });
+    return new Map(graph.health!.checks.map((c) => [c.id, c]));
+  }
+
+  const handler = (name: string) => `export async function ${name}(id: string) {\n  try {\n    return await load(id);\n  } catch (err) {\n    throw new Error(\`${name} failed: \${String(err)}\`);\n  }\n}\n`;
+
+  it("flags each tell with the file and line Remediate needs", async () => {
+    const by = await project({
+      "package.json": JSON.stringify({ name: "t", dependencies: { axios: "1", "is-number": "7" } }),
+      "README.md": "# Tasks\n\n- 🚀 Fast\n- 🔒 Secure\n- 📦 Small\n\ngit clone https://github.com/yourusername/tasks\n\nBuilt with Claude Code.\n\nHappy coding!\n\n## License\n\nMIT\n",
+      "src/api.ts": `import axios from "axios";\nimport isNumber from "is-number";\n// Now we fetch the user from the API\nexport async function loadUser(id: string) {\n  console.info("🚀 loading user");\n  const retries = isNumber(id) ? 1 : 0; // changed to fix the retry bug\n  return axios.get(\`/users/\${id}?r=\${retries}\`);\n}\n`,
+      "src/client.ts": `export async function getJson(url: string) {\n  const response = await fetch(url);\n  // Return the response\n  return response;\n}\n`,
+      "src/feed.ts": `export async function feed() {\n  const res = await fetch("/feed");\n  return res.json();\n}\n`,
+      "src/math.ts": `// Generated by Claude Code\nfunction add(a: number, b: number) {\n  return a + b;\n}\nfunction sum(a: number, b: number) {\n  return add(a, b);\n}\nexport const total = sum(1, 2);\n`,
+      "src/handlers.ts": `import { load } from "./load";\n${handler("getUser")}${handler("getTeam")}${handler("getPlan")}${handler("getBill")}`,
+      "src/load.ts": `export async function load(id: string) {\n  return { id };\n}\n`,
+      "src/sections.ts": `// ===== Setup =====\nexport const a = 1;\n// ===== Routes =====\nexport const b = 2;\n// ===== Start =====\nexport const c = 3;\n`,
+      "src/consts/index.ts": `export * from "./a";\nexport * from "./b";\n`,
+      ...Object.fromEntries(["a", "b", "c", "d", "e"].map((n) => [`src/consts/${n}.ts`, `export const ${n.toUpperCase()} = "${n}";\n`])),
+      "test/api.test.ts": `import { it, expect } from "vitest";\nimport { loadUser } from "../src/api";\nit("exports loadUser", () => {\n  expect(loadUser).toBeDefined();\n});\n`,
+      "test/feed.test.ts": `import { it } from "vitest";\nimport { feed } from "../src/feed";\nit("runs", async () => {\n  await feed();\n});\n`,
+      "test/math.test.ts": `import { it, expect } from "vitest";\nimport { total } from "../src/math";\nit("adds", () => {\n  expect(total).toBe(3);\n});\n`,
+      "apps/web/package.json": JSON.stringify({ name: "web" }),
+      "apps/web/README.md": "# React + TypeScript + Vite\n\nThis template provides a minimal setup.\n",
+      "apps/web/public/vite.svg": "<svg/>",
+    });
+    const paths = (id: string) => by.get(id)?.hits.map((h) => `${h.path}${h.line ? `:${h.line}` : ""}`);
+    expect(paths("narrating-comments")).toEqual(["src/api.ts:3", "src/api.ts:6"]);
+    expect(paths("ai-attribution")).toEqual(["README.md:9", "src/math.ts:1"]);
+    expect(paths("restating-comments")).toEqual(["src/client.ts:3"]);
+    expect(by.get("emoji")?.hits.map((h) => h.detail)).toEqual(["🚀 in a log message"]);
+    expect(paths("comment-habits")).toEqual(["src/sections.ts:1"]);
+    expect(by.get("readme-boilerplate")?.hits.map((h) => h.detail)).toEqual(["3 headings and bullets start with an emoji", '"yourusername"', '"Happy coding"', "names a license but the repo has no LICENSE file"]);
+    expect(paths("scaffold-leftovers")).toEqual(["apps/web/README.md", "apps/web/public/vite.svg"]);
+    expect(by.get("inconsistent-libs")?.hits).toEqual([{ path: "src/api.ts", detail: "uses axios for HTTP requests; the rest of the project uses fetch (2 files)" }]);
+    expect(by.get("forwarding-wrappers")?.hits.map((h) => h.detail)).toEqual(["sum() only calls add() with the same arguments"]);
+    expect(paths("blanket-try")).toEqual(["src/handlers.ts:2"]);
+    expect(by.get("weak-tests")?.hits).toEqual([
+      { path: "test/api.test.ts", detail: "every assertion only checks that a value exists or matches a snapshot" },
+      { path: "test/feed.test.ts", detail: "1 tests and no assertions" },
+    ]);
+    expect(by.get("fragmented")?.hits.map((h) => h.path)).toEqual(["src", "src/consts"]);
+    expect(by.get("unused-deps")?.hits.map((h) => h.detail)).toEqual(["is-number replaces a one-line check; inline it"]);
+  });
+
+  it("leaves ordinary code, AI-product docs, and real tests alone", async () => {
+    const by = await project({
+      "package.json": JSON.stringify({ name: "c", dependencies: { zod: "3" } }),
+      "LICENSE": "MIT\n",
+      "README.md": "# Digest\n\nSummaries are generated by Claude for each upload.\n\n## Setup\n\n- Node 22\n- pnpm\n\n## License\n\nMIT\n",
+      "src/digest.ts": [
+        `import { z } from "zod";`,
+        `const Upload = z.object({ id: z.string() });`,
+        `// Lets the caller override the timeout.`,
+        `export async function summarize(raw: unknown, timeoutMs = 5000) {`,
+        `  const upload = Upload.parse(raw);`,
+        `  // Retry once because the token may have just expired.`,
+        `  const res = await fetch(\`/summaries/\${upload.id}\`, { signal: AbortSignal.timeout(timeoutMs) });`,
+        `  // Return early so a missing summary renders the empty state.`,
+        `  if (res.status === 404) return null;`,
+        `  // The reply text is generated by Claude at request time.`,
+        `  return res.json();`,
+        `}`,
+        `export function parse(raw: string) {`,
+        `  try {`,
+        `    return JSON.parse(raw) as unknown;`,
+        `  } catch (err) {`,
+        `    throw new Error(\`bad summary: \${String(err)}\`);`,
+        `  }`,
+        `}`,
+        `export const fetchSummary = (id: string) => summarize({ id });`,
+        ``,
+      ].join("\n"),
+      "test/digest.test.ts": `import { it, expect } from "vitest";\nimport { parse } from "../src/digest";\nit("parses", () => {\n  expect(parse('{"a":1}')).toEqual({ a: 1 });\n  expect(() => parse("x")).toThrow("bad summary");\n});\n`,
+    });
+    for (const id of TELLS) expect(by.get(id)?.hits, id).toEqual([]);
+    expect(by.get("unused-deps")?.hits).toEqual([]);
+  });
+
+  it("reads line, block, and trailing comments but not strings", () => {
+    const src = `const url = "http://x"; // trailing\n/**\n * Block line\n */\nconst s = "// not a comment";\n`;
+    expect(commentLines(src, "typescript")).toEqual([
+      { line: 1, text: "trailing", full: false },
+      { line: 3, text: "Block line", full: true },
+    ]);
+    expect(commentLines(`# lead\nx = "#nope"  # tail\n# type: ignore\n`, "python").map((c) => c.text)).toEqual(["lead", "tail"]);
+  });
+
+  it("matches only wrappers that pass their arguments through unchanged", () => {
+    expect(forwardTarget("function f(a, b) {\n  return g(a, b);\n}", ["a", "b"])).toBe("g");
+    expect(forwardTarget("const f = async (id) => await load(id);", ["id"])).toBe("load");
+    expect(forwardTarget("def f(x):\n    return g(x)", ["x"])).toBe("g");
+    expect(forwardTarget("function f(a, b) {\n  return g(b, a);\n}", ["a", "b"])).toBeNull();
+    expect(forwardTarget("function f(a) {\n  return g(a, 1);\n}", ["a"])).toBeNull();
+    expect(forwardTarget("function f(s) {\n  return JSON.parse(s);\n}", ["s"])).toBeNull();
+  });
+
+  it("treats value checks as real assertions in Python tests", () => {
+    expect(weakTestReason("def test_a():\n    assert f() == 2\n", "python")).toBeNull();
+    expect(weakTestReason("def test_a():\n    assert f() is not None\n", "python")).toBe("every assertion only checks that a value exists");
+    expect(weakTestReason("def test_a():\n    f()\n", "python")).toBe("1 tests and no assertions");
   });
 });
 

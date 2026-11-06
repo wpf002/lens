@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import type { KnowledgeGraph, ImpactReport } from "./types.js";
+import { ArchitectureConfigSchema, formatZodError, type ArchitectureConfig } from "./schema.js";
 
 export const DATA_DIR = ".lens";
 
@@ -32,11 +33,13 @@ export const paths = (root: string) => {
     graph: path.join(dir, "knowledge-graph.json"),
     meta: path.join(dir, "meta.json"),
     config: path.join(dir, "config.json"),
+    architecture: path.join(dir, "architecture.json"),
     fingerprints: path.join(dir, "fingerprints.json"),
     embeddings: path.join(dir, "embeddings.json"),
     diff: path.join(dir, "diff.json"),
     ignore: path.join(dir, ".lensignore"),
     intermediate: path.join(dir, "intermediate"),
+    registryCache: path.join(dir, "registry-cache.json"),
   };
 };
 
@@ -86,6 +89,26 @@ export const loadConfig = async (root: string) => (await readJson<LensConfig>(pa
 export const saveConfig = (root: string, c: LensConfig) => writeJsonAtomic(paths(root).config, c, true);
 export const loadFingerprints = async (root: string) => (await readJson<Record<string, string>>(paths(root).fingerprints)) ?? {};
 export const saveFingerprints = (root: string, f: Record<string, string>) => writeJsonAtomic(paths(root).fingerprints, f);
+/** Owner layer rules. Missing file means defaults; a malformed one fails the scan with the reason. */
+export async function loadArchitectureConfig(root: string): Promise<ArchitectureConfig | undefined> {
+  const file = paths(root).architecture;
+  let text: string;
+  try {
+    text = await fs.readFile(file, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw e;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (e) {
+    throw new Error(`${DATA_DIR}/architecture.json is not valid JSON: ${(e as Error).message}`);
+  }
+  const parsed = ArchitectureConfigSchema.safeParse(raw);
+  if (!parsed.success) throw new Error(`${DATA_DIR}/architecture.json is invalid:\n${formatZodError(parsed.error)}`);
+  return parsed.data;
+}
 export const saveDiff = (root: string, d: ImpactReport) => writeJsonAtomic(paths(root).diff, d, true);
 
 /** Resolve a user path inside root; throws on escape. */

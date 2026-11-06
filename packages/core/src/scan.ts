@@ -4,6 +4,8 @@
  * files and are flagged `stale` for changed ones.
  */
 import { buildChecklist } from "./security/checklist.js";
+import { checkSupplyChain, isDependencyManifest } from "./security/supply-chain.js";
+import type { RegistryFetch, GitResolve } from "./security/registry.js";
 import { buildHealth } from "./quality/health.js";
 import { promises as fs } from "node:fs";
 import { createHash } from "node:crypto";
@@ -25,7 +27,7 @@ import type { FunctionSource } from "./security/taint.js";
 import {
   buildHeuristicLayers, buildHeuristicTour, detectFrameworks, fileComplexity, functionComplexity, heuristicLayer, isFileKind, listPreview,
 } from "./heuristics.js";
-import { loadFingerprints, loadGraph, loadMeta, paths, saveFingerprints, saveGraph, saveMeta, loadConfig, type LensMeta } from "./persistence.js";
+import { loadFingerprints, loadGraph, loadMeta, paths, saveFingerprints, saveGraph, saveMeta, loadConfig, loadArchitectureConfig, type LensMeta } from "./persistence.js";
 
 export interface ScanOptions {
   exclude?: string[];
@@ -33,6 +35,12 @@ export interface ScanOptions {
   full?: boolean;
   /** Skip the security pass. */
   noSecurity?: boolean;
+  /** Skip registry lookups for supply-chain checks (also set by LENS_OFFLINE=1). */
+  offline?: boolean;
+  /** Registry fetch override, for tests. */
+  registryFetch?: RegistryFetch;
+  /** Git ref lookup override, for tests. */
+  gitResolve?: GitResolve;
   onProgress?: (msg: string) => void;
 }
 
@@ -92,6 +100,7 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
   const root = path.resolve(rootIn);
   const progress = opts.onProgress ?? (() => {});
   const config = await loadConfig(root);
+  const architecture = await loadArchitectureConfig(root);
   const exclude = [...(config.exclude ?? []), ...(opts.exclude ?? [])];
 
   progress("discovering files");
@@ -550,13 +559,25 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
       const inner = (symsByFile.get(p) ?? []).filter((s) => s.lines && s.lines[0] <= line && s.lines[1] >= line).sort((a, b) => b.lines![0] - a.lines![0])[0];
       return inner?.id ?? byPath.get(p)?.nodeId ?? `file:${p}`;
     };
-    security = finalizeSecurity({ graph: { nodes: nodeList, edges }, raw: recs.flatMap((r) => r.raw), locate, previous: prevGraph?.security, functions: functionSources(recs, symId) });
+    const manifests = recs.filter((r) => isDependencyManifest(r.f.path)).map((r) => ({ path: r.f.path, src: r.src }));
+    const supplyChain = await checkSupplyChain({
+      root,
+      manifests,
+      localPackages: localPackageNames(manifests),
+      offline: opts.offline,
+      fetch: opts.registryFetch,
+      gitResolve: opts.gitResolve,
+      onProgress: progress,
+    });
+    const raw = [...recs.flatMap((r) => r.raw), ...supplyChain.findings];
+    security = finalizeSecurity({ graph: { nodes: nodeList, edges }, raw, locate, previous: prevGraph?.security, functions: functionSources(recs, symId) });
     security.checklist = buildChecklist({
       root,
       files: recs.map((r) => ({ path: r.f.path, src: r.src })),
       deps: allDeps,
       endpoints: nodeList.filter((n) => n.kind === "endpoint"),
       security,
+      supplyChain: supplyChain.status,
     });
   }
 
@@ -567,6 +588,7 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
     nodes: nodeList,
     edges,
     deps: allDeps,
+    architecture,
   });
 
   /* ---- project ---- */
@@ -605,6 +627,21 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
 }
 
 /** Scan and persist to .lens/. */
+/** Names of the packages this repo defines, so workspace dependencies aren't looked up on npm. */
+function localPackageNames(manifests: Array<{ path: string; src: string }>): Set<string> {
+  const names = new Set<string>();
+  for (const m of manifests) {
+    if (posix.basename(m.path) !== "package.json") continue;
+    try {
+      const name = (JSON.parse(m.src) as { name?: unknown }).name;
+      if (typeof name === "string") names.add(name);
+    } catch {
+      // Invalid package.json has no name to collect; the parser reports it elsewhere.
+    }
+  }
+  return names;
+}
+
 export async function scanAndSave(root: string, opts: ScanOptions = {}): Promise<ScanResult> {
   const res = await scanProject(root, opts);
   await saveGraph(root, res.graph);

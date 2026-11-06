@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { authorizeUrl, disconnectGithub, finishOAuth, githubLogin, githubToken, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
 import { cloneOrUpdate, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, type PushInfo } from "./cloud.js";
 import { MAX_TEST_REPAIRS, recordRepairAttempt, repairItems, saveRepairItems } from "./ci.js";
+import type { AppliedFix } from "./commit-text.js";
 import { SOURCES, applyFixes, loadRemediation, undoFix, type RemediationSource } from "./remediate.js";
 import { EnrichRunner, HEALTH_BATCH, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import {
@@ -149,7 +150,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         const job = enrich.start("remediate", root, remediateLimit(TEST_REPAIR_ID, items.length), { source: "health", checkId: TEST_REPAIR_ID });
         while (job.state === "running") await sleep(JOB_POLL_MS);
         if (job.state !== "done" || !job.remediation?.applied) return console.error(`[tests] repair made no changes${job.error ? `: ${job.error}` : ""}`);
-        await pushPending(root);
+        await pushPending(root, await appliedFixes(root));
       }
     } catch (e) {
       console.error(`[tests] ${e instanceof Error ? e.message : e}`);
@@ -432,7 +433,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         if (!githubToken()) return send(res, 400, { error: "Connect GitHub to push, or use Download Patch." });
         if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });
         if (!repoName(proj.root)) return send(res, 400, { error: "this project isn't a cloned repo" });
-        return send(res, 200, await pushFixes(proj.root));
+        return send(res, 200, await pushFixes(proj.root, await appliedFixes(proj.root)));
       }
       if (opts.cloud && req.method === "POST" && (url.pathname === "/api/project/pr" || url.pathname === "/api/project/merge")) {
         if (!githubToken()) return send(res, 400, { error: "Connect GitHub first." });
@@ -443,9 +444,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
           await scanAndSave(proj.root);
           return send(res, 200, { pr });
         }
-        const titles: string[] = [];
-        for (const src of SOURCES) for (const f of (await loadRemediation(proj.root, src))?.fixes ?? []) if (f.status === "applied") titles.push(`- ${f.title}`);
-        const pr = await createPullRequest(proj.root, `Fixes applied by Lens.\n\n${[...new Set(titles)].join("\n")}`);
+        const pr = await createPullRequest(proj.root, await appliedFixes(proj.root));
         void watchTests(proj.root);
         return send(res, 200, { pr });
       }
@@ -529,6 +528,15 @@ function pickFolder(startIn: string): Promise<string | null> {
 }
 
 /** Per-task cost estimates for the project being served, and the files waiting for review. */
+/** Applied fixes across every source, for commit messages and pull request text. */
+async function appliedFixes(root: string): Promise<AppliedFix[]> {
+  const fixes: AppliedFix[] = [];
+  for (const src of SOURCES) {
+    for (const f of (await loadRemediation(root, src))?.fixes ?? []) if (f.status === "applied") fixes.push({ title: f.title, files: f.files.map((file) => file.path) });
+  }
+  return fixes;
+}
+
 async function estimatesFor(root: string, g: KnowledgeGraph, hasSource: boolean) {
   const files = g.nodes.filter((n) => isFileKind(n) && n.path).length;
   const pending = buildBatches(g, { pendingOnly: true }).reduce((a, b) => a + b.files.length, 0);
