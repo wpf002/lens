@@ -264,7 +264,7 @@ export function Remediation({ source }: { source: Source }) {
                 <a className="text-muted hover:text-fg hover:underline" href={pr.url} target="_blank" rel="noreferrer noopener">
                   Pull Request #{pr.number}
                 </a>
-                <TestsLink pr={pr} />
+                <TestsStatus pr={pr} />
                 {pushed?.dirty ? (
                   <Button size="sm" variant="accent" disabled={aiBusy || !!push.busy || op.busy} onClick={() => void step("Updating…", createPullRequest)}>
                     {push.busy ?? "Update Pull Request"}
@@ -421,7 +421,7 @@ function ItemList({ info, items }: { info: ItemInfo; items: Array<{ itemId: stri
 const canMerge = (pr: PullRequest) => pr.tests?.state === "passed" || pr.tests?.state === "none";
 
 /** Test results for an open fixes PR, counting only failures Lens's changes caused. */
-function TestsLink({ pr }: { pr: PullRequest }) {
+function TestsStatus({ pr }: { pr: PullRequest }) {
   const t = pr.tests;
   if (!t) return null;
   const broken = t.broken.reduce((n, b) => n + Math.max(1, b.tests.length), 0);
@@ -437,8 +437,9 @@ function TestsLink({ pr }: { pr: PullRequest }) {
     ...(t.preexisting ? [`${t.preexisting} check${t.preexisting === 1 ? "" : "s"} also failing on the base branch`] : []),
   ].join("\n");
   return (
-    <a className={cx("hover:underline", tone)} title={detail || undefined} href={`${pr.url}/checks`} target="_blank" rel="noreferrer noopener">
+    // Plain text: it renders where Create Pull Request was, so a link here caught repeat clicks and opened a tab.
+    <span className={tone} title={detail || undefined}>
       {label}
-    </a>
+    </span>
   );
 }
