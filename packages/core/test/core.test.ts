@@ -407,7 +407,7 @@ describe("misc", () => {
 
 
 describe("traceTaint", () => {
-  type Fn = { lines: string[]; params: string[]; lang?: string };
+  type Fn = { lines: string[]; params: string[]; lang?: string; path?: string; name?: string };
   const node = (id: string, kind: GraphNode["kind"], extra: Partial<GraphNode> = {}): GraphNode => ({
     id, kind, name: id.split(":").pop()!, summary: "", summarySource: "heuristic", tags: [], complexity: "simple", ...extra,
   });
@@ -420,8 +420,11 @@ describe("traceTaint", () => {
       out.set(source, [...(out.get(source) ?? []), { source, target, kind, weight: 1, origin: "static" }]);
     for (const [name, f] of Object.entries(fns)) {
       const id = `function:${name}`;
-      nodes.set(id, node(id, "function"));
-      functions.set(id, { lang: f.lang ?? "typescript", startLine: 1, lines: f.lines, params: f.params });
+      nodes.set(id, node(id, "function", { path: f.path, name: f.name ?? name }));
+      functions.set(id, {
+        lang: f.lang ?? "typescript", startLine: 1, lines: f.lines, params: f.params,
+        receiverParam: f.lang === "python" && f.params[0] === "self",
+      });
     }
     const endpoints = handlers.map((h) => {
       const ep = node(`endpoint:GET /${h}`, "endpoint", { endpoint: { route: `/${h}`, auth: "unguarded", entryType: "http" } });
@@ -463,11 +466,32 @@ describe("traceTaint", () => {
   it("follows a call the resolver missed by matching the function name", () => {
     const t = trace({
       handler: { params: ["req"], lines: ["function handler(req) {", "  return jobs.runJob(req.body.name);", "}"] },
-      runJob: { params: ["name"], lines: ["function runJob(name) {", "  exec(`make ${name}`);", "}"] },
+      runJob: { path: "src/jobs.ts", params: ["name"], lines: ["function runJob(name) {", "  exec(`make ${name}`);", "}"] },
     });
     expect(t.reached("function:runJob", 2, "command-exec")?.entries.get("endpoint:GET /handler")).toEqual([
       "endpoint:GET /handler", "function:handler", "function:runJob",
     ]);
+  });
+
+  it("doesn't follow a library call into a repo function that shares its name", () => {
+    const t = trace({
+      handler: { lang: "python", path: "app/views.py", params: ["request"], lines: ["def handler(request):", "    subprocess.run(request.args['cmd'])", "    child().run(request.args['cmd'])"] },
+      run: { lang: "python", path: "app/tasks.py", params: ["cmd"], lines: ["def run(cmd):", "    os.system(cmd)"] },
+    });
+    expect(t.tainted.has("function:run")).toBe(false);
+  });
+
+  it("follows a name-only call through self or the callee's module or class", () => {
+    const t = trace({
+      handler: {
+        lang: "python", path: "app/views.py", params: ["self", "request"],
+        lines: ["def handler(self, request):", "    self.archive(request.args['a'])", "    report_store.find(request.args['b'])", "    ReportStore.purge(request.args['c'])"],
+      },
+      archive: { lang: "python", path: "app/views.py", name: "View.archive", params: ["self", "name"], lines: ["def archive(self, name):", "    os.system(name)"] },
+      find: { lang: "python", path: "app/report_store.py", params: ["key"], lines: ["def find(key):", "    os.system(key)"] },
+      purge: { lang: "python", path: "app/db.py", name: "ReportStore.purge", params: ["key"], lines: ["def purge(key):", "    os.system(key)"] },
+    });
+    for (const f of ["archive", "find", "purge"]) expect(t.reached(`function:${f}`, 2, "command-exec"), f).toBeTruthy();
   });
 
   it("binds destructured, keyword, and rest parameters", () => {

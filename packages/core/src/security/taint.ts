@@ -35,6 +35,8 @@ export const MAX_NAME_CANDIDATES = 3;
 const MAX_HELPER_LINES = 30;
 /** Max argument text length scanned per call site. */
 const MAX_ARG_CHARS = 2000;
+/** Text scanned backwards from a call name for its qualifier. */
+const MAX_QUALIFIER_CHARS = 120;
 /** Max sanitizer calls removed from one expression. */
 const MAX_SANITIZER_STRIPS = 20;
 
@@ -74,6 +76,14 @@ const LITERAL_RETURN = /^(?:["'`][^"'`$]*["'`]|-?\d+(?:\.\d+)?|null|undefined|No
 const IDENT = /^[A-Za-z_$][\w$]*$/;
 const ASSIGN = /^\s*((?:(?:const|let|var|final|val|auto)\s+)?(?:\{[^}]*\}|\[[^\]]*\]|[A-Za-z_$][\w$]*(?:\s*:\s*[\w<>[\]|. ]+)?(?:\s*,\s*[A-Za-z_$][\w$]*)*))\s*(?::=|=(?![=>]))\s*(.+)$/;
 const CALL_NAME = /(?<![\w$])([A-Za-z_$][\w$]*)\s*\(/g;
+/** Identifier right before `.name(` at the end of the text, e.g. `jobs` in `jobs.runJob(`. */
+const QUALIFIER = /([A-Za-z_$][\w$]*)?\s*(?:\?\.|\.|::|->)\s*$/;
+/** Qualifiers that mean "the enclosing object or class". */
+const SELF_QUALIFIERS = new Set(["this", "self", "cls"]);
+/** Qualifier on an unqualified call. */
+const UNQUALIFIED = "";
+/** Qualifier on a call through an expression (`a().b(`, `x[0].b(`), never matched by name. */
+const COMPLEX_QUALIFIER = "?";
 
 export interface FunctionSource {
   lang: string;
@@ -278,12 +288,23 @@ export function propagate(fn: FunctionSource, seed: Map<string, Kinds>, ctx: Tai
   return names;
 }
 
-/** Positional arguments at each call to `callee` in a body, up to the cap. */
-function callSites(fn: FunctionSource, callee: string): { sites: string[][]; capped: boolean } {
+/** The qualifier of the call whose name starts at `index`: UNQUALIFIED, an identifier, or COMPLEX_QUALIFIER. */
+export function qualifierAt(text: string, index: number): string {
+  const q = QUALIFIER.exec(text.slice(Math.max(0, index - MAX_QUALIFIER_CHARS), index));
+  if (!q) return UNQUALIFIED;
+  return q[1] ?? COMPLEX_QUALIFIER;
+}
+
+/**
+ * Positional arguments at each call to `callee` in a body, up to the cap.
+ * With `qualifiers`, only calls written with one of them count (see calleesOf).
+ */
+function callSites(fn: FunctionSource, callee: string, qualifiers?: ReadonlySet<string>): { sites: string[][]; capped: boolean } {
   const text = fn.lines.slice(0, MAX_BODY_LINES).join("\n");
   const re = new RegExp(`(?<![\\w$])${escapeRe(callee)}\\s*\\(`, "g");
   const sites: string[][] = [];
   for (const m of text.matchAll(re)) {
+    if (qualifiers && !qualifiers.has(qualifierAt(text, m.index!))) continue;
     if (sites.length >= MAX_CALL_SITES_PER_EDGE) return { sites, capped: true };
     const open = m.index! + m[0].length - 1;
     const close = closingBracket(text, open);
@@ -388,6 +409,9 @@ function buildSanitizers(functions: Map<string, FunctionSource>, nameOf: (id: st
   return san;
 }
 
+/** `report_store`, `reportStore`, and `ReportStore` name the same module. */
+const normalizeQualifier = (name: string) => name.replace(/[_-]/g, "").toLowerCase();
+
 const langFamily = (lang: string) => (/^(?:typescript|javascript|tsx|jsx|vue|svelte)$/.test(lang) ? "js" : lang);
 
 export function traceTaint({ nodes, out, endpoints, functions }: TraceInput): TaintResult {
@@ -445,21 +469,59 @@ export function traceTaint({ nodes, out, endpoints, functions }: TraceInput): Ta
     return grew;
   };
 
-  /** Callees by graph edge, plus same-language repo functions matched by call name when no edge exists. */
-  const calleesOf = (id: string, fn: FunctionSource): Array<{ id: string; name: string }> => {
-    const found = new Map<string, string>();
-    for (const e of out.get(id) ?? []) if (e.kind === "calls" && functions.has(e.target)) found.set(e.target, nameOf(e.target));
-    const linkedNames = new Set(found.values());
+  /** Lowercased names a call qualifier may use to mean this function's module or class. */
+  const homeNames = new Map<string, Set<string>>();
+  const homeOf = (id: string): Set<string> => {
+    let names = homeNames.get(id);
+    if (names) return names;
+    const node = nodes.get(id);
+    const parts = (node?.path ?? "").split("/");
+    const file = (parts.pop() ?? "").replace(/\.[^.]+$/, "");
+    const owners = (node?.name ?? "").split(".").slice(0, -1);
+    names = new Set([file, parts.pop() ?? "", ...owners].filter(Boolean).map(normalizeQualifier));
+    homeNames.set(id, names);
+    return names;
+  };
+  /**
+   * Whether a call written as `qualifier.name(` in `callerId` can mean `calleeId`.
+   * Unqualified calls can. `this.`/`self.` calls can when both are in the same file.
+   * Otherwise the qualifier has to name the callee's file, directory, or class,
+   * so `subprocess.run(x)` never reaches a repo function named `run`.
+   */
+  const qualifierFits = (qualifier: string, callerId: string, calleeId: string): boolean => {
+    if (qualifier === UNQUALIFIED) return true;
+    if (qualifier === COMPLEX_QUALIFIER) return false;
+    if (SELF_QUALIFIERS.has(qualifier)) {
+      const callerPath = nodes.get(callerId)?.path;
+      return callerPath !== undefined && callerPath === nodes.get(calleeId)?.path;
+    }
+    return homeOf(calleeId).has(normalizeQualifier(qualifier));
+  };
+
+  type Callee = { id: string; name: string; qualifiers?: Set<string> };
+  /**
+   * Callees by graph edge, plus same-language repo functions matched by call name when
+   * no edge exists. Name matches record which qualifiers fit, and only those call sites count.
+   */
+  const calleesOf = (id: string, fn: FunctionSource): Callee[] => {
+    const found = new Map<string, Callee>();
+    for (const e of out.get(id) ?? []) if (e.kind === "calls" && functions.has(e.target)) found.set(e.target, { id: e.target, name: nameOf(e.target) });
+    const linkedNames = new Set([...found.values()].map((c) => c.name));
     const text = fn.lines.slice(0, MAX_BODY_LINES).join("\n");
     for (const m of text.matchAll(CALL_NAME)) {
       const name = m[1]!;
       if (linkedNames.has(name)) continue;
       const candidates = (byName.get(name) ?? []).filter((c) => c !== id && langFamily(functions.get(c)!.lang) === langFamily(fn.lang));
       if (!candidates.length || candidates.length > MAX_NAME_CANDIDATES) continue;
-      for (const c of candidates) found.set(c, name);
-      linkedNames.add(name);
+      const qualifier = qualifierAt(text, m.index!);
+      for (const c of candidates) {
+        if (!qualifierFits(qualifier, id, c)) continue;
+        const callee = found.get(c) ?? { id: c, name, qualifiers: new Set<string>() };
+        callee.qualifiers!.add(qualifier);
+        found.set(c, callee);
+      }
     }
-    return [...found].map(([calleeId, name]) => ({ id: calleeId, name }));
+    return [...found.values()];
   };
 
   for (const ep of endpoints) {
@@ -491,7 +553,7 @@ export function traceTaint({ nodes, out, endpoints, functions }: TraceInput): Ta
     if (fn.lines.length > MAX_BODY_LINES) limits.add("body");
     state.names = propagate(fn, seedNames(fn, state.params), ctx);
     for (const callee of calleesOf(id, fn)) {
-      const { sites, capped } = callSites(fn, callee.name);
+      const { sites, capped } = callSites(fn, callee.name, callee.qualifiers);
       if (capped) limits.add("call-sites");
       if (!sites.length) continue;
       const hit = argTaint(sites, paramList(functions.get(callee.id)!), state.names, ctx);
