@@ -289,7 +289,16 @@ describe("code health", () => {
     expect(allOpen).toBe(92);
     expect(healthScore([{ severity: "high", open: 0 }, { severity: "low", open: 5 }])).toBe(98);
     expect(healthScore([])).toBe(100);
-    expect(healthScore([{ severity: "high", open: 50 }])).toBe(70); // capped per group
+    expect(healthScore([{ severity: "high", open: 50 }])).toBe(74); // capped per group
+  });
+
+  // Regression: a repo with many open groups scored 0, so fixing rows never moved the number.
+  it("keeps a heavily flagged repo above 0 and raises the score on each fix", () => {
+    const mediums = Array.from({ length: 12 }, () => ({ severity: "medium" as const, open: 10 }));
+    const before = healthScore([{ severity: "high", open: 5 }, ...mediums]);
+    const after = healthScore([{ severity: "high", open: 4 }, ...mediums]);
+    expect(before).toBeGreaterThan(0);
+    expect(after).toBeGreaterThan(before);
   });
 });
 
