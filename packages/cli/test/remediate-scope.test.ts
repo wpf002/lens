@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { paths, scanAndSave } from "@lens/core";
-import { fixAllPlan, remediationItems, REFACTOR_CHECKS } from "../src/enrich.js";
+import { fixAllPlan, remediationItems, REFACTOR_CHECKS, setWontFix } from "../src/enrich.js";
 
 const FIX = path.resolve(__dirname, "../../core/test/fixtures/vuln-app");
 
@@ -38,5 +38,15 @@ describe("Remediate scope", () => {
     const plan = await fixAllPlan(dir, "health");
     expect(plan.items).toBeGreaterThan(0);
     expect(plan.estimate.limit).toBeGreaterThanOrEqual(8);
+  });
+
+  it("counts only open rows, so Won't Fix rows don't inflate the Fix All count", async () => {
+    const before = await fixAllPlan(dir, "health");
+    const [first] = await remediationItems(dir, "health", undefined, Infinity);
+    await setWontFix(dir, first!.id, true);
+    const after = await fixAllPlan(dir, "health");
+    expect(after.items).toBe(before.items - 1);
+    expect(after.items).toBe((await remediationItems(dir, "health", undefined, Infinity)).length);
+    await setWontFix(dir, first!.id, false);
   });
 });

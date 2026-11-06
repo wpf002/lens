@@ -1030,9 +1030,10 @@ export async function fixAllPlan(root: string, source: "audit" | "health"): Prom
   const review = source === "health" ? await reviewPlan(root, g) : null;
   const first = review ? (review.batches ? "review" : null) : auditAt && auditAt >= headCommitTime(root) ? null : "audit";
   const pre = !first ? { low: 0, high: 0, limit: 0 } : review ? review.estimate : estimateCost("audit", files);
-  const items = await fixableCount(root, source);
+  const open = await remediationItems(root, source, undefined, Infinity);
+  const items = open.length;
   // Refactors each get their own run and cap, so they're priced apart from batch fixes.
-  const refactors = source === "health" ? (g?.health?.checks ?? []).filter((c) => REFACTOR_CHECKS.has(c.id)).reduce((a, c) => a + c.count, 0) : 0;
+  const refactors = source === "health" ? open.filter((i) => isRefactorItem(i.id)).length : 0;
   // Before the first run, assume about ten more items will turn up.
   const batch = estimateFixAll(Math.max(1, items - refactors + (first ? 10 : 0)));
   const fix = { low: batch.low + refactors * REFACTOR_ITEM_LOW_USD, high: batch.high + refactors * REFACTOR_ITEM_HIGH_USD, limit: batch.limit + refactors * REFACTOR_ITEM_LIMIT_USD };
@@ -1064,12 +1065,9 @@ function headCommitTime(root: string): number {
 }
 
 /** Everything Fix All can work on for a page. */
+/** Open rows a Fix All run would send: the same set the page lists as open, without Fixed, safe, or Won't Fix rows. */
 export async function fixableCount(root: string, source: "audit" | "health" = "health"): Promise<number> {
-  if (source === "audit") return (await remediationItems(root, "audit", undefined, Infinity)).length;
-  const g = await loadGraph(root);
-  const checks = (g?.health?.checks ?? []).reduce((a, c) => a + c.count, 0);
-  const review = (await remediationItems(root, "health", undefined, Infinity)).filter((i) => i.id.startsWith("review-")).length;
-  return checks + review;
+  return (await remediationItems(root, source, undefined, Infinity)).length;
 }
 
 /** Failing checklist items (scanner + AI audit merged) or the review's high/medium findings. */
