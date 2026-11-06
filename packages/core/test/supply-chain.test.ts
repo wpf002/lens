@@ -6,14 +6,15 @@ import type { SecurityReport } from "../src/types.js";
 import {
   checkSupplyChain, typosquatTarget, osaDistance, npmPinState, pypiPinState,
   parsePackageJson, parseRequirementsTxt, parsePyproject, scanProject, buildChecklist,
-  type RegistryFetch, type SupplyChainOptions,
+  versionedLine, parseGitSource, gitPinnedLine, successorName, registryTarballVersion, pypiCompatible, githubRepo, pickRef, findingItemId,
+  type RegistryFetch, type GitResolve, type SupplyChainOptions, type DeclaredDependency,
 } from "../src/index.js";
 
 const NOW = new Date("2026-11-01T00:00:00Z");
 const OLD = "2015-01-01T00:00:00.000Z";
 const RECENT = "2026-10-25T00:00:00.000Z";
 
-type Route = { status?: number; body?: unknown } | "network-error" | "hang";
+type Route = { status?: number; body?: unknown; headers?: Record<string, string> } | "network-error" | "hang";
 
 /** Fake registry keyed by URL. Unknown URLs 404. Records every requested URL. */
 function fakeRegistry(routes: Record<string, Route>) {
@@ -28,19 +29,19 @@ function fakeRegistry(routes: Record<string, Route>) {
       });
     }
     if (!route) return new Response("{}", { status: 404 });
-    return new Response(JSON.stringify(route.body ?? {}), { status: route.status ?? 200 });
+    return new Response(JSON.stringify(route.body ?? {}), { status: route.status ?? 200, headers: route.headers });
   };
   return { fetch, calls };
 }
 
-const npmPackument = (name: string, opts: { created?: string; latest?: string; scripts?: Record<string, string>; deprecated?: string } = {}) => {
+const npmPackument = (name: string, opts: { created?: string; latest?: string; scripts?: Record<string, string>; deprecated?: string; repository?: unknown } = {}) => {
   const latest = opts.latest ?? "1.0.0";
   return {
     [`https://registry.npmjs.org/${name.replace("/", "%2f")}`]: {
       body: {
         "dist-tags": { latest },
         time: { created: opts.created ?? OLD },
-        versions: { [latest]: { scripts: opts.scripts, deprecated: opts.deprecated } },
+        versions: { [latest]: { scripts: opts.scripts, deprecated: opts.deprecated, repository: opts.repository } },
       },
     },
   };
@@ -48,6 +49,14 @@ const npmPackument = (name: string, opts: { created?: string; latest?: string; s
 const npmLatest = (name: string, body: Record<string, unknown> = { version: "4.0.0" }) => ({
   [`https://registry.npmjs.org/${name}/latest`]: { body },
 });
+const github = (ownerRepo: string, archived: boolean) => ({
+  [`https://api.github.com/repos/${ownerRepo}`]: { body: { archived } },
+});
+const SHA = "0123456789abcdef0123456789abcdef01234567";
+/** Tests never shell out to git; a resolver must be passed explicitly. */
+const noGit: GitResolve = async () => {
+  throw new Error("git not available in tests");
+};
 const downloads = (name: string, weekly: number) => ({
   [`https://api.npmjs.org/downloads/point/last-week/${name}`]: { body: { downloads: weekly } },
 });
@@ -70,7 +79,7 @@ async function tmpRoot() {
 async function run(manifests: SupplyChainOptions["manifests"], routes: Record<string, Route>, extra: Partial<SupplyChainOptions> = {}) {
   const root = extra.root ?? (await tmpRoot());
   const reg = fakeRegistry(routes);
-  const res = await checkSupplyChain({ root, manifests, offline: false, fetch: reg.fetch, now: NOW, ...extra });
+  const res = await checkSupplyChain({ root, manifests, offline: false, fetch: reg.fetch, gitResolve: noGit, now: NOW, ...extra });
   return { ...res, calls: reg.calls, root, rules: res.findings.map((f) => `${f.rule}:${f.snippet}`) };
 }
 
@@ -131,21 +140,22 @@ describe("checkSupplyChain", () => {
   it("flags a typosquat only when the package isn't widely downloaded", async () => {
     const r = await run([pkgJson({ expres: "^1.0.0", colors: "^1.4.0" })], {
       ...npmPackument("expres"), ...downloads("expres", 12), ...npmLatest("colors", { version: "1.4.0" }),
+      ...npmLatest("express", { version: "4.21.2" }),
     });
     expect(r.rules).toEqual(['dep-typosquat:"expres": "^1.0.0"']);
     const f = r.findings[0]!;
     expect(f).toMatchObject({ category: "supply-chain", cwe: "CWE-1357", severity: "high", path: "package.json", line: 4 });
-    expect(f.message).toContain("Replace it with express");
+    expect(f.message).toContain('change `"expres": "^1.0.0"` to `"express": "^4.21.2"`, then change every import of expres to express');
 
     const busy = await run([pkgJson({ expres: "^1.0.0" })], { ...npmPackument("expres"), ...downloads("expres", 900_000) });
     expect(busy.findings).toEqual([]);
   });
 
   it("flags packages missing from the registry and suggests the close match", async () => {
-    const r = await run([pkgJson({ "react-hook-formz": "^7.0.0", "ai-made-up-helper": "^1.0.0" })], {});
+    const r = await run([pkgJson({ "react-hook-formz": "^7.0.0", "ai-made-up-helper": "^1.0.0" })], npmLatest("react-hook-form", { version: "7.53.0" }));
     expect(r.findings.map((f) => f.rule)).toEqual(["dep-not-on-registry", "dep-not-on-registry"]);
-    expect(r.findings[0]!.message).toContain("Replace it with react-hook-form");
-    expect(r.findings[1]!.message).toContain("Remove it from package.json");
+    expect(r.findings[0]!.message).toContain('`"react-hook-formz": "^7.0.0"` to `"react-hook-form": "^7.53.0"`');
+    expect(r.findings[1]!.message).toContain('Remove `"ai-made-up-helper": "^1.0.0"` from package.json');
     expect(r.status).toMatchObject({ packages: 2, checked: 2, skipped: 0 });
   });
 
@@ -158,7 +168,9 @@ describe("checkSupplyChain", () => {
     const r = await run([pkgJson({ "fresh-lib": "^1.0.0", "native-thing": "^1.0.0" })], routes);
     expect(r.findings.map((f) => [f.rule, f.cwe])).toEqual([["dep-new-package", "CWE-1357"], ["dep-install-script", "CWE-829"]]);
     expect(r.findings[0]!.message).toContain("2026-10-25");
+    expect(r.findings[0]!.message).toContain('change `"fresh-lib": "^1.0.0"` to `"fresh-lib": "1.0.0"`');
     expect(r.findings[1]!.message).toContain("postinstall");
+    expect(r.findings[1]!.message).toContain('`"native-thing": "1.0.0"`');
 
     const pinned = await run([pkgJson({ "fresh-lib": "1.0.0", "native-thing": "1.0.0" })], routes);
     expect(pinned.findings).toEqual([]);
@@ -173,11 +185,13 @@ describe("checkSupplyChain", () => {
       'dep-unpinned:medium:"a": "*"',
       'dep-unpinned:medium:"b": "latest"',
       'dep-unpinned:low:"c": ">=2.0.0"',
-      'dep-git-source:medium:"d": "git+https://github.com/x/d.git"',
       'dep-git-source:high:"f": "http://example.com/f.tgz"',
       "dep-unpinned:medium:flask",
       "dep-unpinned:low:requests>=2",
+      'dep-git-source:medium:"d": "git+https://github.com/x/d.git"',
     ]);
+    expect(r.findings[0]!.message).toContain("Pin it to the version your lockfile installs");
+    expect(r.findings[3]!.message).toContain('change `"f": "http://example.com/f.tgz"` to `"f": "https://example.com/f.tgz"`');
     expect(r.findings.find((f) => f.rule === "dep-git-source")!.cwe).toBe("CWE-494");
   });
 
@@ -188,6 +202,7 @@ describe("checkSupplyChain", () => {
     ], {
       ...npmLatest("request", { version: "2.88.2", deprecated: "request has been deprecated, see https://github.com/request/request/issues/3142" }),
       ...npmPackument("old-crypto-lib", { deprecated: "Contains a security vulnerability, use new-crypto-lib" }),
+      ...npmLatest("new-crypto-lib", { version: "2.1.0" }),
       ...pypi("pycrypto", { status: "archived" }),
       ...pypi("evilpkg", { status: "quarantined", reason: "malware report" }),
     });
@@ -197,6 +212,8 @@ describe("checkSupplyChain", () => {
       "dep-deprecated:low:CWE-1104",
       "dep-quarantined:critical:CWE-506",
     ]);
+    expect(r.findings[1]!.message).toContain('`"old-crypto-lib": "^1.0.0"` to `"new-crypto-lib": "^2.1.0"`');
+    expect(r.findings[0]!.message).toContain('Remove `"request": "^2.88.0"` from package.json');
   });
 
   it("skips workspace, private-registry, and private-index packages", async () => {
@@ -233,9 +250,10 @@ describe("checkSupplyChain", () => {
     const root = await tmpRoot();
     const manifests = [pkgJson({ expres: "^1.0.0" })];
     const first = await run(manifests, { ...npmPackument("expres"), ...downloads("expres", 3) }, { root });
-    expect(first.calls.length).toBe(2);
+    // Package, downloads, and the typosquat target's latest release.
+    expect(first.calls.length).toBe(3);
     const cache = JSON.parse(await fs.readFile(path.join(root, ".lens", "registry-cache.json"), "utf8"));
-    expect(Object.keys(cache.entries)).toHaveLength(2);
+    expect(Object.keys(cache.entries)).toHaveLength(3);
 
     const second = await run(manifests, {}, { root });
     expect(second.calls).toEqual([]);
@@ -245,6 +263,65 @@ describe("checkSupplyChain", () => {
     const offline = await run(manifests, {}, { root, offline: true, now: later });
     expect(offline.rules).toEqual(first.rules);
     expect(offline.status).toMatchObject({ skipped: 1, skippedReason: "offline" });
+  });
+
+  it("names the latest release when a dependency is unpinned", async () => {
+    const r = await run([
+      pkgJson({ a: "*" }),
+      { path: "requirements.txt", src: "flask\nrequests[socks]>=2 ; python_version>'3' # http\n" },
+      { path: "pyproject.toml", src: '[tool.poetry.dependencies]\npython = "^3.11"\nrich = "*"\n' },
+    ], { ...npmPackument("a", { latest: "3.2.1" }), ...pypi("flask"), ...pypi("requests"), ...pypi("rich") });
+    expect(r.findings.map((f) => f.message.split(". ").pop())).toEqual([
+      'In package.json, change `"a": "*"` to `"a": "^3.2.1"`.',
+      "In requirements.txt, change `flask` to `flask~=1.2`.",
+      "In requirements.txt, change `requests[socks]>=2 ; python_version>'3' # http` to `requests[socks]~=1.2 ; python_version>'3'`.",
+      'In pyproject.toml, change `rich = "*"` to `rich = "^1.2.0"`.',
+    ]);
+  });
+
+  it("flags packages whose GitHub repository is archived, and fails soft when GitHub rate-limits", async () => {
+    const deps = { "old-orm": "^1.0.0", "live-lib": "^1.0.0" };
+    const r = await run([pkgJson(deps)], {
+      ...npmPackument("old-orm", { repository: { url: "git+https://github.com/someone/old-orm.git" } }),
+      ...npmPackument("live-lib", { repository: "github:someone/live-lib" }),
+      ...github("someone/old-orm", true), ...github("someone/live-lib", false),
+    });
+    expect(r.rules).toEqual(['dep-deprecated:"old-orm": "^1.0.0"']);
+    expect(r.findings[0]!.message).toContain("(someone/old-orm) is archived on GitHub");
+    expect(r.findings[0]!.message).toContain('Remove `"old-orm": "^1.0.0"`');
+
+    const limited = await run([pkgJson(deps)], {
+      ...npmPackument("old-orm", { repository: "someone/old-orm" }),
+      ...npmPackument("live-lib", { repository: "someone/live-lib" }),
+      "https://api.github.com/repos/someone/old-orm": { status: 403, headers: { "x-ratelimit-remaining": "0" } },
+    });
+    expect(limited.findings).toEqual([]);
+    expect(limited.status).toMatchObject({ packages: 2, checked: 2, skipped: 0 });
+  });
+
+  it("pins git dependencies to the commit or registry release Lens looked up", async () => {
+    const asked: string[] = [];
+    const gitResolve: GitResolve = async (url, ref) => {
+      asked.push(`${url}#${ref}`);
+      return url.includes("gone") ? undefined : SHA;
+    };
+    const r = await run([
+      pkgJson({ d: "github:x/d#main", published: "github:x/published", gone: "git+https://github.com/x/gone.git", old: "x/old" }),
+      { path: "requirements.txt", src: "git+https://github.com/x/pylib.git@v2#egg=pylib\n" },
+    ], {
+      ...npmLatest("published", { version: "2.0.0", repository: { url: "https://github.com/x/published" } }),
+      ...github("x/old", true),
+    }, { gitResolve });
+    const byName = Object.fromEntries(r.findings.map((f) => [`${f.rule}:${f.snippet.split('"')[1] ?? f.snippet}`, f.message]));
+    expect(byName["dep-git-source:d"]).toContain(`Pin it to the commit main points to now. In package.json, change \`"d": "github:x/d#main"\` to \`"d": "github:x/d#${SHA}"\``);
+    expect(byName["dep-git-source:published"]).toContain('change `"published": "github:x/published"` to `"published": "^2.0.0"`');
+    expect(byName["dep-git-source:gone"]).toContain("Lens couldn't read https://github.com/x/gone.git");
+    expect(byName["dep-deprecated:old"]).toContain("x/old, which is archived on GitHub");
+    expect(byName["dep-git-source:git+https://github.com/x/pylib.git@v2#egg=pylib"])
+      .toContain(`to \`git+https://github.com/x/pylib.git@${SHA}#egg=pylib\``);
+    expect(asked).toEqual(expect.arrayContaining(["https://github.com/x/d.git#main", "https://github.com/x/pylib.git#v2"]));
+    expect(asked).not.toContain(expect.stringContaining("published"));
+    expect(r.status).toMatchObject({ skipped: 0 });
   });
 
   it("ignores a corrupt cache file", async () => {
@@ -282,5 +359,73 @@ describe("supply-chain in scan and checklist", () => {
     const security: SecurityReport = { generatedAt: "", rulesVersion: "", entryPoints: [], findings: [], exposure: [], summary: { bySeverity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, unguardedEndpoints: 0, guardedEndpoints: 0, publicEndpoints: 0, riskScore: 0 } };
     const items = buildChecklist({ root: "/nonexistent", files: [], deps: { express: "^4.0.0" }, endpoints: [], security, supplyChain: { packages: 1, checked: 1, skipped: 0, unsupported: [] } });
     expect(items.find((c) => c.id === "t3-realdeps")).toMatchObject({ status: "clear" });
+  });
+});
+
+const dep = (over: Partial<DeclaredDependency> & Pick<DeclaredDependency, "snippet" | "source">): DeclaredDependency => ({
+  ecosystem: "PyPI", name: "pkg", registryName: "pkg", manifest: "requirements.txt", line: 1, ...over,
+});
+
+describe("supply-chain fix text", () => {
+  it("writes version lines in the manifest's own format", () => {
+    const npm = dep({ ecosystem: "npm", name: "a", snippet: '"a": "*"', source: { kind: "registry", spec: "*" } });
+    expect(versionedLine(npm, "3.2.1", "range")).toBe('"a": "^3.2.1"');
+    expect(versionedLine(npm, "3.2.1", "exact", "b")).toBe('"b": "3.2.1"');
+    const poetry = dep({ snippet: 'pkg = { version = "*", extras = ["x"] }', source: { kind: "registry", spec: "*" } });
+    expect(versionedLine(poetry, "1.4.2", "range")).toBe('pkg = { version = "^1.4.2", extras = ["x"] }');
+    const pep = dep({ snippet: "pkg[x]>=1 ; sys_platform=='linux'", source: { kind: "registry", spec: ">=1" } });
+    expect(versionedLine(pep, "1.4.2", "exact")).toBe("pkg[x]==1.4.2 ; sys_platform=='linux'");
+    expect(versionedLine(pep, "1.4.2", "range", "other")).toBe("other~=1.4 ; sys_platform=='linux'");
+    expect(pypiCompatible("5")).toBe(">=5,<6");
+  });
+
+  it("reads git sources and pins them to a commit", () => {
+    const npm = (spec: string) => dep({ ecosystem: "npm", name: "d", snippet: `"d": "${spec}"`, source: { kind: "git", spec, pinnedToCommit: false } });
+    expect(parseGitSource(npm("github:x/d#v1"))).toEqual({ cloneUrl: "https://github.com/x/d.git", ref: "v1", github: "x/d" });
+    expect(parseGitSource(npm("gitlab:x/d"))).toEqual({ cloneUrl: "https://gitlab.com/x/d.git", ref: "HEAD", github: undefined });
+    expect(parseGitSource(npm("git+ssh://git@github.com/x/d.git#main"))).toMatchObject({ cloneUrl: "https://github.com/x/d.git", ref: "main", github: "x/d" });
+    expect(parseGitSource(npm("github:x/d#semver:^1"))).toBeUndefined();
+    expect(parseGitSource(npm("github:x/d#abc1234"))).toBeUndefined();
+    expect(gitPinnedLine(npm("github:x/d#v1"), SHA)).toBe(`"d": "github:x/d#${SHA}"`);
+    const poetry = dep({ snippet: 'pkg = { git = "https://github.com/x/p.git", branch = "dev" }', source: { kind: "git", spec: "https://github.com/x/p.git", pinnedToCommit: false } });
+    expect(parseGitSource(poetry)).toMatchObject({ ref: "dev", github: "x/p" });
+    expect(gitPinnedLine(poetry, SHA)).toBe(`pkg = { git = "https://github.com/x/p.git", rev = "${SHA}" }`);
+  });
+
+  it("turns registry tarball URLs into version pins", () => {
+    const npmUrl = "https://registry.npmjs.org/@scope/lib.js/-/lib.js-2.3.4.tgz";
+    const npm = dep({ ecosystem: "npm", name: "@scope/lib.js", registryName: "@scope/lib.js", snippet: `"@scope/lib.js": "${npmUrl}"`, source: { kind: "url", spec: npmUrl, insecure: false } });
+    expect(registryTarballVersion(npm, npmUrl)).toBe("2.3.4");
+    const whl = "https://files.pythonhosted.org/packages/ab/cd/my_pkg-1.0.2-py3-none-any.whl";
+    expect(registryTarballVersion(dep({ name: "my-pkg", registryName: "my-pkg", snippet: `my-pkg @ ${whl}`, source: { kind: "url", spec: whl, insecure: false } }), whl)).toBe("1.0.2");
+    expect(registryTarballVersion(npm, "https://example.com/lib.js-2.3.4.tgz")).toBeUndefined();
+  });
+
+  it("finds the successor a deprecation notice names", () => {
+    expect(successorName("Use @scope/new-lib instead.", "old")).toBe("@scope/new-lib");
+    expect(successorName("This package has been renamed to `fresh`.", "old")).toBe("fresh");
+    expect(successorName("Please use the native fetch API", "old")).toBeUndefined();
+    expect(successorName("use version 2 or later", "old")).toBeUndefined();
+    expect(successorName("deprecated", "old")).toBeUndefined();
+  });
+
+  it("reads GitHub repos from package metadata", () => {
+    expect(githubRepo({ url: "git+https://github.com/Owner/Repo.git" })).toBe("Owner/Repo");
+    expect(githubRepo("github:owner/repo")).toBe("owner/repo");
+    expect(githubRepo("owner/repo")).toBe("owner/repo");
+    expect(githubRepo("https://gitlab.com/owner/repo")).toBeUndefined();
+    expect(githubRepo(42)).toBeUndefined();
+  });
+
+  it("picks the exact ref from ls-remote output, peeling annotated tags", () => {
+    const out = [`${"a".repeat(40)}\trefs/heads/feature/v1`, `${"b".repeat(40)}\trefs/tags/v1`, `${"c".repeat(40)}\trefs/tags/v1^{}`, `${"d".repeat(40)}\tHEAD`].join("\n");
+    expect(pickRef(out, "v1")).toBe("c".repeat(40));
+    expect(pickRef(out, "HEAD")).toBe("d".repeat(40));
+    expect(pickRef(`${"a".repeat(40)}\trefs/heads/feature/main`, "main")).toBeUndefined();
+  });
+
+  it("keeps a supply-chain row's id when its message gains a new version", () => {
+    const base = { rule: "dep-unpinned", path: "package.json", category: "supply-chain" as const, snippet: '"a": "*"' };
+    expect(findingItemId({ ...base, message: "change to ^1.0.0" })).toBe(findingItemId({ ...base, message: "change to ^2.0.0" }));
   });
 });

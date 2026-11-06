@@ -146,9 +146,12 @@ export function effectiveAuth(n: GraphNode, triagedPublic: Set<string>): NonNull
 /**
  * Remediation id for a finding. Finding ids are renumbered on every scan, so this
  * hashes what stays put (rule, file, message) to keep fixes tied to the same finding.
+ * Supply-chain messages quote the registry's current versions, so those hash the
+ * manifest line instead and keep their id when a new release ships.
  */
-export function findingItemId(f: Pick<Finding, "rule" | "path" | "message">): string {
-  return `finding-${fnv(`${f.rule}|${f.path}|${f.message}`)}`;
+export function findingItemId(f: Pick<Finding, "rule" | "path" | "message"> & Partial<Pick<Finding, "category" | "snippet">>): string {
+  const anchor = f.category === "supply-chain" && f.snippet ? f.snippet : f.message;
+  return `finding-${fnv(`${f.rule}|${f.path}|${anchor}`)}`;
 }
 
 function fnv(s: string): string {

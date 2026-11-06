@@ -17,8 +17,9 @@ import {
 import { POPULAR_NPM, POPULAR_PYPI } from "./popular-packages.js";
 import {
   RegistryClient, REGISTRY_CONCURRENCY, mapLimit,
-  type RegistryFetch, type SkipReason, type PackageFacts, type MissingFacts, type LookupResult,
+  type RegistryFetch, type GitResolve, type SkipReason, type PackageFacts, type MissingFacts, type LookupResult,
 } from "./registry.js";
+import { versionedLine, parseGitSource, gitPinnedLine, successorName, type GitSource } from "./dep-fixes.js";
 
 /** npm packages with more weekly downloads than this aren't treated as typosquats. */
 export const POPULAR_WEEKLY_DOWNLOADS = 50_000;
@@ -48,6 +49,7 @@ export interface SupplyChainOptions {
   localPackages?: ReadonlySet<string>;
   offline?: boolean;
   fetch?: RegistryFetch;
+  gitResolve?: GitResolve;
   now?: Date;
   timeoutMs?: number;
   deadlineMs?: number;
@@ -79,36 +81,49 @@ export async function checkSupplyChain(opts: SupplyChainOptions): Promise<Supply
   const { deps, privateDeps } = await collectDependencies(opts);
   const local = new Set([...(opts.localPackages ?? [])].map((n) => n.toLowerCase()));
   const isLocal = (d: DeclaredDependency) => d.source.kind === "local" || local.has(d.registryName.toLowerCase());
-
-  const findings: RawFinding[] = [];
-  for (const d of deps) if (!isLocal(d)) findings.push(...sourceFindings(d));
+  const external = deps.filter((d) => !isLocal(d));
 
   const lookups = new Map<string, PackageCheck>();
-  for (const d of deps) {
-    if (isLocal(d) || privateDeps.has(d) || d.source.kind !== "registry") continue;
+  const checkFor = new Map<DeclaredDependency, PackageCheck>();
+  for (const d of external) {
+    if (privateDeps.has(d) || d.source.kind !== "registry") continue;
     const name = registryKey(d.ecosystem, d.registryName);
     const version = d.ecosystem === "npm" ? baseVersion(d.source.spec) : undefined;
     const key = `${d.ecosystem}:${name}@${version ?? ""}`;
     if (!lookups.has(key)) lookups.set(key, { ecosystem: d.ecosystem, name, version, popular: isPopular(d.ecosystem, name) });
+    checkFor.set(d, lookups.get(key)!);
   }
+  const gitChecks: GitCheck[] = external
+    .filter((d) => d.source.kind === "git" && !d.source.pinnedToCommit)
+    .map((d) => ({ dep: d, git: parseGitSource(d) }));
 
-  const client = new RegistryClient({ root: opts.root, fetch: opts.fetch, offline: opts.offline ?? isOfflineEnv(), now, timeoutMs: opts.timeoutMs, deadlineMs: opts.deadlineMs });
+  const client = new RegistryClient({
+    root: opts.root, fetch: opts.fetch, gitResolve: opts.gitResolve, offline: opts.offline ?? isOfflineEnv(),
+    now, timeoutMs: opts.timeoutMs, deadlineMs: opts.deadlineMs,
+  });
   await client.loadCache();
   const checks = [...lookups.values()];
   await mapLimit(checks, REGISTRY_CONCURRENCY, (c) => runCheck(client, c));
+  await mapLimit(gitChecks, REGISTRY_CONCURRENCY, (g) => runGitCheck(client, g));
   const cacheError = await client.saveCache();
   if (cacheError) opts.onProgress?.(`Registry cache not saved: ${cacheError}`);
 
-  for (const d of deps) {
-    if (d.source.kind !== "registry" || isLocal(d) || privateDeps.has(d)) continue;
-    const name = registryKey(d.ecosystem, d.registryName);
-    const check = lookups.get(`${d.ecosystem}:${name}@${(d.ecosystem === "npm" ? baseVersion(d.source.spec) : undefined) ?? ""}`);
+  const findings: RawFinding[] = [];
+  for (const d of external) {
+    if (d.source.kind === "url") findings.push(urlFinding(d));
+    if (d.source.kind !== "registry") continue;
+    const check = checkFor.get(d);
+    findings.push(...unpinnedFindings(d, check));
     if (check) findings.push(...registryFindings(d, check, now));
   }
+  for (const g of gitChecks) findings.push(...gitFindings(g));
 
-  const packageNames = new Set(checks.map((c) => `${c.ecosystem}:${c.name}`));
-  const skippedNames = new Set(checks.filter((c) => c.skipped).map((c) => `${c.ecosystem}:${c.name}`));
-  const reasons = checks.map((c) => c.skipped).filter((r): r is SkipReason => !!r);
+  const packageNames = new Set([...checks.map((c) => `${c.ecosystem}:${c.name}`), ...gitChecks.map((g) => `git:${g.dep.source.kind === "git" ? g.dep.source.spec : ""}`)]);
+  const skippedNames = new Set([
+    ...checks.filter((c) => c.skipped).map((c) => `${c.ecosystem}:${c.name}`),
+    ...gitChecks.filter((g) => g.skipped).map((g) => `git:${g.dep.source.kind === "git" ? g.dep.source.spec : ""}`),
+  ]);
+  const reasons = [...checks.map((c) => c.skipped), ...gitChecks.map((g) => g.skipped)].filter((r): r is SkipReason => !!r);
   const status: SupplyChainStatus = {
     packages: packageNames.size,
     checked: packageNames.size - skippedNames.size,
@@ -117,9 +132,17 @@ export async function checkSupplyChain(opts: SupplyChainOptions): Promise<Supply
     unsupported,
   };
   if (status.packages) {
-    opts.onProgress?.(`Supply chain: ${status.checked}/${status.packages} packages checked${status.skipped ? `, ${status.skipped} skipped (${status.skippedReason})` : ""}`);
+    const archiveUnchecked = [...checks, ...gitChecks].filter((c) => c.archiveUnchecked).length;
+    opts.onProgress?.(`Supply chain: ${status.checked}/${status.packages} packages checked${status.skipped ? `, ${status.skipped} skipped (${status.skippedReason})` : ""}${
+      archiveUnchecked ? `, ${archiveUnchecked} archive checks left for the next scan` : ""}`);
   }
   return { findings, status };
+}
+
+/** A package Lens suggests in a fix, with its current release. */
+interface Replacement {
+  name: string;
+  latest: string;
 }
 
 interface PackageCheck {
@@ -130,6 +153,12 @@ interface PackageCheck {
   facts?: PackageFacts | MissingFacts;
   weeklyDownloads?: number;
   typo?: TyposquatMatch;
+  /** The package's GitHub repository is archived. */
+  repoArchived?: boolean;
+  /** GitHub didn't answer. Kept out of `skipped`: it says nothing about whether the package is real. */
+  archiveUnchecked?: boolean;
+  /** Typosquat target, or the successor a deprecation notice names, with its version. */
+  replacement?: Replacement;
   /** Set when any part of this package's checks didn't get fresh registry data. */
   skipped?: SkipReason;
 }
@@ -137,16 +166,78 @@ interface PackageCheck {
 async function runCheck(client: RegistryClient, c: PackageCheck): Promise<void> {
   const res = await client.lookupPackage(c.ecosystem, c.name, { popular: c.popular, version: c.version });
   if (!noteResult(c, res)) return;
-  c.facts = res.facts;
+  const facts = res.facts;
+  c.facts = facts;
   if (c.popular) return;
   c.typo = typosquatTarget(c.name, c.ecosystem);
-  const needsDownloads = c.ecosystem === "npm" && c.facts.kind === "package" && (c.typo || c.facts.installScripts?.length);
-  if (!needsDownloads) return;
-  const dl = await client.lookupWeeklyDownloads(c.name);
-  if (noteResult(c, dl)) c.weeklyDownloads = dl.facts;
+  const needsDownloads = c.ecosystem === "npm" && facts.kind === "package" && (c.typo || facts.installScripts?.length);
+  if (needsDownloads) {
+    const dl = await client.lookupWeeklyDownloads(c.name);
+    if (noteResult(c, dl)) c.weeklyDownloads = dl.facts;
+  }
+  const target = replacementName(c);
+  if (target) c.replacement = await lookupReplacement(client, c, c.ecosystem, target);
+  if (facts.kind === "package" && facts.repository && !facts.deprecated) {
+    const archived = await client.lookupGithubArchived(facts.repository);
+    if (archived.ok) c.repoArchived = archived.facts;
+    else c.archiveUnchecked = true;
+  }
 }
 
-function noteResult<T>(c: PackageCheck, res: LookupResult<T>): res is { ok: true; facts: T } {
+/** Which package a fix for `c` should switch to, before checking that it exists. */
+function replacementName(c: PackageCheck): string | undefined {
+  const facts = c.facts;
+  if (!facts) return undefined;
+  if (facts.kind === "missing") return typosquatTarget(c.name, c.ecosystem)?.target;
+  if (isTyposquat(c)) return c.typo!.target;
+  const notice = facts.deprecated ?? (facts.status === "deprecated" || facts.status === "archived" ? facts.statusReason : undefined);
+  return notice ? successorName(notice, c.name) : undefined;
+}
+
+/** `name`'s current release, when it exists and isn't itself deprecated. */
+async function lookupReplacement(client: RegistryClient, owner: { skipped?: SkipReason }, ecosystem: Ecosystem, name: string): Promise<Replacement | undefined> {
+  const res = await client.lookupPackage(ecosystem, registryKey(ecosystem, name), { popular: true });
+  if (!noteResult(owner, res)) return undefined;
+  const facts = res.facts;
+  if (facts.kind !== "package" || !facts.latest || facts.deprecated || facts.status) return undefined;
+  return { name, latest: facts.latest };
+}
+
+interface GitCheck {
+  dep: DeclaredDependency;
+  /** Undefined when the spec can't be resolved (gists, semver ranges, short SHAs, non-git VCS). */
+  git?: GitSource;
+  /** Commit the ref points at now; undefined when the repo couldn't be read. */
+  sha?: string;
+  /** Registry release built from the same repository (npm only). */
+  registryRelease?: Replacement;
+  archived?: boolean;
+  archiveUnchecked?: boolean;
+  skipped?: SkipReason;
+}
+
+async function runGitCheck(client: RegistryClient, g: GitCheck): Promise<void> {
+  if (!g.git) return;
+  const d = g.dep;
+  // Only an npm package published from this same GitHub repo is a safe swap; a name match alone could be someone else's package.
+  if (d.ecosystem === "npm" && g.git.github) {
+    const res = await client.lookupPackage("npm", registryKey("npm", d.registryName), { popular: true });
+    if (noteResult(g, res) && res.facts.kind === "package" && res.facts.latest && !res.facts.deprecated
+      && res.facts.repository?.toLowerCase() === g.git.github.toLowerCase()) {
+      g.registryRelease = { name: d.registryName, latest: res.facts.latest };
+    }
+  }
+  if (g.git.github) {
+    const archived = await client.lookupGithubArchived(g.git.github);
+    if (archived.ok) g.archived = archived.facts;
+    else g.archiveUnchecked = true;
+  }
+  if (g.registryRelease) return;
+  const commit = await client.resolveCommit(g.git.cloneUrl, g.git.ref);
+  if (noteResult(g, commit)) g.sha = commit.facts;
+}
+
+function noteResult<T>(c: { skipped?: SkipReason }, res: LookupResult<T>): res is { ok: true; facts: T } {
   if (!res.ok) {
     c.skipped ??= res.reason;
     return false;
@@ -320,30 +411,85 @@ function finding(d: DeclaredDependency, f: { rule: string; title: string; severi
   };
 }
 
-/** Findings that need only the manifest: git/URL sources and unpinned versions. */
-function sourceFindings(d: DeclaredDependency): RawFinding[] {
+const quote = (text: string) => `\`${text}\``;
+const changeTo = (d: DeclaredDependency, line: string) => `In ${d.manifest}, change ${quote(d.snippet)} to ${quote(line)}.`;
+const swapTo = (d: DeclaredDependency, r: Replacement) =>
+  `In ${d.manifest}, change ${quote(d.snippet)} to ${quote(versionedLine(d, r.latest, "range", r.name))}, then change every import of ${d.registryName} to ${r.name}.`;
+const removeIt = (d: DeclaredDependency) =>
+  `Remove ${quote(d.snippet)} from ${d.manifest} and rewrite the code that imports ${d.registryName} with built-in APIs or a package ${d.manifest} already lists.`;
+
+function latestOf(c: PackageCheck | undefined): string | undefined {
+  return c?.facts?.kind === "package" ? c.facts.latest : undefined;
+}
+
+/** Registry release a tarball URL points at, e.g. `registry.npmjs.org/x/-/x-1.2.3.tgz` or a files.pythonhosted.org sdist/wheel. */
+export function registryTarballVersion(d: DeclaredDependency, url: string): string | undefined {
+  const file = /^https?:\/\/(?:registry\.npmjs\.org|registry\.yarnpkg\.com|files\.pythonhosted\.org)\/.*\/([^/]+)$/.exec(url)?.[1];
+  if (!file) return undefined;
+  const base = d.registryName.replace(/^@[^/]+\//, "");
+  const name = d.ecosystem === "PyPI" ? base.replace(/[-_.]+/g, "[-_.]") : base.replace(/[.]/g, "\\.");
+  const m = new RegExp(`^${name}-(\\d[\\w.+!-]*?)(?:\\.tgz|\\.tar\\.gz|\\.zip|-[\\w.]+-[\\w.]+-[\\w.]+\\.whl)$`, "i").exec(file);
+  return m?.[1];
+}
+
+/** A dependency that installs from a URL instead of a registry. */
+function urlFinding(d: DeclaredDependency): RawFinding {
   const src = d.source;
-  if (src.kind === "git" && !src.pinnedToCommit) {
-    return [finding(d, {
-      rule: "dep-git-source", severity: "medium", cwe: CWE_NO_INTEGRITY,
-      title: `${d.name} installs from a git repository`,
-      message: `${d.name} installs from git (${src.spec}) instead of ${registryLabel(d.ecosystem)}, so its code can change with no version bump and skips registry malware scanning. Replace it with the registry release in ${d.manifest}, or pin it to a full 40-character commit SHA.`,
-    })];
+  const insecure = src.kind === "url" && src.insecure;
+  const spec = src.kind === "url" ? src.spec : "";
+  const version = registryTarballVersion(d, spec);
+  const fix = version
+    ? `It's a ${registryLabel(d.ecosystem)} release. ${changeTo(d, versionedLine(d, version, "exact"))}`
+    : insecure
+      ? changeTo(d, d.snippet.replace(spec, spec.replace(/^http:/, "https:")))
+      : `It isn't a ${registryLabel(d.ecosystem)} release, so Lens has no version to pin; publish it to a registry or commit the file into this repo and depend on it by path.`;
+  return finding(d, {
+    rule: "dep-git-source", severity: insecure ? "high" : "medium", cwe: CWE_NO_INTEGRITY,
+    title: `${d.name} installs from a URL`,
+    message: insecure
+      ? `${d.name} downloads from ${spec} over plain HTTP, so anyone on the network path can swap the code. ${fix}`
+      : `${d.name} installs from ${spec} instead of ${registryLabel(d.ecosystem)}, so its contents can change with no version bump. ${fix}`,
+  });
+}
+
+/** Git dependencies not pinned to a commit, with the commit or registry release to pin to. */
+function gitFindings(g: GitCheck): RawFinding[] {
+  const d = g.dep;
+  const spec = d.source.kind === "git" ? d.source.spec : "";
+  const out: RawFinding[] = [];
+  const fix = g.registryRelease
+    ? changeTo(d, versionedLine(d, g.registryRelease.latest, "range"))
+    : g.sha
+      ? `Pin it to the commit ${g.git?.ref === "HEAD" ? "it installs now" : `${g.git?.ref} points to now`}. ${changeTo(d, gitPinnedLine(d, g.sha))}`
+      : g.git && !g.skipped
+        ? `Lens couldn't read ${g.git.cloneUrl} (private or deleted). Pin it to a full 40-character commit SHA from that repository.`
+        : `Pin it to a full 40-character commit SHA in ${d.manifest}.`;
+  out.push(finding(d, {
+    rule: "dep-git-source", severity: "medium", cwe: CWE_NO_INTEGRITY,
+    title: `${d.name} installs from a git repository`,
+    message: `${d.name} installs from git (${spec}) instead of ${registryLabel(d.ecosystem)}, so its code can change with no version bump and skips registry malware scanning. ${fix}`,
+  }));
+  if (g.archived) {
+    out.push(finding(d, {
+      rule: "dep-deprecated", severity: "low", cwe: CWE_UNMAINTAINED,
+      title: `${d.name}'s repository is archived`,
+      message: `${d.name} installs from ${g.git?.github}, which is archived on GitHub and gets no more fixes, including security fixes. ${removeIt(d)}`,
+    }));
   }
-  if (src.kind === "url") {
-    return [finding(d, {
-      rule: "dep-git-source", severity: src.insecure ? "high" : "medium", cwe: CWE_NO_INTEGRITY,
-      title: `${d.name} installs from a URL`,
-      message: `${d.name} installs from ${src.spec} instead of ${registryLabel(d.ecosystem)}${src.insecure ? " over plain HTTP, so anyone on the network path can swap the code" : ", so its contents can change with no version bump"}. Replace it with the registry release in ${d.manifest}.`,
-    })];
-  }
-  if (src.kind !== "registry") return [];
-  const state = d.ecosystem === "npm" ? npmPinState(src.spec) : pypiPinState(src.spec);
+  return out;
+}
+
+/** Registry dependencies with no version, or no upper bound. */
+function unpinnedFindings(d: DeclaredDependency, c: PackageCheck | undefined): RawFinding[] {
+  if (d.source.kind !== "registry" || c?.facts?.kind === "missing") return [];
+  const spec = d.source.spec;
+  const state = d.ecosystem === "npm" ? npmPinState(spec) : pypiPinState(spec);
   if (state === "pinned") return [];
-  const declared = src.spec.trim() || "no version";
-  const fix = d.ecosystem === "npm"
-    ? `Replace it with a caret range of the release you've tested, like "^1.4.2", in ${d.manifest}.`
-    : `Add a bounded specifier, like ${d.name}~=1.4 or ${d.name}==1.4.2, in ${d.manifest}.`;
+  const declared = spec.trim() || "no version";
+  const latest = latestOf(c);
+  const fix = latest
+    ? changeTo(d, versionedLine(d, latest, "range"))
+    : `Pin it to the version your lockfile installs, as ${d.ecosystem === "npm" ? "a caret range like ^X.Y.Z" : "a compatible release like ~=X.Y"}, in ${d.manifest}.`;
   return [finding(d, {
     rule: "dep-unpinned", severity: state === "floating" ? "medium" : "low", cwe: CWE_SUPPLY_CHAIN,
     title: `${d.name} version isn't pinned`,
@@ -351,6 +497,16 @@ function sourceFindings(d: DeclaredDependency): RawFinding[] {
       ? `${d.name} is declared with ${declared === "no version" ? "no version" : `"${declared}"`}, so any future release, including a hijacked one, installs without review. ${fix}`
       : `${d.name} is declared as "${declared}" with no upper bound, so new major releases install without review. ${fix}`,
   })];
+}
+
+const isTyposquat = (c: PackageCheck) =>
+  !!c.typo && (c.ecosystem === "PyPI" || (c.weeklyDownloads !== undefined && c.weeklyDownloads < POPULAR_WEEKLY_DOWNLOADS));
+
+/** Exact version to pin after review: the newest release the declared range allows, as far as Lens can tell. */
+function reviewedVersion(c: PackageCheck, latest: string | undefined): string | undefined {
+  const major = (v: string) => v.split(".")[0];
+  if (latest && (!c.version || major(latest) === major(c.version))) return latest;
+  return c.version ?? latest;
 }
 
 function registryFindings(d: DeclaredDependency, c: PackageCheck, now: Date): RawFinding[] {
@@ -361,42 +517,45 @@ function registryFindings(d: DeclaredDependency, c: PackageCheck, now: Date): Ra
   const out: RawFinding[] = [];
 
   if (facts.kind === "missing") {
-    const suggestion = typosquatTarget(c.name, d.ecosystem);
     out.push(finding(d, {
       rule: "dep-not-on-registry", severity: "high", cwe: CWE_SUPPLY_CHAIN,
       title: `${d.registryName} isn't on ${label}`,
       message: `${d.registryName} doesn't exist on ${label}${facts.unpublished ? " (it was unpublished)" : ""}. AI tools often invent package names like this, and anyone can register the name later and ship malware to you. ${
-        suggestion ? `Replace it with ${suggestion.target} in ${d.manifest} and in every import.` : `Remove it from ${d.manifest}, or replace it with the package you meant, and update every import.`
+        c.replacement ? swapTo(d, c.replacement) : removeIt(d)
       }`,
     }));
     return out;
   }
-  if (facts.kind !== "package") return out;
 
   if (facts.status === "quarantined") {
     out.push(finding(d, {
       rule: "dep-quarantined", severity: "critical", cwe: CWE_EMBEDDED_MALWARE,
       title: `${d.registryName} is quarantined on PyPI`,
-      message: `PyPI quarantined ${d.registryName}, which it does when a project is reported as malware. Remove it from ${d.manifest} and every import, and check any machine that installed it.`,
+      message: `PyPI quarantined ${d.registryName}, which it does when a project is reported as malware. ${removeIt(d)} Check any machine that installed it.`,
     }));
     return out;
   }
 
-  if (c.typo && (d.ecosystem === "PyPI" || (c.weeklyDownloads !== undefined && c.weeklyDownloads < POPULAR_WEEKLY_DOWNLOADS))) {
+  if (isTyposquat(c)) {
+    const typo = c.typo!;
     out.push(finding(d, {
-      rule: "dep-typosquat", severity: c.typo.distance === 1 ? "high" : "medium", cwe: CWE_SUPPLY_CHAIN, confidence: "medium",
-      title: `${d.registryName} looks like a typosquat of ${c.typo.target}`,
-      message: `${d.registryName} is ${c.typo.distance} edit${c.typo.distance === 1 ? "" : "s"} from the popular package ${c.typo.target} and isn't widely used itself. Replace it with ${c.typo.target} in ${d.manifest} and in every import.`,
+      rule: "dep-typosquat", severity: typo.distance === 1 ? "high" : "medium", cwe: CWE_SUPPLY_CHAIN, confidence: "medium",
+      title: `${d.registryName} looks like a typosquat of ${typo.target}`,
+      message: `${d.registryName} is ${typo.distance} edit${typo.distance === 1 ? "" : "s"} from the popular package ${typo.target} and isn't widely used itself. ${
+        c.replacement ? swapTo(d, c.replacement) : `In ${d.manifest}, replace ${d.registryName} with ${typo.target}, and change every import to match.`
+      }`,
     }));
   }
 
   const exact = isExactPin(d.ecosystem, spec);
+  const pinTo = reviewedVersion(c, facts.latest);
+  const pinFix = pinTo ? changeTo(d, versionedLine(d, pinTo, "exact")) : `Pin the exact version you reviewed in ${d.manifest}.`;
   const created = facts.createdAt ? Date.parse(facts.createdAt) : NaN;
   if (!c.popular && !exact && Number.isFinite(created) && now.getTime() - created < NEW_PACKAGE_DAYS * DAY_MS) {
     out.push(finding(d, {
       rule: "dep-new-package", severity: "medium", cwe: CWE_SUPPLY_CHAIN,
       title: `${d.registryName} was published in the last ${NEW_PACKAGE_DAYS} days`,
-      message: `${d.registryName} was first published on ${new Date(created).toISOString().slice(0, 10)}. Brand-new packages are a common way to ship malware. Review its source, then pin the exact version you reviewed in ${d.manifest}${d.ecosystem === "npm" ? ` ("${d.name}": "1.2.3", no ^ or ~)` : ` (${d.name}==1.2.3)`}, or replace it with an established package.`,
+      message: `${d.registryName} was first published on ${new Date(created).toISOString().slice(0, 10)}. Brand-new packages are a common way to ship malware, and an exact pin stops a later malicious release from installing. ${pinFix}`,
     }));
   }
 
@@ -406,28 +565,37 @@ function registryFindings(d: DeclaredDependency, c: PackageCheck, now: Date): Ra
     out.push(finding(d, {
       rule: "dep-install-script", severity: "medium", cwe: CWE_UNTRUSTED_INCLUDE,
       title: `${d.registryName} runs an install script`,
-      message: `${d.registryName} runs a ${scripts.join("/")} script on install with your user's permissions, and isn't a widely used package. Review the script, then pin the exact version you reviewed in ${d.manifest} ("${d.name}": "1.2.3", no ^ or ~), or replace it with a package that doesn't need one.`,
+      message: `${d.registryName} runs a ${scripts.join("/")} script on install with your user's permissions, and isn't a widely used package. An exact pin keeps a new release from changing that script without review. ${pinFix}`,
     }));
   }
 
   const deprecation = facts.deprecated ?? (facts.status === "deprecated" ? facts.statusReason ?? "deprecated" : undefined);
+  const replaceFix = c.replacement ? swapTo(d, c.replacement) : removeIt(d);
   if (deprecation) {
     out.push(finding(d, {
       rule: "dep-deprecated", severity: SECURITY_DEPRECATION.test(deprecation) ? "medium" : "low", cwe: CWE_UNMAINTAINED,
       title: `${d.registryName} is deprecated`,
-      message: `${d.registryName} is deprecated on ${label}: "${deprecation}". Replace it with the successor the notice names, or a maintained alternative, in ${d.manifest} and every import.`,
+      message: `${d.registryName} is deprecated on ${label}: "${deprecation}". ${replaceFix}`,
     }));
   } else if (facts.status === "archived") {
     out.push(finding(d, {
       rule: "dep-deprecated", severity: "low", cwe: CWE_UNMAINTAINED,
       title: `${d.registryName} is archived`,
-      message: `${d.registryName} is archived on PyPI and gets no more fixes, including security fixes. Replace it with a maintained alternative in ${d.manifest} and every import.`,
+      message: `${d.registryName} is archived on PyPI and gets no more fixes, including security fixes. ${replaceFix}`,
+    }));
+  } else if (c.repoArchived) {
+    out.push(finding(d, {
+      rule: "dep-deprecated", severity: "low", cwe: CWE_UNMAINTAINED,
+      title: `${d.registryName}'s repository is archived`,
+      message: `${d.registryName}'s source repository (${facts.repository}) is archived on GitHub, so it gets no more fixes, including security fixes. ${replaceFix}`,
     }));
   } else if (facts.versionDeprecated && c.version) {
     out.push(finding(d, {
       rule: "dep-deprecated", severity: SECURITY_DEPRECATION.test(facts.versionDeprecated) ? "medium" : "low", cwe: CWE_UNMAINTAINED,
       title: `${d.registryName}@${c.version} is deprecated`,
-      message: `${d.registryName}@${c.version} is deprecated on npm: "${facts.versionDeprecated}". Raise the range in ${d.manifest} to the latest release that isn't deprecated.`,
+      message: `${d.registryName}@${c.version} is deprecated on npm: "${facts.versionDeprecated}". ${
+        facts.latest ? changeTo(d, versionedLine(d, facts.latest, "range")) : `Raise the range in ${d.manifest} to the latest release.`
+      }`,
     }));
   }
   return out;

@@ -5,7 +5,7 @@
  */
 import { buildChecklist } from "./security/checklist.js";
 import { checkSupplyChain, isDependencyManifest } from "./security/supply-chain.js";
-import type { RegistryFetch } from "./security/registry.js";
+import type { RegistryFetch, GitResolve } from "./security/registry.js";
 import { buildHealth } from "./quality/health.js";
 import { promises as fs } from "node:fs";
 import { createHash } from "node:crypto";
@@ -38,6 +38,8 @@ export interface ScanOptions {
   offline?: boolean;
   /** Registry fetch override, for tests. */
   registryFetch?: RegistryFetch;
+  /** Git ref lookup override, for tests. */
+  gitResolve?: GitResolve;
   onProgress?: (msg: string) => void;
 }
 
@@ -543,6 +545,7 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
       localPackages: localPackageNames(manifests),
       offline: opts.offline,
       fetch: opts.registryFetch,
+      gitResolve: opts.gitResolve,
       onProgress: progress,
     });
     const raw = [...recs.flatMap((r) => r.raw), ...supplyChain.findings];

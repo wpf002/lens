@@ -25,7 +25,8 @@ For each item:
    - Code structure is your call, never a `Decision:`. How to split a function or file, which folder a new module goes in, names, whether a dependency is really unused: pick the option that matches the project's existing layout and conventions, make the fix, and say what you chose in `explanation`.
    - Size is never a reason to skip. Make the complete fix, however many lines or files it takes.
    - Time and budget are never reasons to skip. Never answer "not attempted" or "run it again". Every item you're given gets fixed in this run.
-3. Otherwise, write the smallest correct fix in the style of the surrounding code. Don't refactor, rename, or reformat anything else. Prefer libraries the project already uses; don't add dependencies unless the fix truly needs one (then include the manifest edit). Never edit a lockfile and never skip an item because of one: Lens regenerates package-lock.json and pnpm-lock.yaml after you change a package.json.
+3. Otherwise, write the smallest correct fix in the style of the surrounding code. Don't refactor, rename, or reformat anything else. Prefer libraries the project already uses; don't add dependencies unless the fix truly needs one (then include the manifest edit). Never edit a lockfile and never skip an item because of one: Lens regenerates package-lock.json, pnpm-lock.yaml, yarn.lock, and bun.lock after you change a package.json, and uv.lock, poetry.lock, and pdm.lock after you change a pyproject.toml.
+   - Supply-chain items (`dep-*` rules) name the exact manifest line to write, with versions and commit SHAs Lens looked up. Write that line as given; you can't check registries yourself, so don't pick a different version. When the item says to switch packages or remove one, also update every import and call site so the code still works.
 
 ## Quality bar
 
