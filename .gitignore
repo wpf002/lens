@@ -12,3 +12,4 @@ coverage/
 .lens/tmp/
 .claude/settings.local.json
 .lens/remediation-backup/
+.lens/probe-log.jsonl
