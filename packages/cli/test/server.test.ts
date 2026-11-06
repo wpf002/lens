@@ -35,6 +35,12 @@ function post(url: string, body: unknown, headers: Record<string, string> = {}) 
   });
 }
 
+/** Same length as `token`, last char changed, so it reaches the compare and fails it. */
+function wrongToken(token: string): string {
+  const last = token.endsWith("x") ? "y" : "x";
+  return token.slice(0, -1) + last;
+}
+
 describe("lens serve", () => {
   let dir: string;
   let base: string;
@@ -64,7 +70,17 @@ describe("lens serve", () => {
   it("requires the token on every API route", async () => {
     for (const p of ["/api/meta", "/api/graph", "/api/file?path=src/server.ts", "/api/diff"]) {
       expect((await get(base + p)).status).toBe(401);
-      expect((await get(base + p, { "X-Lens-Token": token.slice(0, -1) + "x" })).status).toBe(401);
+      expect((await get(base + p, { "X-Lens-Token": wrongToken(token) })).status).toBe(401);
+    }
+  });
+
+  // The server token is random base64url, so 1 run in 64 ends in "x". Swapping the
+  // last char for a fixed "x" then sent the real token and got a 200.
+  it("builds a wrong token that differs from the real one for any last char", () => {
+    for (const t of ["abcx", "abcy", token]) {
+      const wrong = wrongToken(t);
+      expect(wrong).not.toBe(t);
+      expect(wrong).toHaveLength(t.length);
     }
   });
 
