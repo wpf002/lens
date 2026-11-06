@@ -2,12 +2,12 @@ import { Fragment, useMemo, useState } from "react";
 import { findingItemId, type Finding, type Severity } from "@lens/core/browser";
 import { Checklist } from "../components/Checklist";
 import { GraphCanvas } from "../components/GraphCanvas";
-import { IconChevronDown, IconChevronUp, IconDroplet, IconShield } from "../components/icons";
+import { IconChevronDown, IconChevronRight, IconChevronUp, IconDroplet, IconShield } from "../components/icons";
 import { EmptyState, SeverityBadge, cx } from "../components/ui";
 import { FixAllButton } from "../components/Remediation";
 import { useStore } from "../store";
 import { AUTH_COLOR, SEVERITIES, SEVERITY_COLOR } from "../utils/colors";
-import { buildSecurity, endpointCounts, filterFindings, mergeChecklist, sortFindings } from "../utils/security";
+import { buildSecurity, endpointCounts, filterFindings, isClosedFinding, mergeChecklist, splitFindings } from "../utils/security";
 import { useCompiledFilters, useModel, useOverlayInput } from "./hooks";
 
 const STATUSES: Finding["status"][] = ["open", "confirmed", "false_positive", "accepted"];
@@ -15,7 +15,7 @@ const PUBLIC_RULES = new Set(["unauthenticated-mutation", "server-action-no-auth
 /** What the status means for the owner, not the triage term. */
 function statusLabel(f: Pick<Finding, "status" | "rule">, fixed = false): string {
   if (fixed) return "Fixed";
-  if (f.status === "accepted") return PUBLIC_RULES.has(f.rule) ? "Public Route" : "Won't Fix";
+  if (f.status === "accepted") return PUBLIC_RULES.has(f.rule) ? "No Fix Needed" : "Won't Fix";
   if (f.status === "false_positive") return "No Fix Needed";
   return f.status === "confirmed" ? "Confirmed" : "Open";
 }
@@ -62,8 +62,9 @@ export function SecurityView() {
   const sec = model.graph.security;
   const vm = useMemo(() => buildSecurity(model, cf, sf), [model, cf, sf]);
   const all = useMemo(() => sec?.findings ?? [], [sec]);
-  // Open items first; closed ones (fixed, public, no fix needed) sink.
-  const rows = useMemo(() => { const done = (f: Finding) => f.status === "accepted" || f.status === "false_positive" || fixed.has(findingItemId(f)); return sortFindings(filterFindings(all, sf)).sort((a, b) => Number(done(a)) - Number(done(b))); }, [all, sf, fixed]);
+  const [showClosed, setShowClosed] = useState(false);
+  const rows = useMemo(() => splitFindings(filterFindings(all, sf), fixed), [all, sf, fixed]);
+  const openFindings = useMemo(() => all.filter((f) => !isClosedFinding(f, fixed)), [all, fixed]);
   const categories = useMemo(() => [...new Set(all.map((f) => f.category))].sort(), [all]);
   const counts = useMemo(() => endpointCounts(model, checklist), [model, checklist]);
 
@@ -76,9 +77,74 @@ export function SecurityView() {
       />
     );
   }
-  const bySev = sec.summary?.bySeverity ?? SEVERITIES.reduce((a, s) => ({ ...a, [s]: all.filter((f) => f.severity === s).length }), {} as Record<Severity, number>);
+  const bySev = SEVERITIES.reduce((a, s) => ({ ...a, [s]: openFindings.filter((f) => f.severity === s).length }), {} as Record<Severity, number>);
   const toggleSev = (s: Severity) => setSf({ severities: sf.severities.includes(s) ? sf.severities.filter((x) => x !== s) : [...sf.severities, s] });
   const risk = sec.summary?.riskScore ?? 0;
+  const renderRow = (f: Finding) => {
+    const on = selected === f.id;
+    const fixedNow = isFixed(f);
+    const closed = fixedNow || f.status === "accepted" || f.status === "false_positive";
+    const route = ROUTE.exec(f.message)?.[0];
+    const d = decision(f, fixedNow);
+    return (
+      <Fragment key={f.id}>
+        <tr
+          onClick={() => selectFinding(on ? null : f.id, { code: false })}
+          className={cx("cursor-pointer border-t border-line align-top hover:bg-raised", on && "bg-raised", closed && !on && "opacity-70")}
+          aria-expanded={on}
+        >
+          <td className="px-3 py-2.5">
+            <SeverityBadge severity={f.severity} />
+          </td>
+          <td className="max-w-[380px] px-2 py-2.5">
+            <div className="text-[12.5px] font-medium text-fg">{route ? <span className="font-mono">{route}</span> : f.title}</div>
+            <div className="mt-0.5 line-clamp-1 text-[11.5px] text-muted">{route ? f.title : f.message}</div>
+          </td>
+          <td className="px-2 py-2.5 font-mono text-[11px]" title={f.path}>
+            <span className="text-fg">{f.path.split("/").pop()}</span>
+            <span className="text-faint">:{f.line}</span>
+          </td>
+          <td className="px-2 py-2.5 text-right font-mono tabular">{f.reachableFrom.length || <span className="text-faint">0</span>}</td>
+          <td className="px-2 py-2.5">
+            {f.tainted ? (
+              <span className="inline-flex items-center gap-1 text-accent" title="User-controlled input reaches this sink">
+                <IconDroplet size={12} /> Yes
+              </span>
+            ) : (
+              <span className="text-faint">—</span>
+            )}
+          </td>
+          <td className="px-3 py-2.5">
+            <span className={cx("inline-flex items-center gap-1.5 whitespace-nowrap text-[11.5px] font-medium", f.status === "confirmed" ? "text-[var(--sev-critical)]" : closed ? "text-guarded" : "text-fg")}>
+              <span className={cx("h-1.5 w-1.5 rounded-full", f.status === "confirmed" ? "bg-[var(--sev-critical)]" : closed ? "bg-guarded" : "bg-[var(--sev-medium)]")} />
+              {statusLabel(f, fixedNow)}
+            </span>
+          </td>
+        </tr>
+        {on && (
+          <tr className="bg-raised">
+            <td />
+            <td colSpan={5} className="px-2 pb-3.5 pt-0">
+              <dl className="grid max-w-[640px] grid-cols-[110px_1fr] gap-x-4 gap-y-1.5 text-[12.5px]">
+                <dt className="text-muted">Issue</dt>
+                <dd className="text-fg">{PLAIN[f.rule] ?? f.message}</dd>
+                <dt className="text-muted">Decision</dt>
+                <dd className="text-fg">{d.text}</dd>
+                <dt className="text-muted">Next Step</dt>
+                <dd className={d.todo === "Nothing." ? "text-guarded" : "text-fg"}>{d.todo}</dd>
+              </dl>
+              <div className="mt-2.5 flex items-center gap-3 text-[11.5px]">
+                <button type="button" className="font-medium text-accent hover:underline" onClick={() => openCode(f.path, { focusLine: f.line, lines: [f.line, f.line], title: f.title })}>
+                  View Code
+                </button>
+                <span className="font-mono text-faint">{f.path}:{f.line}{f.cwe ? ` · ${f.cwe}` : ""}</span>
+              </div>
+            </td>
+          </tr>
+        )}
+      </Fragment>
+    );
+  };
 
   return (
     <div className="flex h-full w-full flex-col">
@@ -151,7 +217,7 @@ export function SecurityView() {
             <button type="button" role="tab" aria-selected={panel === "findings"} className={cx("flex items-center gap-1.5 rounded px-2 py-1", panel === "findings" ? "bg-raised" : "hover:bg-raised")} onClick={() => (setPanel("findings"), setTableOpen(true))}>
               <span className={cx("eyebrow", panel === "findings" && "!text-fg")}>Findings</span>
               <span className="font-mono text-[11px] text-muted">
-                {all.filter((f) => f.status !== "false_positive" && f.status !== "accepted" && !isFixed(f)).length}
+                {openFindings.length}
               </span>
             </button>
             <button type="button" role="tab" aria-selected={panel === "checklist"} className={cx("flex items-center gap-1.5 rounded px-2 py-1", panel === "checklist" ? "bg-raised" : "hover:bg-raised")} onClick={() => (setPanel("checklist"), setTableOpen(true))}>
@@ -216,72 +282,18 @@ export function SecurityView() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((f) => {
-                  const on = selected === f.id;
-                  const fixedNow = isFixed(f);
-                  const closed = fixedNow || f.status === "accepted" || f.status === "false_positive";
-                  const route = ROUTE.exec(f.message)?.[0];
-                  const d = decision(f, fixedNow);
-                  return (
-                    <Fragment key={f.id}>
-                      <tr
-                        onClick={() => selectFinding(on ? null : f.id, { code: false })}
-                        className={cx("cursor-pointer border-t border-line align-top hover:bg-raised", on && "bg-raised", closed && !on && "opacity-70")}
-                        aria-expanded={on}
-                      >
-                        <td className="px-3 py-2.5">
-                          <SeverityBadge severity={f.severity} />
-                        </td>
-                        <td className="max-w-[380px] px-2 py-2.5">
-                          <div className="text-[12.5px] font-medium text-fg">{route ? <span className="font-mono">{route}</span> : f.title}</div>
-                          <div className="mt-0.5 line-clamp-1 text-[11.5px] text-muted">{route ? f.title : f.message}</div>
-                        </td>
-                        <td className="px-2 py-2.5 font-mono text-[11px]" title={f.path}>
-                          <span className="text-fg">{f.path.split("/").pop()}</span>
-                          <span className="text-faint">:{f.line}</span>
-                        </td>
-                        <td className="px-2 py-2.5 text-right font-mono tabular">{f.reachableFrom.length || <span className="text-faint">0</span>}</td>
-                        <td className="px-2 py-2.5">
-                          {f.tainted ? (
-                            <span className="inline-flex items-center gap-1 text-accent" title="User-controlled input reaches this sink">
-                              <IconDroplet size={12} /> Yes
-                            </span>
-                          ) : (
-                            <span className="text-faint">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5">
-                          <span className={cx("inline-flex items-center gap-1.5 whitespace-nowrap text-[11.5px] font-medium", f.status === "confirmed" ? "text-[var(--sev-critical)]" : closed ? "text-guarded" : "text-fg")}>
-                            <span className={cx("h-1.5 w-1.5 rounded-full", f.status === "confirmed" ? "bg-[var(--sev-critical)]" : closed ? "bg-guarded" : "bg-[var(--sev-medium)]")} />
-                            {statusLabel(f, fixedNow)}
-                          </span>
-                        </td>
-                      </tr>
-                      {on && (
-                        <tr className="bg-raised">
-                          <td />
-                          <td colSpan={5} className="px-2 pb-3.5 pt-0">
-                            <dl className="grid max-w-[640px] grid-cols-[110px_1fr] gap-x-4 gap-y-1.5 text-[12.5px]">
-                              <dt className="text-muted">Issue</dt>
-                              <dd className="text-fg">{PLAIN[f.rule] ?? f.message}</dd>
-                              <dt className="text-muted">Decision</dt>
-                              <dd className="text-fg">{d.text}</dd>
-                              <dt className="text-muted">Next Step</dt>
-                              <dd className={d.todo === "Nothing." ? "text-guarded" : "text-fg"}>{d.todo}</dd>
-                            </dl>
-                            <div className="mt-2.5 flex items-center gap-3 text-[11.5px]">
-                              <button type="button" className="font-medium text-accent hover:underline" onClick={() => openCode(f.path, { focusLine: f.line, lines: [f.line, f.line], title: f.title })}>
-                                View Code
-                              </button>
-                              <span className="font-mono text-faint">{f.path}:{f.line}{f.cwe ? ` · ${f.cwe}` : ""}</span>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  );
-                })}
-                {!rows.length && (
+                {rows.open.map(renderRow)}
+                {rows.closed.length > 0 && (
+                  <tr className="border-t border-line">
+                    <td colSpan={6} className="px-3 py-1.5">
+                      <button type="button" className="eyebrow flex items-center gap-1 hover:!text-fg" onClick={() => setShowClosed((v) => !v)} aria-expanded={showClosed}>
+                        {showClosed ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />} Closed <span className="font-mono text-faint">{rows.closed.length}</span>
+                      </button>
+                    </td>
+                  </tr>
+                )}
+                {showClosed && rows.closed.map(renderRow)}
+                {!rows.open.length && !rows.closed.length && (
                   <tr>
                     <td colSpan={6} className="px-3 py-6 text-center text-muted">
                       No findings match these filters.

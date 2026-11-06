@@ -1,4 +1,4 @@
-import { effectiveAuth, publicByTriage, type ChecklistItem, type EndpointMeta, type Finding, type GraphNode, type Severity } from "@lens/core/browser";
+import { effectiveAuth, findingItemId, publicByTriage, type ChecklistItem, type EndpointMeta, type Finding, type GraphNode, type Severity } from "@lens/core/browser";
 import type { AuditRecord } from "../api";
 import type { VEdge, VNode, ViewModel } from "../types";
 import { SEVERITY_RANK, layerColor } from "./colors";
@@ -20,6 +20,16 @@ export function filterFindings(findings: Finding[], f: SecurityFilter): Finding[
       (!f.categories.length || f.categories.includes(x.category)) &&
       (!f.statuses.length || f.statuses.includes(x.status)),
   );
+}
+
+/** Fixed, No Fix Needed, and Won't Fix rows. They aren't work, so they leave the main list and the counts. */
+export function isClosedFinding(f: Finding, fixedItemIds: ReadonlySet<string>): boolean {
+  return f.status === "accepted" || f.status === "false_positive" || fixedItemIds.has(findingItemId(f));
+}
+
+export function splitFindings(findings: Finding[], fixedItemIds: ReadonlySet<string>): { open: Finding[]; closed: Finding[] } {
+  const sorted = sortFindings(findings);
+  return { open: sorted.filter((f) => !isClosedFinding(f, fixedItemIds)), closed: sorted.filter((f) => isClosedFinding(f, fixedItemIds)) };
 }
 
 export function sortFindings(findings: Finding[]): Finding[] {

@@ -12,7 +12,8 @@ import { columnLayout, computeLayout, fallbackElk, shelfPack, type ElkLike } fro
 import { toMermaid } from "./mermaid";
 import { buildModel, commonDir } from "./model";
 import { computeOverlay } from "./overlay";
-import { buildSecurity, DEFAULT_SECURITY_FILTER, filterFindings, findingFocus } from "./security";
+import { buildSecurity, DEFAULT_SECURITY_FILTER, filterFindings, findingFocus, splitFindings } from "./security";
+import { findingItemId } from "@lens/core/browser";
 import { buildFileTree } from "./tree";
 import { validateGraph } from "./validate";
 
@@ -137,6 +138,13 @@ describe("security view", () => {
     const all = graph.security!.findings;
     expect(filterFindings(all, { severities: ["critical"], categories: [], statuses: [] })).toHaveLength(1);
     expect(filterFindings(all, { severities: [], categories: [], statuses: ["false_positive"] }).every((f) => f.status === "false_positive")).toBe(true);
+  });
+  it("keeps public, no-fix-needed, and fixed findings out of the open list", () => {
+    const base = graph.security!.findings;
+    const all = [{ ...base[0]!, id: "A", status: "accepted" as const }, { ...base[0]!, id: "B", status: "false_positive" as const }, { ...base[1]!, id: "C", status: "open" as const }, { ...base[2]!, id: "D", status: "open" as const }];
+    const { open, closed } = splitFindings(all, new Set([findingItemId(all[3]!)]));
+    expect(open.map((f) => f.id)).toEqual(["C"]);
+    expect(closed.map((f) => f.id).sort()).toEqual(["A", "B", "D"]);
   });
 });
 
