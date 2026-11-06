@@ -266,7 +266,8 @@ export async function restartFromBase(root: string, old: string): Promise<void> 
   const dirty = !!(await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"]));
   // A patch download leaves new files marked intent-to-add, and git stash refuses those ("not uptodate. Cannot merge").
   await git(root, ["reset", "-q"]);
-  if (dirty) await git(root, ["stash", "push", "-u", "-q", "--", ".", ":(exclude).lens"]);
+  // No pathspec: .lens is ignored (info/exclude or .gitignore) so -u skips it, and naming it makes git exit 1 even though the stash succeeded.
+  if (dirty) await git(root, ["stash", "push", "-u", "-q"]);
   try {
     await git(root, ["fetch", "-q", "--no-tags", "origin", base]);
     await git(root, ["checkout", "-q", "-B", base, "FETCH_HEAD"]);

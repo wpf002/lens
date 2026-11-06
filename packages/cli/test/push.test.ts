@@ -95,12 +95,13 @@ describe("pushFixes", () => {
     await fs.rm(tmp, { recursive: true, force: true });
   });
 
-  it("moves fixes to the base branch after a patch download marked new files intent-to-add", async () => {
+  it("moves fixes to the base branch after a patch download marked new files intent-to-add, with .lens gitignored", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "lens-push-"));
     const remote = path.join(tmp, "remote.git");
     const root = path.join(tmp, "work");
     run(tmp, "init", "-q", "--bare", "-b", "main", remote);
     run(tmp, "init", "-q", "-b", "main", root);
+    await fs.writeFile(path.join(root, ".gitignore"), ".lens\n");
     await fs.writeFile(path.join(root, "a.js"), "1\n");
     run(root, "add", "-A");
     run(root, "commit", "-qm", "init");
@@ -108,6 +109,9 @@ describe("pushFixes", () => {
     run(root, "push", "-q", "-u", "origin", "main");
     run(root, "config", "lens.base", "main");
     run(root, "checkout", "-qb", "lens/fixes-1");
+    await fs.mkdir(path.join(root, ".lens"));
+    await fs.writeFile(path.join(root, ".lens/graph.json"), "{}");
+    await fs.writeFile(path.join(root, "a.js"), "2\n");
     await fs.writeFile(path.join(root, "new.py"), "x = 1\n");
     run(root, "add", "-N", "new.py"); // what an older patch download left behind
 
@@ -116,7 +120,9 @@ describe("pushFixes", () => {
     expect(run(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
     expect(await fs.readFile(path.join(root, "new.py"), "utf8")).toBe("x = 1\n");
     expect(await fixesPatch(root)).toContain("new file mode");
-    expect(run(root, "status", "--porcelain")).toBe("?? new.py");
+    expect(await fs.readFile(path.join(root, "a.js"), "utf8")).toBe("2\n");
+    expect(await fs.readFile(path.join(root, ".lens/graph.json"), "utf8")).toBe("{}");
+    expect(run(root, "status", "--porcelain")).toBe("M a.js\n?? new.py");
     await fs.rm(tmp, { recursive: true, force: true });
   });
 });
