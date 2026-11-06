@@ -10,9 +10,13 @@ import type { GraphEdge, GraphNode } from "../types.js";
 import type { ImportInfo, SymbolInfo } from "../extract.js";
 import { stripComments } from "../security/analyze.js";
 import { healthScore } from "./score.js";
+import { CODE_LANGS, ENTRY_RE, GENERATED, JS_LANGS, MAX_HITS, lineOf, push } from "./shared.js";
+import { buildLayerCheck } from "./architecture.js";
+import { buildStandardsChecks } from "./standards.js";
+import type { ArchitectureConfig } from "../schema.js";
 
 export type HealthSeverity = "high" | "medium" | "low";
-export type HealthCategory = "errors" | "dead-code" | "duplication" | "leftovers" | "types" | "structure" | "tests" | "dependencies" | "docs";
+export type HealthCategory = "errors" | "dead-code" | "duplication" | "leftovers" | "types" | "structure" | "architecture" | "standards" | "tests" | "dependencies" | "docs";
 
 export interface HealthHit {
   path: string;
@@ -54,14 +58,11 @@ export interface HealthInput {
   nodes: GraphNode[];
   edges: GraphEdge[];
   deps: Record<string, string>;
+  /** Owner overrides from .lens/architecture.json. */
+  architecture?: ArchitectureConfig;
 }
 
-const MAX_HITS = 40;
-const CODE_LANGS = new Set(["typescript", "tsx", "javascript", "python", "go", "rust", "java", "kotlin", "ruby", "php", "csharp", "swift", "dart"]);
-const JS_LANGS = new Set(["typescript", "tsx", "javascript"]);
-const ENTRY_RE = /(^|\/)(src\/)?(index|main|app|server|cli|__main__|__init__|manage|wsgi|asgi|program|Application|conftest|setup|vite\.config|next\.config|tailwind\.config|postcss\.config|eslint\.config|vitest\.config|jest\.config)\.[a-z]+$/i;
 const FRAMEWORK_ROUTE_DIR = /(^|\/)(pages|app|routes|api|migrations|alembic|scripts|bin|cmd)\//;
-const GENERATED = /(^|\/)(dist|build|out|vendor|generated|__generated__|\.next)\//;
 
 /** Names frameworks call by convention; never "dead". */
 const CONVENTION_NAMES = new Set([
@@ -70,12 +71,6 @@ const CONVENTION_NAMES = new Set([
   "getServerSideProps", "getStaticProps", "getStaticPaths", "lifespan", "startup", "shutdown",
   "render", "constructor", "configure", "register", "init", "run", "app", "create_app",
 ]);
-
-const lineOf = (src: string, index: number) => src.slice(0, index).split("\n").length;
-
-function push(hits: HealthHit[], h: HealthHit) {
-  if (hits.length < MAX_HITS) hits.push(h);
-}
 
 /** Count every identifier token across the project (comments stripped), for "is this name used anywhere?". */
 function identifierCounts(files: HealthFile[]): Map<string, number> {
@@ -192,6 +187,7 @@ export function buildHealth(input: HealthInput): HealthReport {
   const checks: HealthCheck[] = [];
   const add = (c: Omit<HealthCheck, "count"> & { count?: number }) => checks.push({ ...c, count: c.count ?? c.hits.length, source: "scanner" });
   const byPath = new Map(nodes.filter((n) => n.path && n.id === `${n.kind}:${n.path}`).map((n) => [n.path!, n]));
+  const direct = declaredDeps(root, files, deps);
   const configText = files.filter((f) => !CODE_LANGS.has(f.lang)).map((f) => f.src).join("\n");
 
   /* ---------- errors ---------- */
@@ -390,6 +386,11 @@ export function buildHealth(input: HealthInput): HealthReport {
     add({ id: "hotspots", title: "Complex and Widely Used", category: "structure", severity: "medium", hits: hot.slice(0, MAX_HITS).map((n) => ({ path: n.path!, detail: `complex, used by ${fanIn.get(n.id)} other places` })), count: hot.length, fix: "These break the most things when they're wrong. Give them tests first, then simplify." });
   }
 
+  add(buildLayerCheck({ files: code, nodes, edges, config: input.architecture }));
+
+  /* ---------- standards ---------- */
+  for (const check of buildStandardsChecks({ root, prod, files, layerOf: (p) => byPath.get(p)?.layer, deps: direct })) add(check);
+
   /* ---------- tests ---------- */
   {
     const tests = code.filter((f) => f.isTest);
@@ -423,7 +424,7 @@ export function buildHealth(input: HealthInput): HealthReport {
         else if (f.lang === "python") used.add(s.split(".")[0]!.toLowerCase());
       }
     const hits: HealthHit[] = [];
-    for (const name of declaredDeps(root, files, deps)) {
+    for (const name of direct) {
       if (TOOLING.test(name) || configText.match(new RegExp(`["'\\s/]${name.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}["'\\s@/]`, "g"))?.length! > 1) continue;
       const jsHit = used.has(name);
       const py = (PY_IMPORT_NAME[name.toLowerCase()] ?? name).toLowerCase().replace(/-/g, "_").replace(/\[.*$/, "");
