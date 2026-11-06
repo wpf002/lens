@@ -149,27 +149,33 @@ const REASON_MAX = 600;
 
 /**
  * GitHub rejects pushes that touch .github/workflows without the workflow scope, so Lens
- * never edits those files. Items whose evidence is all in workflows go straight to the
- * owner with the exact file, line, and change; everything else goes to Claude.
+ * never edits those files. Workflow evidence goes to the owner as a to-do with the exact
+ * file, line, and change. Claude gets each item with its other evidence, if any is left.
  */
-export function splitWorkflowItems<T>(items: T[]): { forClaude: T[]; ownerOnly: Remediation["skipped"] } {
+export function splitWorkflowItems<T>(items: T[]): { forClaude: T[]; forOwner: Remediation["skipped"] } {
   const forClaude: T[] = [];
-  const ownerOnly: Remediation["skipped"] = [];
+  const forOwner: Remediation["skipped"] = [];
   for (const item of items) {
-    const { id, evidence } = (item ?? {}) as { id?: unknown; evidence?: unknown };
+    const { id, evidence, fix } = (item ?? {}) as { id?: unknown; evidence?: unknown; fix?: unknown };
     const lines = Array.isArray(evidence) ? evidence.filter((e): e is string => typeof e === "string") : [];
-    if (typeof id !== "string" || !lines.length || !lines.every((e) => WORKFLOW_EVIDENCE.test(e))) {
+    const workflow = lines.filter((e) => WORKFLOW_EVIDENCE.test(e));
+    if (typeof id !== "string" || !workflow.length) {
       forClaude.push(item);
       continue;
     }
-    const where = lines.map((e) => {
-      const [, line, message] = WORKFLOW_EVIDENCE.exec(e)!;
-      const file = e.split(/[\s:]/)[0];
-      return `${file}${line ? ` line ${line}` : ""}: ${message}`;
-    });
-    ownerOnly.push({ itemId: id, reason: `Outside code: GitHub won't accept workflow changes from Lens. Edit ${where.join(" Also ")}`.slice(0, REASON_MAX) });
+    forOwner.push({ itemId: id, reason: workflowTodo(workflow, typeof fix === "string" ? fix : undefined) });
+    const rest = lines.filter((e) => !WORKFLOW_EVIDENCE.test(e));
+    if (rest.length) forClaude.push({ ...item, evidence: rest });
   }
-  return { forClaude, ownerOnly };
+  return { forClaude, forOwner };
+}
+
+function workflowTodo(workflow: string[], fix: string | undefined): string {
+  const where = workflow.map((e) => {
+    const [, line, message] = WORKFLOW_EVIDENCE.exec(e)!;
+    return `${e.split(/[\s:]/)[0]}${line ? ` line ${line}` : ""}: ${message}`;
+  });
+  return `Outside code: GitHub won't accept workflow changes from Lens. Edit ${where.join(" Also ")}${fix ? ` ${fix}` : ""}`.slice(0, REASON_MAX);
 }
 
 export async function loadRemediation(root: string, source: RemediationSource): Promise<RemediationRecord | null> {

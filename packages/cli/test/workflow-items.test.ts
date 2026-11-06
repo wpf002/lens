@@ -7,13 +7,17 @@ describe("splitWorkflowItems", () => {
   const docker = { id: "docker-root-user~df", title: "Root User", evidence: ["Dockerfile:2 Add USER app."] };
   const mixed = { id: "curl-pipe-shell", title: "Curl Pipe", evidence: [".github/workflows/ci.yml:20 Download then verify.", "Dockerfile:5 Download then verify."] };
 
-  it("sends workflow-only items to the owner with file, line, and change", () => {
-    const { forClaude, ownerOnly } = splitWorkflowItems([workflow, docker, mixed]);
-    expect(forClaude).toEqual([docker, mixed]);
-    expect(ownerOnly).toHaveLength(1);
-    expect(ownerOnly[0]!.itemId).toBe(workflow.id);
-    expect(ownerOnly[0]!.reason).toMatch(/^Outside code: /);
-    expect(ownerOnly[0]!.reason).toContain(".github/workflows/ci.yml line 13: Pin actions/cache to a commit SHA.");
+  it("sends workflow evidence to the owner with file, line, and change", () => {
+    const { forClaude, forOwner } = splitWorkflowItems([workflow, docker, mixed]);
+    expect(forOwner.map((x) => x.itemId)).toEqual([workflow.id, mixed.id]);
+    expect(forOwner[0]!.reason).toMatch(/^Outside code: /);
+    expect(forOwner[0]!.reason).toContain(".github/workflows/ci.yml line 13: Pin actions/cache to a commit SHA.");
+    expect(forOwner[1]!.reason).toContain(".github/workflows/ci.yml line 20: Download then verify.");
+  });
+
+  it("gives Claude a mixed item with only the evidence it can fix", () => {
+    const { forClaude } = splitWorkflowItems([workflow, docker, mixed]);
+    expect(forClaude).toEqual([docker, { ...mixed, evidence: ["Dockerfile:5 Download then verify."] }]);
   });
 
   it("keeps items without evidence for Claude", () => {

@@ -739,10 +739,10 @@ export class EnrichRunner {
    * The project itself is untouched until applyFixes, which backs files up for Undo.
    */
   private async draftFixes(job: EnrichJob, allItems: unknown[], single: boolean): Promise<{ data: Remediation | null; error?: string }> {
-    const { forClaude: items, ownerOnly } = splitWorkflowItems(allItems);
-    if (!items.length) return { data: { fixes: [], skipped: ownerOnly } };
+    const { forClaude: items, forOwner } = splitWorkflowItems(allItems);
+    if (!items.length) return { data: { fixes: [], skipped: forOwner } };
     const { data, error } = await this.draftFixesWithClaude(job, items, single);
-    return { data: data ? { ...data, skipped: [...ownerOnly, ...data.skipped] } : null, error };
+    return { data: data ? { ...data, skipped: [...forOwner, ...data.skipped] } : null, error };
   }
 
   private async draftFixesWithClaude(job: EnrichJob, items: unknown[], single: boolean): Promise<{ data: Remediation | null; error?: string }> {

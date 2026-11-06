@@ -20,7 +20,7 @@ const CHECKS = {
   "docker-latest-tag": { title: "Base image not pinned", category: "config", cwe: "CWE-829", severity: "medium", confidence: "high",
     message: "FROM uses :latest or no tag, so every build can pull a different image. Pin a version tag, ideally with an @sha256 digest." },
   "docker-root-user": { title: "Container runs as root", category: "config", cwe: "CWE-250", severity: "medium", confidence: "high",
-    message: "The final stage never switches to a non-root USER. Add a user (e.g. `RUN adduser -D app` then `USER app`, or `USER node` on node images) before CMD." },
+    message: "The final stage never switches to a non-root USER. Add a user (e.g. `RUN adduser -D app` then `USER app`, or `USER node` on node images) before CMD. If a mounted volume needs root to chown, do that in ENTRYPOINT and exec the app through setpriv or gosu." },
   "docker-no-healthcheck": { title: "Dockerfile without HEALTHCHECK", category: "config", cwe: "CWE-693", severity: "low", confidence: "low",
     message: "No HEALTHCHECK, so Docker can't detect a hung container. Add `HEALTHCHECK CMD` hitting the app's health endpoint." },
   "tf-open-ingress": { title: "Admin port open to the internet", category: "config", cwe: "CWE-284", severity: "high", confidence: "high",
@@ -68,8 +68,11 @@ export function isKubernetesManifest(lang: string, src: string): boolean {
 }
 
 /** IAM policy documents stored as JSON. */
+/** CloudTrail records quote policies they logged; those are events, not grants. */
+const CLOUDTRAIL_LOG = /"eventVersion"\s*:/;
+
 export function isPolicyJson(path: string, src: string): boolean {
-  return /\.json$/i.test(path) && /"Statement"\s*:/.test(src) && /"(?:Action|NotAction)"\s*:/.test(src);
+  return /\.json$/i.test(path) && /"Statement"\s*:/.test(src) && /"(?:Action|NotAction)"\s*:/.test(src) && !CLOUDTRAIL_LOG.test(src);
 }
 
 export function scanInfra(input: InfraInput): RawFinding[] {
@@ -100,6 +103,7 @@ function dockerChecks(lines: string[], report: Report): void {
   let finalImage = "";
   let lastUser: { index: number; user: string } | undefined;
   let hasHealthcheck = false;
+  let dropsRoot = false;
   lines.forEach((line, index) => {
     const from = /^\s*FROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+(\S+))?/i.exec(line);
     if (from) {
@@ -109,18 +113,23 @@ function dockerChecks(lines: string[], report: Report): void {
       finalFrom = index;
       finalImage = image;
       lastUser = undefined;
+      dropsRoot = false;
       return;
     }
     const user = /^\s*USER\s+(\S+)/i.exec(line);
     if (user) lastUser = { index, user: user[1]! };
     if (/^\s*HEALTHCHECK\s/i.test(line)) hasHealthcheck = true;
+    if (/^\s*(?:ENTRYPOINT|CMD)\s/i.test(line) && PRIVILEGE_DROP.test(line)) dropsRoot = true;
   });
   if (finalFrom < 0) return;
   const nonRootImage = /nonroot|rootless/i.test(finalImage);
   if (lastUser && /^(?:root|0)(?::|$)/.test(lastUser.user)) report("docker-root-user", lastUser.index, { message: `The last USER is ${lastUser.user}, so the app runs as root. Switch to a non-root user before CMD.` });
-  else if (!lastUser && !nonRootImage) report("docker-root-user", finalFrom);
+  else if (!lastUser && !nonRootImage && !dropsRoot) report("docker-root-user", finalFrom);
   if (!hasHealthcheck) report("docker-no-healthcheck", finalFrom);
 }
+
+/** Entrypoints that start as root only to fix volume ownership, then exec the app as another user. */
+const PRIVILEGE_DROP = /\b(?:gosu|su-exec|setpriv\s+--reuid|runuser\s+-u)\b/;
 
 function isPinnedOrLocal(image: string, stageNames: Set<string>): boolean {
   if (image.toLowerCase() === "scratch" || stageNames.has(image.toLowerCase()) || image.includes("$")) return true;

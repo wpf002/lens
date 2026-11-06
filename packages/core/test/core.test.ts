@@ -9,6 +9,7 @@ import {
   GraphSearch, buildKnowledgeGraph, embedInDashboard, validateGraph, buildBatches, KnowledgeGraphSchema, globToRegExp, stripComments, isPlaceholderDbUrl, siteUrl,
   type KnowledgeGraph,
 } from "../src/index.js";
+import { isPolicyJson, scanInfra } from "../src/security/infra.js";
 
 const FIX = path.join(__dirname, "fixtures");
 
@@ -127,6 +128,19 @@ describe("scan (vuln fixture)", () => {
     expect(at("k8s/deployment.yaml", "k8s-run-as-root")).toEqual([]);
     expect(at(".github/workflows/ci.yml", "gha-unpinned-action").map((f) => f.line)).toEqual([13]);
     expect(at(".github/workflows/ci.yml", "gha-prt-checkout")[0]?.severity).toBe("critical");
+  });
+
+  it("treats CloudTrail logs that quote a policy as data, not a policy", () => {
+    const log = '{"eventVersion": "1.11", "requestParameters": {"policy": {"Statement": [{"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject"}]}}}';
+    expect(isPolicyJson("samples/ct.json", log)).toBe(false);
+    expect(isPolicyJson("iam/policy.json", '{"Statement": [{"Effect": "Allow", "Action": "*"}]}')).toBe(true);
+  });
+
+  it("accepts an entrypoint that chowns a volume as root and then drops to another user", () => {
+    const rules = (raw: string) => scanInfra({ path: "Dockerfile", lang: "dockerfile", cleaned: raw, raw }).map((f) => f.rule);
+    const base = 'FROM node:22-slim\nHEALTHCHECK CMD ["true"]\n';
+    expect(rules(`${base}CMD ["node", "index.js"]\n`)).toContain("docker-root-user");
+    expect(rules(`${base}ENTRYPOINT ["/bin/sh", "-c", "chown -R node /data && exec setpriv --reuid=node --regid=node --init-groups \\"$@\\"", "x"]\nCMD ["node", "index.js"]\n`)).not.toContain("docker-root-user");
   });
 
   it("does not flag the parameterized $queryRaw tagged template", () => {
