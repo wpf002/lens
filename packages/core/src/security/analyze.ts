@@ -274,9 +274,9 @@ export function finalizeSecurity({ graph, raw, locate, previous }: FinalizeInput
     }
   });
 
-  // Findings added by the triage agent (F9xxx) or OSV (Dxxxx) aren't reproducible from rules; keep them while their anchor exists.
+  // Findings added by the triage agent (F9xxx), OSV (Dxxxx), or `lens probe` (Pxxxx) aren't reproducible from rules; keep them while their anchor exists.
   for (const old of previous?.findings ?? []) {
-    if (!/^(F9\d{3}|D\d{4})$/.test(old.id) || !idx.nodes.has(old.nodeId)) continue;
+    if (!/^(F9\d{3}|D\d{4}|P\d{4})$/.test(old.id) || !idx.nodes.has(old.nodeId)) continue;
     findings.push({ ...old, reachableFrom: old.reachableFrom.filter((e) => idx.nodes.has(e)) });
   }
   findings.sort((a, b) => SEV_ORDER.indexOf(b.severity) - SEV_ORDER.indexOf(a.severity) || a.path.localeCompare(b.path) || a.line - b.line);

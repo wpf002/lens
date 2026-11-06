@@ -33,8 +33,8 @@ Session values come from env vars only. The config names the variable, never the
 | Limit | Value |
 |---|---|
 | Hosts allowed | `localhost`, `127.0.0.1`, `[::1]`, `*.localhost`, `*.test`. Anything else is refused. |
-| Staging host | Only if passed as `--staging-host` and equal to the `--target` host, and a hostname label is one of `staging`, `stage`, `dev`, `test`, `qa`, `sandbox`, `preview`. Refused if it matches `project.homepage`. |
-| DNS check | `localhost` / `*.localhost` must resolve to loopback. `*.test` and staging must not resolve to a loopback/link-local/metadata IP (`169.254.169.254`). Checked once per run before any request. |
+| Staging host | Only if passed as `--staging-host` and equal to the `--target` host, and a subdomain label (left of the registrable domain) is one of `staging`, `stage`, `dev`, `test`, `qa`, `sandbox`, `preview`, alone or hyphenated (`staging-2`, `api-dev`). Refused if it matches `project.homepage`. |
+| DNS check | `localhost` / `*.localhost` must resolve to loopback. No target may resolve to a link-local or unspecified address (`169.254.0.0/16`, `0.0.0.0`, `::`, `fe80::`). `*.test` may resolve to loopback (local proxies). Resolved once per run; every request is pinned to that address through a custom `lookup`, so a DNS change mid-run can't move traffic. |
 | Redirects | Never followed (`redirect: "manual"`). A 3xx is recorded, not chased. |
 | Every request URL | Re-checked against the allowlist right before `fetch`. One choke point in `client.ts`. |
 | Methods | `GET` and `HEAD` only. `POST` only for routes listed in `safeToProbe`. `PUT`, `PATCH`, `DELETE` are never sent. `ANY` routes get `GET`. |
@@ -56,7 +56,7 @@ Session values come from env vars only. The config names the variable, never the
 | Reflected input | Query param `lensprobe=lp<id>"'<x>` on GET routes, and the same as a JSON string field on safe POSTs | Marker returned unescaped in a `text/html` response | New `dyn-reflected-xss` (high, CWE-79); confirms existing `xss` findings reachable from the route |
 | SQL error | `'` and `"` appended to path params and to existing query params | DB error signature in body (`SQLSTATE`, `syntax error at or near`, `You have an error in your SQL syntax`, `SQLITE_ERROR`, `unterminated quoted string`, `ORA-0`) | New `dyn-sql-error` (high, CWE-89); confirms existing `injection` findings reachable from the route |
 | Security headers | `GET /` | Missing CSP, `X-Content-Type-Options`, `X-Frame-Options`/`frame-ancestors`, `Referrer-Policy`; HSTS on https only | One `dyn-missing-headers` per host (low, CWE-693) |
-| CORS | `Origin: https://lens-probe.invalid` on `GET /` and each JSON route | `Access-Control-Allow-Origin` echoes it | `dyn-cors-reflect`: high with `Allow-Credentials: true`, medium without (CWE-942) |
+| CORS | `Origin: https://lens-probe.invalid` on `GET /` and each reflect request; reported once per host | `Access-Control-Allow-Origin` echoes it | `dyn-cors-reflect`: high with `Allow-Credentials: true`, medium without (CWE-942) |
 | Verbose errors | Responses from the SQL probe | Stack trace (`at ... (/...:\d+:\d+)`, `Traceback (most recent call last)`, `node_modules/`, Werkzeug/Django debug page) | `dyn-verbose-error` (medium, CWE-209) |
 
 `.invalid` is a reserved TLD, so the CORS origin can't reach any real host.
@@ -85,3 +85,9 @@ Not in this change: a dashboard button. The CLI writes the graph, so results sho
 - Fixture server: `node:http` on `127.0.0.1:0` in the test, with routes for each case (open route, 401 route, IDOR pair, reflecting route, SQL-error route, CORS-reflecting route, stack-trace route, missing headers) and a small graph fixture pointing at it.
 - Unit tests: allowlist accepts the listed hosts and refuses `example.com`, `10.0.0.1`, `0.0.0.0`, `localhost.evil.com`, staging hosts without a test label, and the homepage host. Redirects are not followed. `PUT`/`DELETE` never planned. POST only when `safeToProbe` lists it. Rate limit spacing. `maxRequests` cap. 5xx stop.
 - Merge tests: 401 clears auth findings, 2xx confirms them, clean injection probe leaves `injection` findings open, re-run doesn't duplicate.
+
+## Notes from implementation
+
+- Server actions are skipped: calling one needs the framework's action id, which the graph doesn't hold.
+- Regex-style routes (`re_path`, bare `*`) are skipped because they can't be filled in.
+- `lens probe` appends one line per request to `.lens/probe-log.jsonl` (gitignored). The log holds method, path, status, and timing, never headers.
