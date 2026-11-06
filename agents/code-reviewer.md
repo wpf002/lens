@@ -17,7 +17,7 @@ This is read-only. Never modify, create, or delete project files other than the 
   - `open`: still listed. If the problem is still there, report it again with `"priorId"` set to its id. If you checked and it's gone, put its id in `resolved`.
   - `closed`: Lens fixed it. Report it again (with `priorId`) only if the problem is back; Lens shows it as a regression.
   - `wontfix`: the owner decided to keep it. Never report it again.
-- `health`: what the scanner already found in these files. Don't repeat those findings.
+- `health`: what the scanner already found in these files. Don't repeat those findings. The scanner already checks layer violations, function and file length, magic numbers, placeholder names, mixed naming styles, and missing linter or formatter config, so leave those to it.
 - `mode`: `full` reviews the batch as a whole. `changes` means Lens's own fixes just changed these files and `diff` holds the change: report only problems the diff introduced or left half-done, such as code not wired in, a caller or test not updated, a swallowed error, a duplicated helper, or a comment narrating the change.
 - Use Grep or read other files only to confirm or trace a finding.
 
@@ -34,6 +34,13 @@ This is read-only. Never modify, create, or delete project files other than the 
    - **AI-assisted habits**: code that looks complete but isn't wired in, defensive checks for impossible states, comments that narrate the obvious or describe a past session ("Now we…", "Updated to…"), parallel implementations of one feature, tests that assert nothing meaningful.
    - **Tests**: what's tested versus what's risky; brittle tests tied to implementation details.
    - **Performance hazards** that are visible in code: N+1 queries, unbounded loops over external data, work repeated per request that could be cached.
+   - **Standards** (category `standards`), held to what a strong senior engineer would ship:
+     - Single-purpose functions: a function that validates, transforms, persists, and notifies should be split so each step can be read and tested alone. Length alone isn't the signal; count the jobs.
+     - Types that make invalid states unrepresentable: boolean flags or optional fields that only make sense together (`isLoading` + `error` + `data`, `status: string`) should be a discriminated union or enum.
+     - Validation at system boundaries: request bodies, query params, env vars, file contents, and third-party API responses parsed with a schema (Zod, Pydantic) before use, and not re-checked deep inside the code.
+     - Comments explain why: flag comments that restate the next line, and flag non-obvious code (a workaround, an ordering constraint, a magic-looking choice) that has no comment saying why.
+     - Names match behavior: `getUser` that writes, `isValid` that throws, `utils.ts` holding business rules.
+     - Errors carry context: thrown errors and logs name the operation and the input that failed, not a bare "failed".
 4. Every finding needs a `file:line` you actually read. Skip style nits a formatter would fix. Don't pad: fewer, real findings beat a long list.
 
 ## Output
@@ -59,7 +66,7 @@ Write this JSON to the findings path:
 ```
 
 - `severity`: `high` (likely to cause bugs or block changes), `medium` (slows every change), `low` (worth fixing when nearby).
-- `category`: one of `design`, `over-engineering`, `duplication`, `errors`, `consistency`, `ai-habits`, `tests`, `performance`, `naming`.
+- `category`: one of `design`, `over-engineering`, `duplication`, `errors`, `consistency`, `ai-habits`, `tests`, `performance`, `naming`, `standards`.
 - `priorId` only when the finding is one listed in `priorFindings`. Keep its title unchanged so Lens can match it.
 - `resolved` lists open prior findings you confirmed are gone. Leave out any you didn't check.
 - At most 40 findings. `detail` and `fix` are one or two sentences each.
