@@ -161,6 +161,9 @@ describe("probe planner", () => {
     expect(plan.requests.some((r) => r.route === "/api/search" && r.body?.includes("lensprobe"))).toBe(true);
     const skippedRoutes = plan.skipped.map((s) => s.endpointId);
     expect(skippedRoutes).toEqual(expect.arrayContaining([expect.stringContaining("DELETE"), expect.stringContaining("PUT"), expect.stringContaining("/api/upload"), expect.stringContaining("submitForm")]));
+    const reasonFor = (needle: string) => plan.skipped.find((x) => x.endpointId.includes(needle))!.reason;
+    expect(reasonFor("DELETE")).toBe("DELETE is never sent");
+    expect(reasonFor("/api/upload")).toMatch(/safeToProbe/);
   });
   it("plans unauth only for unverified routes and IDOR for configured objects", () => {
     const unauth = plan.requests.filter((r) => r.kind === "unauth").map((r) => r.route);

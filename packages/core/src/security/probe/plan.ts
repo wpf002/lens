@@ -102,7 +102,8 @@ export function planProbes(graph: Pick<KnowledgeGraph, "nodes">, config: ProbeCo
     }
     const method = probeMethod(endpoint, safePosts);
     if (!method) {
-      skipped.push({ endpointId: node.id, reason: `${endpoint.method ?? "ANY"} isn't sent unless listed in safeToProbe` });
+      const isPost = (endpoint.method ?? "").toUpperCase().split(/[\s,|]+/).includes("POST");
+      skipped.push({ endpointId: node.id, reason: isPost ? "POST isn't sent unless listed in safeToProbe" : `${endpoint.method} is never sent` });
       continue;
     }
     const base = { endpointId: node.id, route, method };
