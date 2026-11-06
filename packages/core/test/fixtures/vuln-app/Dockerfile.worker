@@ -1,0 +1,8 @@
+FROM python:latest AS build
+ARG NPM_TOKEN
+ENV API_KEY=fixture-not-a-real-key
+RUN curl -fsSL https://example.com/install.sh | bash
+ADD https://example.com/tool.tar.gz /opt/tool.tar.gz
+FROM build
+USER root
+CMD ["python", "worker.py"]

@@ -5,7 +5,7 @@
  */
 import type { Confidence, Finding, Severity } from "../types.js";
 
-export const RULES_VERSION = "2026.09.1";
+export const RULES_VERSION = "2026.11.1";
 
 export interface Rule {
   id: string;
@@ -37,6 +37,12 @@ const JAVA = ["java", "kotlin", "scala"];
 const RB = ["ruby"];
 const PHP = ["php"];
 const CS = ["csharp"];
+const K8S = ["kubernetes", "docker-compose"];
+const GHA = ["github-actions"];
+const TF = ["terraform"];
+const DOCKER = ["dockerfile"];
+/** Secret-looking variable names (uppercase, as env vars are written). */
+const SECRET_VAR = "[A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY|PRIVATE_?KEY|ACCESS_?KEY|CREDENTIALS?)[A-Z0-9_]*";
 
 export const RULES: Rule[] = [
   /* ---- command / code execution ---- */
@@ -154,6 +160,66 @@ export const RULES: Rule[] = [
     pattern: /new\s+RegExp\s*\(\s*req\.(?:body|query|params)/, message: "User-supplied regex can cause catastrophic backtracking (ReDoS)." },
   { id: "xxe", title: "XML parser with external entities", category: "injection", cwe: "CWE-611", severity: "high", confidence: "medium", langs: "*",
     pattern: /resolve_entities\s*=\s*True|XMLInputFactory\.newInstance\(\)|DocumentBuilderFactory\.newInstance\(\)(?![\s\S]{0,200}disallow-doctype)|noent\s*:\s*true|LIBXML_NOENT/, message: "XML parsing that may resolve external entities (XXE)." },
+
+  /* ---- Dockerfile ---- */
+  { id: "docker-secret-env", title: "Secret baked into image", category: "secrets", cwe: "CWE-538", severity: "high", confidence: "medium", langs: DOCKER,
+    pattern: new RegExp(`^\\s*(?:ENV|ARG)\\s+(?:\\S+\\s+)*["']?${SECRET_VAR}["']?(?:[=\\s]|$)`),
+    unless: /^\s*(?:ENV|ARG)\s+(?:\S+\s+)*[A-Z0-9_]*(?:_FILE|_PATH|_DIR|_URL|_URI|_HOST|_PORT|_NAME|_LENGTH|_TTL|TOKENIZERS?\w*)(?:[=\s]|$)/,
+    message: "ENV and ARG values stay in the image layers and history. Pass the secret at runtime, or use `RUN --mount=type=secret` during the build." },
+  { id: "docker-add-url", title: "ADD downloads without a checksum", category: "config", cwe: "CWE-494", severity: "medium", confidence: "high", langs: DOCKER,
+    pattern: /^\s*ADD\s+(?:--\S+\s+)*["']?https?:\/\//i, unless: /--checksum=/,
+    message: "ADD from a URL takes whatever the server returns. Add `--checksum=sha256:…`, or download with curl and verify the hash in a RUN step." },
+  { id: "curl-pipe-shell", title: "Remote script piped to a shell", category: "command-exec", cwe: "CWE-494", severity: "medium", confidence: "medium", langs: [...DOCKER, ...GHA, "shell", "makefile"],
+    pattern: /\b(?:curl|wget)\b[^|#\n]*\|\s*(?:sudo\s+)?(?:\S*\/)?(?:ba|z|da)?sh\b/,
+    message: "A script downloaded at build time runs unchecked. Download it to a file, verify a pinned sha256, then run it, or install from a package manager." },
+
+  /* ---- Terraform ---- */
+  { id: "tf-public-acl", title: "Bucket ACL is public", category: "config", cwe: "CWE-732", severity: "high", confidence: "high", langs: TF,
+    pattern: /\bacl\s*=\s*"(?:public-read|public-read-write|authenticated-read)"/, message: "Anyone on the internet can read this bucket. Set acl = \"private\" and serve files through signed URLs or a CDN." },
+  { id: "tf-public-access-block-off", title: "S3 public access block disabled", category: "config", cwe: "CWE-732", severity: "high", confidence: "high", langs: TF,
+    pattern: /\b(?:block_public_acls|block_public_policy|ignore_public_acls|restrict_public_buckets)\s*=\s*false\b/, message: "This turns off S3's public-access guard. Set all four block/ignore/restrict settings to true." },
+  { id: "tf-public-principal", title: "Policy grants access to everyone", category: "auth", cwe: "CWE-732", severity: "high", confidence: "medium", langs: [...TF, "json"],
+    pattern: /\bPrincipal"?\s*[=:]\s*(?:"\*"|\{\s*"?AWS"?\s*[=:]\s*"\*")|\bidentifiers\s*=\s*\[\s*"\*"\s*\]/, unless: /aws:Source(?:Vpce?|Arn|Account|Ip)|aws:PrincipalOrgID/,
+    message: "Principal \"*\" lets any AWS account or anonymous caller use this resource. Name the account or role ARNs, or add a Condition that limits the caller." },
+  { id: "tf-unencrypted", title: "Encryption turned off", category: "crypto", cwe: "CWE-311", severity: "high", confidence: "high", langs: TF,
+    pattern: /\b(?:storage_encrypted|encrypted|at_rest_encryption_enabled|transit_encryption_enabled|encryption_at_rest|enable_encryption|kms_encrypted)\s*=\s*false\b/,
+    message: "Data is stored unencrypted. Set this to true (and add a kms_key_id if you manage keys)." },
+  { id: "tf-public-db", title: "Database publicly accessible", category: "config", cwe: "CWE-668", severity: "high", confidence: "high", langs: TF,
+    pattern: /\bpublicly_accessible\s*=\s*true\b/, message: "The database gets a public IP. Set publicly_accessible = false and reach it from inside the VPC." },
+  { id: "tf-hardcoded-credential", title: "Credential in Terraform", category: "secrets", cwe: "CWE-798", severity: "high", confidence: "high", langs: TF,
+    pattern: /\b(?:access_key|secret_key|password|master_password|admin_password|administrator_login_password|token|client_secret|private_key|api_key)\s*=\s*"(?!\$\{)[^"\s]{4,}"/,
+    unless: /=\s*"(?:changeme|change-me|example|placeholder|xxx+|<[^>]*>|TODO|REPLACE[^"]*)"/i,
+    message: "A literal credential sits in Terraform code and state. Read it from a variable marked sensitive, fed by a secret manager (e.g. aws_secretsmanager_secret_version or manage_master_user_password = true)." },
+
+  /* ---- Kubernetes / Compose ---- */
+  { id: "k8s-privileged", title: "Privileged container", category: "config", cwe: "CWE-250", severity: "high", confidence: "high", langs: K8S,
+    pattern: /^\s*privileged\s*:\s*true\b/, message: "A privileged container has full access to the host. Remove privileged: true and add only the capabilities it needs." },
+  { id: "k8s-host-namespace", title: "Container shares host namespace", category: "config", cwe: "CWE-250", severity: "high", confidence: "high", langs: K8S,
+    pattern: /^\s*(?:hostNetwork|hostPID|hostIPC)\s*:\s*true\b|^\s*(?:network_mode|pid|ipc)\s*:\s*["']?host\b/,
+    message: "Sharing the host's network, PID, or IPC namespace lets the container see and reach host processes. Remove it." },
+  { id: "k8s-host-path", title: "hostPath volume", category: "config", cwe: "CWE-668", severity: "medium", confidence: "medium", langs: ["kubernetes"],
+    pattern: /^\s*(?:-\s*)?hostPath\s*:/, message: "A hostPath mount exposes the node's filesystem to the pod. Use a PersistentVolumeClaim, emptyDir, or ConfigMap instead." },
+  { id: "docker-socket-mount", title: "Docker socket mounted", category: "config", cwe: "CWE-250", severity: "high", confidence: "high", langs: K8S,
+    pattern: /\/var\/run\/docker\.sock/, message: "Access to the Docker socket is root on the host. Remove the mount; use a rootless builder (BuildKit, Kaniko) if the job builds images." },
+  { id: "k8s-run-as-root-explicit", title: "Container set to run as root", category: "config", cwe: "CWE-250", severity: "high", confidence: "high", langs: K8S,
+    pattern: /^\s*runAsUser\s*:\s*0\b|^\s*runAsNonRoot\s*:\s*false\b|^\s*user\s*:\s*["']?(?:root|0)(?::\S*)?["']?\s*$/,
+    message: "The container is told to run as root. Set runAsNonRoot: true and a non-zero runAsUser (Compose: user: \"1000:1000\")." },
+  { id: "k8s-allow-privilege-escalation", title: "Privilege escalation allowed", category: "config", cwe: "CWE-250", severity: "high", confidence: "high", langs: ["kubernetes"],
+    pattern: /^\s*allowPrivilegeEscalation\s*:\s*true\b/, message: "setuid binaries in the container can gain root. Set allowPrivilegeEscalation: false." },
+
+  /* ---- GitHub Actions ---- */
+  { id: "gha-unpinned-action", title: "Third-party action not pinned to a commit", category: "config", cwe: "CWE-829", severity: "medium", confidence: "high", langs: GHA,
+    pattern: /^\s*-?\s*uses:\s*["']?(?!\.\/|docker:\/\/|actions\/|github\/)[\w.-]+\/[^@\s"']+@(?![0-9a-f]{40}\b)\S/,
+    message: "A tag or branch can be moved to new code that runs with this workflow's secrets. Pin the action to its full 40-character commit SHA (keep the tag in a trailing comment)." },
+  { id: "gha-secret-echo", title: "Secret printed in workflow", category: "secrets", cwe: "CWE-532", severity: "medium", confidence: "medium", langs: GHA,
+    pattern: /\b(?:echo|printf|print|Write-Host|Write-Output)\b[^|>\n]*\$\{\{\s*secrets\./, unless: /add-mask|\$\{\{\s*secrets\.[^}]*\}\}["']?\s*(?:\||>)/,
+    message: "Printing a secret puts it in the log, and GitHub's masking misses any transformed copy. Remove the echo; pass the secret to the tool through env: or stdin." },
+  { id: "gha-script-injection", title: "Untrusted event data in a run script", category: "command-exec", cwe: "CWE-78", severity: "high", confidence: "high", langs: GHA,
+    pattern: /\$\{\{\s*github\.(?:event\.(?:issue\.(?:title|body)|pull_request\.(?:title|body|head\.ref|head\.label|head\.repo\.default_branch)|comment\.body|review\.body|review_comment\.body|discussion\.(?:title|body)|head_commit\.(?:message|author\.(?:email|name))|commits\[?[^}]*\]?\.(?:message|author\.(?:email|name))|pages\[?[^}]*\]?\.page_name|workflow_run\.(?:head_branch|display_title|head_commit\.message))|head_ref)\s*\}\}/,
+    unless: /^\s*(?:-\s*)?(?!run\b|script\b)[\w-]+\s*:\s*["']?\$\{\{[^}]*\}\}["']?\s*$|^\s*(?:-\s*)?(?:if|name)\s*:/,
+    message: "Text an outsider controls (PR title, issue body, branch name) is pasted into a shell script, so it can run commands. Move it to env: (e.g. TITLE: ${{ github.event.pull_request.title }}) and use \"$TITLE\" in the script." },
+  { id: "gha-write-all", title: "Workflow token has write-all", category: "auth", cwe: "CWE-269", severity: "medium", confidence: "high", langs: GHA,
+    pattern: /^\s*permissions\s*:\s*write-all\b/, message: "Every job gets a token that can write to the whole repo. Set permissions: contents: read and grant writes per job." },
 ];
 
 /** User-controlled input markers, per language family. */
