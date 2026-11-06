@@ -224,7 +224,7 @@ export const ReviewFindingsSchema = z.object({
     title: clip(140),
     severity: z.enum(["high", "medium", "low"]),
     // An unknown category shouldn't throw away the whole review.
-    category: z.enum(["design", "over-engineering", "duplication", "errors", "consistency", "ai-habits", "tests", "performance", "naming"]).catch("design"),
+    category: z.enum(["design", "over-engineering", "duplication", "errors", "consistency", "ai-habits", "tests", "performance", "naming", "standards"]).catch("design"),
     path: z.string().max(400),
     line: z.number().int().positive().optional(),
     detail: clip(600),
@@ -291,6 +291,24 @@ export const TriagePatchSchema = z.object({
     nodeId: z.string().optional(),
   })).max(200).optional(),
 });
+
+/* ---------------- owner config ---------------- */
+
+const layerId = z.string().regex(/^[a-z][a-z0-9-]{0,39}$/, "layer ids are lowercase, like ui or data");
+const layerPair = z.object({ from: layerId, to: layerId });
+
+/** .lens/architecture.json: the owner's layer rules, merged over the built-in ones. */
+export const ArchitectureConfigSchema = z.object({
+  /** false drops the built-in rules, so only `rules` apply. */
+  defaults: z.boolean().optional(),
+  /** Extra forbidden imports: files in `from` may not import files in `to`. */
+  rules: z.array(layerPair.extend({ reason: prose(160).optional() })).max(50).optional(),
+  /** Built-in rules to turn off. */
+  allow: z.array(layerPair).max(50).optional(),
+  /** Globs for files the rules skip, as source or target. */
+  ignore: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
+}).strict();
+export type ArchitectureConfig = z.infer<typeof ArchitectureConfigSchema>;
 
 export type PatchKind = "enrich" | "layers" | "tour" | "domain" | "triage";
 export const PATCH_SCHEMAS = {

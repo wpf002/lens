@@ -10,6 +10,7 @@ import {
   type KnowledgeGraph,
 } from "../src/index.js";
 import { commentLines, forwardTarget, weakTestReason } from "../src/quality/tells.js";
+import { isPolicyJson, scanInfra } from "../src/security/infra.js";
 
 const FIX = path.join(__dirname, "fixtures");
 
@@ -92,6 +93,55 @@ describe("scan (vuln fixture)", () => {
     for (const r of ["js-exec-shell", "prisma-raw-unsafe", "py-unsafe-deser", "py-sql-format", "open-redirect", "jwt-no-verify", "webhook-no-signature", "react-dangerous-html", "secret-stripe-live-key", "secret-db-url-password", "debug-enabled"]) {
       expect(rules, r).toContain(r);
     }
+  });
+
+  it("finds the planted infrastructure misconfigurations", () => {
+    const hits = (path: string) => new Set(g.security!.findings.filter((f) => f.path === path).map((f) => f.rule));
+    const expectRules = (path: string, rules: string[]) => {
+      const found = hits(path);
+      for (const r of rules) expect(found, `${path}: ${r}`).toContain(r);
+    };
+    expectRules("Dockerfile", ["docker-root-user", "docker-no-healthcheck"]);
+    expectRules("Dockerfile.worker", ["docker-latest-tag", "docker-secret-env", "curl-pipe-shell", "docker-add-url", "docker-root-user"]);
+    expectRules("infra/main.tf", [
+      "tf-public-acl", "tf-public-access-block-off", "tf-open-ingress", "tf-public-db", "tf-hardcoded-credential",
+      "tf-unencrypted", "tf-unencrypted-storage", "iam-wildcard-action", "iam-wildcard-resource",
+    ]);
+    expectRules("k8s/deployment.yaml", [
+      "k8s-privileged", "k8s-host-namespace", "k8s-host-path", "docker-socket-mount", "k8s-run-as-root-explicit",
+      "k8s-allow-privilege-escalation", "k8s-plain-env-secret", "k8s-no-resource-limits",
+    ]);
+    expectRules("deploy/app.yaml", ["k8s-run-as-root", "k8s-privilege-escalation-default", "k8s-secret-manifest"]);
+    expectRules("iam/policy.json", ["iam-wildcard-action", "tf-public-principal"]);
+    expectRules(".github/workflows/ci.yml", ["gha-prt-checkout", "gha-unpinned-action", "gha-script-injection", "gha-secret-echo", "gha-write-all", "curl-pipe-shell"]);
+  });
+
+  it("keeps infra checks precise", () => {
+    const at = (path: string, rule: string) => g.security!.findings.filter((f) => f.path === path && f.rule === rule);
+    // Port 443 open to the world and the egress block are fine; only the SSH ingress is flagged.
+    expect(at("infra/main.tf", "tf-open-ingress").map((f) => f.line)).toEqual([20]);
+    // Action "*" on Resource "*" is full admin; the Deny statement is ignored.
+    const admin = at("infra/main.tf", "iam-wildcard-action");
+    expect(admin.map((f) => [f.line, f.severity])).toEqual([[56, "critical"]]);
+    // The second stage builds FROM an earlier stage, not an unpinned image.
+    expect(at("Dockerfile.worker", "docker-latest-tag").map((f) => f.line)).toEqual([1]);
+    // Explicit runAsUser: 0 is reported once by the line rule, not again as a missing setting.
+    expect(at("k8s/deployment.yaml", "k8s-run-as-root")).toEqual([]);
+    expect(at(".github/workflows/ci.yml", "gha-unpinned-action").map((f) => f.line)).toEqual([13]);
+    expect(at(".github/workflows/ci.yml", "gha-prt-checkout")[0]?.severity).toBe("critical");
+  });
+
+  it("treats CloudTrail logs that quote a policy as data, not a policy", () => {
+    const log = '{"eventVersion": "1.11", "requestParameters": {"policy": {"Statement": [{"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject"}]}}}';
+    expect(isPolicyJson("samples/ct.json", log)).toBe(false);
+    expect(isPolicyJson("iam/policy.json", '{"Statement": [{"Effect": "Allow", "Action": "*"}]}')).toBe(true);
+  });
+
+  it("accepts an entrypoint that chowns a volume as root and then drops to another user", () => {
+    const rules = (raw: string) => scanInfra({ path: "Dockerfile", lang: "dockerfile", cleaned: raw, raw }).map((f) => f.rule);
+    const base = 'FROM node:22-slim\nHEALTHCHECK CMD ["true"]\n';
+    expect(rules(`${base}CMD ["node", "index.js"]\n`)).toContain("docker-root-user");
+    expect(rules(`${base}ENTRYPOINT ["/bin/sh", "-c", "chown -R node /data && exec setpriv --reuid=node --regid=node --init-groups \\"$@\\"", "x"]\nCMD ["node", "index.js"]\n`)).not.toContain("docker-root-user");
   });
 
   it("does not flag the parameterized $queryRaw tagged template", () => {

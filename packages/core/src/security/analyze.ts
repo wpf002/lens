@@ -6,6 +6,7 @@ import { effectiveAuth, indexGraph, publicByTriage } from "../graph-utils.js";
 import {
   GENERIC_SECRET_RE, RULES, RULES_VERSION, SECRET_PATTERNS, isPlaceholder, isPlaceholderDbUrl, redact, shannonEntropy, taintRegexFor,
 } from "./rules.js";
+import { isKubernetesManifest, isPolicyJson, scanInfra } from "./infra.js";
 
 /** Lines that define a regex rather than execute anything: `pattern: /…/`, `const X_RE = /…/`, `new RegExp(…)`. */
 const REGEX_DEF = /^\s*(?:(?:pattern|re|regex|unless|match|test|rule)\s*:\s*\/|(?:export\s+)?(?:const|let|var)\s+\w*(?:RE|Re|REGEX|Regex|PATTERN|Pattern)\w*\s*[:=][^=]*\/)|\bnew\s+RegExp\s*\(\s*["'`/]/;
@@ -16,16 +17,20 @@ const SEV_ORDER: Severity[] = ["info", "low", "medium", "high", "critical"];
 export const bump = (s: Severity, by = 1): Severity => SEV_ORDER[Math.max(0, Math.min(SEV_ORDER.length - 1, SEV_ORDER.indexOf(s) + by))]!;
 export const SEV_WEIGHT: Record<Severity, number> = { critical: 25, high: 10, medium: 4, low: 1, info: 0 };
 
+const HASH_COMMENT_LANGS = new Set(["python", "ruby", "shell", "yaml", "toml", "env", "dockerfile", "github-actions", "kubernetes", "docker-compose", "makefile"]);
+
 /** Blank out comments while keeping line structure so rule hits map to real lines. */
 export function stripComments(src: string, lang: string): string {
-  const hash = lang === "python" || lang === "ruby" || lang === "shell" || lang === "yaml" || lang === "toml" || lang === "env" || lang === "dockerfile";
+  const hash = HASH_COMMENT_LANGS.has(lang);
+  const both = lang === "terraform"; // HCL takes #, //, and /* */
   let out = src;
   if (!hash) out = out.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
   return out
     .split("\n")
     .map((l) => {
       const t = l.trimStart();
-      if (hash ? t.startsWith("#") && !t.startsWith("#{") && !t.startsWith("#!") : t.startsWith("//")) return "";
+      const hashComment = t.startsWith("#") && !t.startsWith("#{") && !t.startsWith("#!");
+      if (both ? hashComment || t.startsWith("//") : hash ? hashComment : t.startsWith("//")) return "";
       return l;
     })
     .join("\n");
@@ -45,9 +50,11 @@ export interface FileScanInput {
 }
 
 export function scanFile(input: FileScanInput): RawFinding[] {
-  const { path, lang, src, symbols, isTest } = input;
+  const { path, src, symbols, isTest } = input;
+  const lang = isKubernetesManifest(input.lang, src) ? "kubernetes" : input.lang;
+  const policyJson = isPolicyJson(path, src);
   const out: RawFinding[] = [];
-  const cleaned = stripComments(src, lang);
+  const cleaned = lang === "json" ? src : stripComments(src, lang);
   const lines = cleaned.split("\n");
   const rawLines = src.split("\n");
   const taint = taintRegexFor(lang);
@@ -63,7 +70,7 @@ export function scanFile(input: FileScanInput): RawFinding[] {
     return false;
   };
 
-  const codeLike = !isDocs && !/\.(json|jsonc|csv|lock|svg)$/i.test(path);
+  const codeLike = !isDocs && (policyJson || !/\.(json|jsonc|csv|lock|svg)$/i.test(path));
   if (codeLike) {
     for (const rule of RULES) {
       if (rule.langs !== "*" && !rule.langs.includes(lang)) continue;
@@ -170,7 +177,9 @@ export function scanFile(input: FileScanInput): RawFinding[] {
     const score = (x: RawFinding) => CONF[x.confidence] * 10 + SEV_ORDER.indexOf(x.severity);
     if (!prev || score(f) > score(prev)) best.set(k, f);
   }
-  return [...best.values()];
+  // Infra checks are distinct problems even when several land on one container or resource line.
+  const infra = isTest ? [] : scanInfra({ path, lang, cleaned, raw: src });
+  return [...best.values(), ...infra];
 }
 
 /* ---------------- graph-level pass ---------------- */
@@ -274,9 +283,9 @@ export function finalizeSecurity({ graph, raw, locate, previous }: FinalizeInput
     }
   });
 
-  // Findings added by the triage agent (F9xxx) or OSV (Dxxxx) aren't reproducible from rules; keep them while their anchor exists.
+  // Findings added by the triage agent (F9xxx), OSV (Dxxxx), or `lens probe` (Pxxxx) aren't reproducible from rules; keep them while their anchor exists.
   for (const old of previous?.findings ?? []) {
-    if (!/^(F9\d{3}|D\d{4})$/.test(old.id) || !idx.nodes.has(old.nodeId)) continue;
+    if (!/^(F9\d{3}|D\d{4}|P\d{4})$/.test(old.id) || !idx.nodes.has(old.nodeId)) continue;
     findings.push({ ...old, reachableFrom: old.reachableFrom.filter((e) => idx.nodes.has(e)) });
   }
   findings.sort((a, b) => SEV_ORDER.indexOf(b.severity) - SEV_ORDER.indexOf(a.severity) || a.path.localeCompare(b.path) || a.line - b.line);

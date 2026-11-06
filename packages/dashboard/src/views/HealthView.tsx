@@ -8,7 +8,7 @@ import { FixAllButton, Remediation, SAFE } from "../components/Remediation";
 
 const DECISION = /^decision:\s*/i;
 /** Refactor checks run one item per Claude session; each costs more than a small fix. */
-const REFACTOR_CHECKS = new Set(["oversized"]);
+const REFACTOR_CHECKS = new Set(["oversized", "layer-violations"]);
 const isRefactor = (id: string) => REFACTOR_CHECKS.has(id.split("~")[0]!);
 import { Button, EmptyState, SeverityBadge, Spinner, cx, renderInlineCode } from "../components/ui";
 import { useStore } from "../store";

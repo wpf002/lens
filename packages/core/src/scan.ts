@@ -24,7 +24,7 @@ import { scanFile, finalizeSecurity, stripComments, type RawFinding } from "./se
 import {
   buildHeuristicLayers, buildHeuristicTour, detectFrameworks, fileComplexity, functionComplexity, heuristicLayer, isFileKind, listPreview,
 } from "./heuristics.js";
-import { loadFingerprints, loadGraph, loadMeta, paths, saveFingerprints, saveGraph, saveMeta, loadConfig, type LensMeta } from "./persistence.js";
+import { loadFingerprints, loadGraph, loadMeta, paths, saveFingerprints, saveGraph, saveMeta, loadConfig, loadArchitectureConfig, type LensMeta } from "./persistence.js";
 
 export interface ScanOptions {
   exclude?: string[];
@@ -72,6 +72,7 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
   const root = path.resolve(rootIn);
   const progress = opts.onProgress ?? (() => {});
   const config = await loadConfig(root);
+  const architecture = await loadArchitectureConfig(root);
   const exclude = [...(config.exclude ?? []), ...(opts.exclude ?? [])];
 
   progress("discovering files");
@@ -547,6 +548,7 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
     nodes: nodeList,
     edges,
     deps: allDeps,
+    architecture,
   });
 
   /* ---- project ---- */

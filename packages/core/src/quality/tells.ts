@@ -6,7 +6,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { stripComments } from "../security/analyze.js";
-import { CODE_LANGS, GENERATED, JS_LANGS, push } from "./common.js";
+import { CODE_LANGS, GENERATED, JS_LANGS, push } from "./shared.js";
 import type { HealthCheck, HealthFile, HealthHit } from "./health.js";
 
 export type TellCheck = Omit<HealthCheck, "count" | "source"> & { count?: number };
