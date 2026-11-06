@@ -263,6 +263,9 @@ function FindingRow({ f, i, st, canFix, isNew }: { f: ReviewRecord["findings"][n
 }
 
 /** Progress, confirm, results, and errors for the AI review. Entry point is the header button. */
+/** Merged PR numbers this page already re-reviewed. */
+const autoReviewed = new Set<number>();
+
 function ReviewPanel() {
   const meta = useStore((s) => s.meta);
   const job = useStore((s) => s.enrichJob);
@@ -280,6 +283,15 @@ function ReviewPanel() {
   const elapsed = useElapsed(job.startedAt, running);
   const setConfirming = (v: boolean) => useStore.setState({ reviewConfirm: v });
   const box = "mx-4 mt-3 rounded-lg border border-line bg-panel-2 px-3 py-2.5 text-[12px]";
+  const mergedPr = push?.pr?.state === "merged" ? push.pr : null;
+  const outdated = !!review && !!mergedPr?.mergedAt && mergedPr.mergedAt > review.generatedAt;
+  const busy = job.state === "running";
+  // Findings from before a merge are stale. Re-review once per merge, so a failed run doesn't repeat on every render.
+  useEffect(() => {
+    if (!outdated || busy || !mergedPr || autoReviewed.has(mergedPr.number)) return;
+    autoReviewed.add(mergedPr.number);
+    void run("review");
+  }, [outdated, busy, mergedPr, run]);
 
   if (running)
     return (
@@ -322,8 +334,6 @@ function ReviewPanel() {
     );
   if (failed) return <p className={cx(box, "text-critical")}>{renderInlineCode(job.error ?? "The review failed.")}</p>;
   if (!review) return null;
-  const mergedPr = push?.pr?.state === "merged" ? push.pr : null;
-  const outdated = !!mergedPr?.mergedAt && mergedPr.mergedAt > review.generatedAt;
   return (
     <div className={cx(box, "flex flex-wrap items-center gap-3")}>
       <Mascot size={22} className="shrink-0" />
