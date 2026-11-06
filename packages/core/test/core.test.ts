@@ -5,7 +5,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import {
   extractStructure, scanProject, scanAndSave, loadGraph, loadMeta, applyPatch, PatchValidationError, parseUnifiedDiff, computeImpact,
-  GraphSearch, buildKnowledgeGraph, embedInDashboard, validateGraph, buildBatches, KnowledgeGraphSchema, globToRegExp, stripComments, isPlaceholderDbUrl, siteUrl, outsideRemediateReason, OUTSIDE_REMEDIATE_REASON,
+  GraphSearch, buildKnowledgeGraph, embedInDashboard, validateGraph, buildBatches, KnowledgeGraphSchema, globToRegExp, stripComments, isPlaceholderDbUrl, siteUrl,
   type KnowledgeGraph,
 } from "../src/index.js";
 
@@ -336,13 +336,3 @@ describe("misc", () => {
   });
 });
 
-describe("outsideRemediateReason", () => {
-  // Regression: these rows only got a reason at the end of a run, and with nothing fixable left the Remediate button was disabled, so they stayed plain Open.
-  it("gives checks Remediate never sends a reason without a run", () => {
-    expect(outsideRemediateReason("oversized")).toBe(OUTSIDE_REMEDIATE_REASON);
-    expect(outsideRemediateReason("hotspots")).toBe(OUTSIDE_REMEDIATE_REASON);
-  });
-  it("leaves batch-fixable checks to Remediate", () => {
-    expect(outsideRemediateReason("untested")).toBeUndefined();
-  });
-});

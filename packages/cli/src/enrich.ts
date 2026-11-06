@@ -15,7 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyFixes, buildRecord, loadRemediation, markUnaddressed, remediationPath, type RemediationSource } from "./remediate.js";
 import { collectChanges, makeWorkspace } from "./workspace.js";
-import { AuditVerdictsSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, FIXABLE_CHECKS, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type KnowledgeGraph } from "@lens/core";
+import { AuditVerdictsSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type KnowledgeGraph } from "@lens/core";
 
 export type EnrichTask = "domain" | "audit" | "summaries" | "review" | "remediate";
 
@@ -167,8 +167,12 @@ async function recordDuration(root: string, kind: "audit" | "review", ms: number
 export const MAX_BUDGET_USD = 20;
 const TIMEOUT_MS = 45 * 60_000;
 /** Checks whose fixes are refactors: each item gets its own Claude run and a larger cap. */
-export const REFACTOR_CHECKS = new Set(["oversized"]);
+export const REFACTOR_CHECKS = new Set(["oversized", "hotspots", "import-cycles"]);
 export const REFACTOR_ITEM_LIMIT_USD = 8;
+const REFACTOR_ITEM_LOW_USD = 1;
+const REFACTOR_ITEM_HIGH_USD = 4;
+/** Ceiling for one Remediate run over a whole project, review included. */
+const MAX_FIX_ALL_USD = 400;
 const REFACTOR_JOB_LIMIT_USD = 60;
 export const isRefactorItem = (id: string) => REFACTOR_CHECKS.has(id.split("~")[0]!);
 /** Spending cap for a Fix run on one check or one item, plus room to review and repair Lens's own changes. */
@@ -1006,10 +1010,13 @@ export async function fixAllPlan(root: string, source: "audit" | "health"): Prom
   const first = review ? (review.batches ? "review" : null) : auditAt && auditAt >= headCommitTime(root) ? null : "audit";
   const pre = !first ? { low: 0, high: 0, limit: 0 } : review ? review.estimate : estimateCost("audit", files);
   const items = await fixableCount(root, source);
+  // Refactors each get their own run and cap, so they're priced apart from batch fixes.
+  const refactors = source === "health" ? (g?.health?.checks ?? []).filter((c) => REFACTOR_CHECKS.has(c.id)).reduce((a, c) => a + c.count, 0) : 0;
   // Before the first run, assume about ten more items will turn up.
-  const fix = estimateFixAll(Math.max(1, items + (first ? 10 : 0)));
+  const batch = estimateFixAll(Math.max(1, items - refactors + (first ? 10 : 0)));
+  const fix = { low: batch.low + refactors * REFACTOR_ITEM_LOW_USD, high: batch.high + refactors * REFACTOR_ITEM_HIGH_USD, limit: batch.limit + refactors * REFACTOR_ITEM_LIMIT_USD };
   const r = (n: number) => Math.round(n * 100) / 100;
-  return { first, firstLimit: pre.limit, items, estimate: { low: r(pre.low + fix.low), high: r(pre.high + fix.high), limit: r(Math.min(MAX_REVIEW_USD + 150, pre.limit + fix.limit + FIX_CHECK_RESERVE_USD)) } };
+  return { first, firstLimit: pre.limit, items, estimate: { low: r(pre.low + fix.low), high: r(pre.high + fix.high), limit: r(Math.min(MAX_FIX_ALL_USD, pre.limit + fix.limit + FIX_CHECK_RESERVE_USD)) } };
 }
 
 /** Files the given fixes changed, without deletions. */
@@ -1039,13 +1046,12 @@ function headCommitTime(root: string): number {
 export async function fixableCount(root: string, source: "audit" | "health" = "health"): Promise<number> {
   if (source === "audit") return (await remediationItems(root, "audit", undefined, Infinity)).length;
   const g = await loadGraph(root);
-  const checks = (g?.health?.checks ?? []).filter((c) => FIXABLE_CHECKS.has(c.id)).reduce((a, c) => a + c.count, 0);
+  const checks = (g?.health?.checks ?? []).reduce((a, c) => a + c.count, 0);
   const review = (await remediationItems(root, "health", undefined, Infinity)).filter((i) => i.id.startsWith("review-")).length;
   return checks + review;
 }
 
 /** Failing checklist items (scanner + AI audit merged) or the review's high/medium findings. */
-export { FIXABLE_CHECKS };
 /** Hits handed to one run, so a check with hundreds of hits doesn't become one huge bill. */
 export const HEALTH_BATCH = 15;
 /** checkId for a run that repairs tests a Lens pull request broke. */
@@ -1069,7 +1075,7 @@ export async function remediationItems(root: string, source: RemediationSource, 
       .map(({ f, i }) => ({ id: `review-${i}`, title: f.title, evidence: [`${f.path}${f.line ? `:${f.line}` : ""} ${f.detail}`], fix: f.fix }));
   }
   if (source === "health" && !checkId) {
-    // Review findings not fixed yet, then the worst fixable automatic-check hits, up to FIX_ALL_LIMIT.
+    // Review findings not fixed yet, then every check's open hits (refactors included), up to FIX_ALL_LIMIT.
     // Review ids count only from records newer than the ledger's stable ids, as the dashboard does.
     // An older record's "review-3" names a different finding, and trusting it hid that finding from every run.
     const applied = new Set<string>([...(await reviewClosed(root)).fixed].map((i) => `review-${i}`));
@@ -1087,7 +1093,7 @@ export async function remediationItems(root: string, source: RemediationSource, 
       .sort((a, b) => SEV_RANK[a.f.severity] - SEV_RANK[b.f.severity])
       .forEach(({ f, i }) => out.push({ id: `review-${i}`, title: f.title, evidence: [`${f.path}${f.line ? `:${f.line}` : ""} ${f.detail}`], fix: f.fix }));
     const g = await loadGraph(root);
-    const checks = (g?.health?.checks ?? []).filter((c) => FIXABLE_CHECKS.has(c.id) && c.count > 0).sort((a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity] || b.count - a.count);
+    const checks = (g?.health?.checks ?? []).filter((c) => c.count > 0).sort((a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity] || b.count - a.count);
     // Round-robin across checks so one noisy check doesn't take every slot.
     const open = checks.map((c) => {
       const ids = checkHitIds(c);
@@ -1132,7 +1138,7 @@ export async function remediationItems(root: string, source: RemediationSource, 
   const ai = new Map((audit?.items ?? []).map((i) => [i.id, i]));
   const rem = await loadRemediation(root, "audit");
   const applied = new Set([...(rem?.fixes ?? []).filter((f) => f.status === "applied").map((f) => f.itemId), ...(rem?.skipped ?? []).filter((x) => ALREADY_SAFE.test(x.reason)).map((x) => x.itemId)]);
-  const FINDING_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2 };
+  const FINDING_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
   const findings = (g?.security?.findings ?? [])
     .filter((f) => f.status !== "false_positive" && f.severity in FINDING_RANK)
     .sort((a, b) => FINDING_RANK[a.severity]! - FINDING_RANK[b.severity]!)

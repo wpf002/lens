@@ -21,7 +21,7 @@ import { authorizeUrl, disconnectGithub, finishOAuth, githubLogin, githubToken, 
 import { cloneOrUpdate, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, type PushInfo } from "./cloud.js";
 import { MAX_TEST_REPAIRS, recordRepairAttempt, repairItems, saveRepairItems } from "./ci.js";
 import { SOURCES, applyFixes, loadRemediation, undoFix, type RemediationSource } from "./remediate.js";
-import { EnrichRunner, FIXABLE_CHECKS, HEALTH_BATCH, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
+import { EnrichRunner, HEALTH_BATCH, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import {
   buildBatches, diffImpact, isGitRepo, loadGraph, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
   type EmbeddingStore, type KnowledgeGraph,
@@ -363,7 +363,6 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
           records,
           estimates: { audit: audit.estimate, review, health: health.estimate },
           fixAll: { audit: { items: audit.items, first: audit.first }, health: { items: health.items, first: health.first } },
-          fixableChecks: [...FIXABLE_CHECKS],
           healthBatch: HEALTH_BATCH,
           healthItems: health.items,
           wontFix: await loadWontFix(proj.root),

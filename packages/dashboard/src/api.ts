@@ -247,7 +247,7 @@ export function startAIJob(task: NonNullable<EnrichJob["task"]>, opts: { source?
 }
 export type FixAllPlans = Record<"audit" | "health", { items: number; first: "audit" | "review" | null }>;
 export const fetchRemediation = () =>
-  request<{ records: Record<RemediationSource, RemediationRecord | null>; estimates: Record<RemediationSource, CostEstimate>; fixAll: FixAllPlans; fixableChecks: string[]; healthBatch: number; healthItems: number; wontFix?: string[] }>("/api/remediation");
+  request<{ records: Record<RemediationSource, RemediationRecord | null>; estimates: Record<RemediationSource, CostEstimate>; fixAll: FixAllPlans; healthBatch: number; healthItems: number; wontFix?: string[] }>("/api/remediation");
 export const applyRemediation = (source: RemediationSource, ids: string[]) =>
   request<{ applied: string[]; failed: Array<{ id: string; error: string }> }>("/api/remediation/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source, ids }) });
 export const undoRemediation = (source: RemediationSource, id: string) =>

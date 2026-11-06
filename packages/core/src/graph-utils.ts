@@ -171,17 +171,6 @@ export function checkHitIds(c: { id: string; hits: Array<{ path: string; detail:
   });
 }
 
-/** Automatic checks Remediate sends in its batches. Any check can still be fixed from its own row. */
-export const FIXABLE_CHECKS: ReadonlySet<string> = new Set(["untested", "swallowed-errors", "debug-leftovers", "stubs", "mock-data", "type-escapes", "duplicates", "dead-functions", "unused-deps", "dead-files", "stale-docs"]);
-
-/** Reason shown on hits of checks Remediate never sends: refactors and checks without a batch fix. */
-export const OUTSIDE_REMEDIATE_REASON = "Too large for Remediate. Use Fix on this row.";
-
-/** Why Remediate leaves a check's hits to the owner, or undefined when Remediate handles them. */
-export function outsideRemediateReason(checkId: string): string | undefined {
-  return FIXABLE_CHECKS.has(checkId) ? undefined : OUTSIDE_REMEDIATE_REASON;
-}
-
 /** Stable key for a Senior Review finding. Its `review-<i>` id is positional and changes per review. */
 export function reviewKey(f: { title: string; path: string }): string {
   return `rv-${fnv(`${f.title}|${f.path}`)}`;
