@@ -242,7 +242,7 @@ export function openProjectPath(path: string): Promise<OpenResult> {
   });
 }
 
-export function startAIJob(task: NonNullable<EnrichJob["task"]>, opts: { source?: RemediationSource; checkId?: string; note?: string } = {}): Promise<EnrichJob> {
+export function startAIJob(task: NonNullable<EnrichJob["task"]>, opts: { source?: RemediationSource; checkId?: string; note?: string; fixNew?: boolean } = {}): Promise<EnrichJob> {
   return request(`/api/enrich/${task}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts) });
 }
 export type FixAllPlans = Record<"audit" | "health", { items: number; first: "audit" | "review" | null }>;

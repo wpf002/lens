@@ -148,7 +148,7 @@ export interface State {
   closeCode(): void;
   toggleCodeFull(): void;
   pickProject(): Promise<void>;
-  runAI(task: NonNullable<EnrichJob["task"]>, opts?: { source?: RemediationSource; checkId?: string; note?: string }): Promise<void>;
+  runAI(task: NonNullable<EnrichJob["task"]>, opts?: { source?: RemediationSource; checkId?: string; note?: string; fixNew?: boolean }): Promise<void>;
   /** Health and review items closed as Won't Fix (stable ids). */
   wontFix: string[];
   toggleWontFix(id: string, on: boolean): Promise<void>;
@@ -527,7 +527,8 @@ export const useStore = create<State>((set, get) => ({
       if (was === "running" && job.state === "done") {
         if (job.task === "audit") set({ audit: await fetchAudit().catch(() => null) });
         if (job.task === "review") set({ review: await fetchReview().catch(() => null) });
-        if (job.task === "remediate") await get().refreshRemediation(); // Fix changed files: reload below
+        // A post-merge review also fixes what it found (job.fixAll).
+        if (job.task === "remediate" || job.fixAll) await get().refreshRemediation(); // Fix changed files: reload below
         await reloadGraph();
       }
     };

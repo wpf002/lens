@@ -286,18 +286,18 @@ function ReviewPanel() {
   const mergedPr = push?.pr?.state === "merged" ? push.pr : null;
   const outdated = !!review && !!mergedPr?.mergedAt && mergedPr.mergedAt > review.generatedAt;
   const busy = job.state === "running";
-  // Findings from before a merge are stale. Re-review once per merge, so a failed run doesn't repeat on every render.
+  // Findings from before a merge are stale. Re-review once per merge (and fix what it finds), so a failed run doesn't repeat on every render.
   useEffect(() => {
     if (!outdated || busy || !mergedPr || autoReviewed.has(mergedPr.number)) return;
     autoReviewed.add(mergedPr.number);
-    void run("review");
+    void run("review", { fixNew: true });
   }, [outdated, busy, mergedPr, run]);
 
   if (running)
     return (
       <div className={box} role="status">
         <div className="flex items-center gap-2 text-[12.5px] text-fg">
-          <Spinner size={14} /> Reviewing…{job.review?.batchesTotal ? <span className="font-mono text-muted tabular">{job.review.batchesDone ?? 0}/{job.review.batchesTotal}</span> : null} <span className="font-mono text-muted tabular">{elapsed}</span>
+          <Spinner size={14} /> {job.fixAll ? "Fixing…" : "Reviewing…"}{!job.fixAll && job.review?.batchesTotal ? <span className="font-mono text-muted tabular">{job.review.batchesDone ?? 0}/{job.review.batchesTotal}</span> : null} <span className="font-mono text-muted tabular">{elapsed}</span>
           <Button size="sm" variant="ghost" className="ml-auto" onClick={() => void cancel()}>
             Cancel
           </Button>

@@ -304,7 +304,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         const task = enrichMatch[1] as EnrichTask;
         if (proj.graphFile) return send(res, 409, { error: "AI runs need a scanned project, not --graph" });
         const body = await readBody(req, 2_000); // the server sets the limit; clients can't raise it
-        const opts = JSON.parse(body || "{}") as { source?: unknown; checkId?: unknown; note?: unknown };
+        const opts = JSON.parse(body || "{}") as { source?: unknown; checkId?: unknown; note?: unknown; fixNew?: unknown };
         const note = typeof opts.note === "string" && opts.note.trim() ? opts.note.trim().slice(0, 600) : undefined;
         const source: RemediationSource = SOURCES.includes(opts.source as RemediationSource) ? (opts.source as RemediationSource) : "audit";
         const checkId = typeof opts.checkId === "string" ? opts.checkId : undefined;
@@ -316,7 +316,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         if (enrich.running) return send(res, 409, { error: "an AI run is already in progress" });
         const authProblem = await checkClaudeAuth();
         if (authProblem) return send(res, 412, { error: authProblem });
-        return send(res, 202, enrich.start(task, proj.root, budget, { source, checkId, note }));
+        return send(res, 202, enrich.start(task, proj.root, budget, { source, checkId, note, fixNew: task === "review" && opts.fixNew === true }));
       }
       if (req.method === "GET" && url.pathname === "/api/audit") {
         if (proj.graphFile) return send(res, 200, { audit: null });

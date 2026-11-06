@@ -566,4 +566,62 @@ if (get("Findings path")) {
       delete process.env.LENS_CLAUDE_BIN;
     }
   });
+
+  it("The re-review after a merge fixes the findings it adds", async () => {
+    const fake = path.join(os.tmpdir(), `fake-merge-${process.pid}.mjs`);
+    // An earlier test switched projects; the last job ran in the current one.
+    const root: string = JSON.parse((await get(`${base}/api/enrich/status`, auth())).body).root;
+    await fs.writeFile(fake, `#!/usr/bin/env node
+import fs from "node:fs";
+const prompt = process.argv[process.argv.indexOf("-p") + 1];
+const get = (k) => new RegExp(k + ": (.+)").exec(prompt)?.[1].trim();
+const done = () => console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, total_cost_usd: 0.05 }));
+if (get("Findings path")) {
+  const main = fs.readFileSync(${JSON.stringify(path.join("__DIR__", "main.py"))}, "utf8");
+  const merged = main.includes("MERGED") && !main.includes("# fixed");
+  const findings = merged ? [{ title: "Merge left a bug", severity: "high", category: "correctness", path: "main.py", line: 1, detail: "Found after the merge.", fix: "Fix it." }] : [];
+  fs.writeFileSync(get("Findings path"), JSON.stringify({ findings }));
+  done();
+} else {
+  const items = JSON.parse(fs.readFileSync(get("Items"), "utf8")).items;
+  const ws = get("Project copy \\\\(edit files here\\\\)");
+  const fixes = [], skipped = [];
+  for (const it of items) {
+    if (it.title === "Merge left a bug") {
+      fs.appendFileSync(ws + "/main.py", "# fixed " + it.id + "\\n");
+      fixes.push({ itemId: it.id, title: "Fix " + it.title, explanation: "Demo.", files: ["main.py"] });
+    } else skipped.push({ itemId: it.id, reason: "Not something to change here." });
+  }
+  fs.writeFileSync(get("Report path"), JSON.stringify({ fixes, skipped }));
+  done();
+}
+`.replace("__DIR__", root));
+    await fs.chmod(fake, 0o755);
+    process.env.LENS_CLAUDE_BIN = fake;
+    const wait = async () => {
+      let job: { state: string; error?: string; fixAll?: unknown } = { state: "running" };
+      for (let i = 0; i < 200 && job.state === "running"; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        job = JSON.parse((await get(`${base}/api/enrich/status`, auth())).body);
+      }
+      return job;
+    };
+    try {
+      await fs.appendFile(path.join(root, "main.py"), "# MERGED\n");
+      expect((await post(`${base}/api/enrich/review`, { fixNew: true }, auth())).status).toBe(202);
+      const job = await wait();
+      expect(job.error).toBeUndefined();
+      expect(job.state).toBe("done");
+      const { review } = JSON.parse((await get(`${base}/api/review`, auth())).body);
+      const found = review.findings.findIndex((f: { title: string }) => f.title === "Merge left a bug");
+      expect(found).toBeGreaterThanOrEqual(0);
+      const rec = JSON.parse((await get(`${base}/api/remediation`, auth())).body).records.health;
+      const applied = rec.fixes.filter((f: { status: string }) => f.status === "applied").map((f: { itemId: string }) => f.itemId);
+      expect(applied).toContain(`review-${found}`);
+      // Only the new finding was sent, not the rest of the Health page.
+      expect(rec.skipped.some((x: { itemId: string }) => !x.itemId.startsWith("review-"))).toBe(false);
+    } finally {
+      delete process.env.LENS_CLAUDE_BIN;
+    }
+  });
 });

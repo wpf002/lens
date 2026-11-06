@@ -262,12 +262,12 @@ export class EnrichRunner {
     return this.job?.state === "running";
   }
 
-  start(task: EnrichTask, root: string, budgetUsd: number, opts: { source?: RemediationSource; checkId?: string; note?: string } = {}): EnrichJob {
+  start(task: EnrichTask, root: string, budgetUsd: number, opts: { source?: RemediationSource; checkId?: string; note?: string; fixNew?: boolean } = {}): EnrichJob {
     if (this.running) throw new Error("an AI run is already in progress");
     const job: EnrichJob = { task, root, state: "running", startedAt: Date.now(), budgetUsd, progress: ["Preparing context"], ...(task === "remediate" ? { source: opts.source ?? "audit", checkId: opts.checkId } : {}) };
     this.job = job;
     console.log(`[ai] start ${task}${job.source ? `/${job.source}` : ""} in ${path.basename(root)}, limit $${budgetUsd}`);
-    (task === "audit" ? this.runAudit(job) : task === "summaries" ? this.runSummaries(job) : task === "review" ? this.runReview(job) : task === "remediate" ? this.runRemediate(job, opts.source ?? "audit", opts.checkId, opts.note) : this.runDomain(job)).catch((e: unknown) => this.finish(job, "error", (e as Error).message));
+    (task === "audit" ? this.runAudit(job) : task === "summaries" ? this.runSummaries(job) : task === "review" ? this.runReview(job, !!opts.fixNew) : task === "remediate" ? this.runRemediate(job, opts.source ?? "audit", opts.checkId, opts.note) : this.runDomain(job)).catch((e: unknown) => this.finish(job, "error", (e as Error).message));
     return job;
   }
 
@@ -406,10 +406,12 @@ export class EnrichRunner {
   }
 
   /** Runs an audit or review step and records how long it took. */
-  private async timed(job: EnrichJob, kind: "audit" | "review"): Promise<boolean> {
+  private async timed(job: EnrichJob, kind: "audit" | "review", added: number[] = []): Promise<boolean> {
     const step = { kind, startedAt: Date.now(), typicalMs: await typicalDuration(job.root, kind) };
     job.step = step;
-    const ok = kind === "audit" ? await this.auditStep(job) : (await this.reviewStep(job, { limitUsd: job.budgetUsd - (job.costUsd ?? 0) })) !== null;
+    const found = kind === "review" ? await this.reviewStep(job, { limitUsd: job.budgetUsd - (job.costUsd ?? 0) }) : null;
+    if (found) added.push(...found);
+    const ok = kind === "audit" ? await this.auditStep(job) : found !== null;
     job.step = undefined;
     if (ok) await recordDuration(job.root, kind, Date.now() - step.startedAt).catch(() => undefined);
     return ok;
@@ -563,8 +565,15 @@ export class EnrichRunner {
   }
 
   /** Read-only senior-engineer review: CODE_REVIEW.md plus validated findings for the Health view. */
-  private async runReview(job: EnrichJob) {
-    if (await this.timed(job, "review")) this.finish(job, "done");
+  /** With `fixNew` (the re-review after a merge), the findings it adds go straight to Fix. */
+  private async runReview(job: EnrichJob, fixNew: boolean) {
+    const added: number[] = [];
+    if (!(await this.timed(job, "review", added))) return;
+    if (!fixNew || !added.length) return this.finish(job, "done");
+    // The review's own limit is spent; Fix gets the same cap a Fix run on these items would.
+    job.budgetUsd = Math.round(((job.costUsd ?? 0) + remediateLimit(undefined, added.length)) * 100) / 100;
+    const ids = new Set(added.map((i) => `review-${i}`));
+    return this.runFixAll(job, "health", (id) => ids.has(id));
   }
 
   /**
@@ -771,7 +780,7 @@ export class EnrichRunner {
   /** Fix items in a copy of the project, then apply every valid change with a backup for Undo. */
   private async runRemediate(job: EnrichJob, source: RemediationSource, checkId?: string, note?: string) {
     if (!checkId && source !== "review") return this.runFixAll(job, source);
-    if (source === "health" && checkId && REFACTOR_CHECKS.has(checkId)) return this.runFixAll(job, source, checkId);
+    if (source === "health" && checkId && REFACTOR_CHECKS.has(checkId)) return this.runFixAll(job, source, (id) => id.startsWith(`${checkId}~`));
     const { root } = job;
     // One item the owner picked: no size limit, and their note rides along as data.
     const single = !!checkId && (/^review-\d+$/.test(checkId) || checkId.includes("~"));
@@ -821,11 +830,13 @@ export class EnrichRunner {
    * left, applying and rescanning after each so fixed hits drop out of the next batch.
    * Stops on cancel, at the job's spending limit, or when a batch makes no progress.
    */
-  private async runFixAll(job: EnrichJob, source: "audit" | "health", onlyCheck?: string) {
+  private async runFixAll(job: EnrichJob, source: "audit" | "health", only?: (itemId: string) => boolean) {
     const { root } = job;
-    const pending = async () => (await remediationItems(root, source, undefined, Infinity)).filter((i) => !onlyCheck || i.id.startsWith(`${onlyCheck}~`));
+    // Findings from checking Lens's own changes are always in scope, even when `only` narrows the run.
+    const ownFindings = new Set<string>();
+    const pending = async () => (await remediationItems(root, source, undefined, Infinity)).filter((i) => !only || only(i.id) || ownFindings.has(i.id));
     // Find problems first when that report hasn't been run yet.
-    const plan = onlyCheck ? { first: undefined, firstLimit: 0 } : await fixAllPlan(root, source);
+    const plan = only ? { first: undefined, firstLimit: 0 } : await fixAllPlan(root, source);
     if (plan.first) {
       const saved = job.budgetUsd;
       job.budgetUsd = Math.min(saved, plan.firstLimit);
@@ -836,7 +847,7 @@ export class EnrichRunner {
       job.audit = undefined;
       job.review = undefined;
     }
-    const total = onlyCheck ? (await pending()).length : await fixableCount(root, source);
+    const total = only ? (await pending()).length : await fixableCount(root, source);
     const progress = { attempted: 0, total, fixed: 0, batches: 0 } as NonNullable<EnrichJob["fixAll"]>;
     job.fixAll = progress;
     const tried = new Set<string>();
@@ -921,6 +932,7 @@ export class EnrichRunner {
       if (!appliedNow.length) break;
       const added = await this.reviewOwnChanges(job, changedPaths(merged, appliedNow), covered);
       if (!added.length) break;
+      for (const i of added) ownFindings.add(`review-${i}`);
       progress.total += added.length;
       // The last check's findings still get a fix pass.
       if (round === FIX_ROUNDS - 1) await fixPending();
