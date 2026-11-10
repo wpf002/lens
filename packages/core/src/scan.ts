@@ -5,6 +5,7 @@
  */
 import { buildChecklist } from "./security/checklist.js";
 import { checkSupplyChain, isDependencyManifest } from "./security/supply-chain.js";
+import { scanGitHistory } from "./security/git-history.js";
 import type { RegistryFetch, GitResolve } from "./security/registry.js";
 import { buildHealth } from "./quality/health.js";
 import { promises as fs } from "node:fs";
@@ -578,6 +579,7 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
       endpoints: nodeList.filter((n) => n.kind === "endpoint"),
       security,
       supplyChain: supplyChain.status,
+      gitHistory: await scanGitHistory(root),
     });
   }
 

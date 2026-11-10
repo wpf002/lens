@@ -15,6 +15,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import type { Finding, GraphNode, SecurityReport } from "../types.js";
 import type { SupplyChainStatus } from "./supply-chain.js";
+import type { HistoryScan } from "./git-history.js";
 
 export type CheckStatus = "pass" | "fail" | "clear" | "unverified" | "manual" | "na";
 
@@ -38,6 +39,8 @@ export interface ChecklistInput {
   security: SecurityReport;
   /** Registry check coverage; absent when supply-chain checks didn't run. */
   supplyChain?: SupplyChainStatus;
+  /** Secrets found in git history; absent when the root isn't a git repo. */
+  gitHistory?: HistoryScan;
 }
 
 const read = (root: string, rel: string): string | null => {
@@ -102,6 +105,23 @@ function realDepsItem(deps: Record<string, string>, hits: Finding[], status: Sup
   return { ...base, status: "clear", source: "scanner", evidence: [`${status.checked} packages checked against their registries: no typosquats, missing, new, or deprecated packages.`] };
 }
 
+const GIT_SECRETS_TITLE = "No secrets committed to the repository";
+
+/** Secrets in current files are code fixes; ones only left in history need the owner to rotate the key. */
+function gitSecretsCheck(current: Finding[], history: HistoryScan | undefined): ChecklistItem {
+  const base = { id: "t1-git-secrets", tier: 1 as const, title: GIT_SECRETS_TITLE, source: "scanner" as const };
+  if (current.length) return { ...base, status: "fail", evidence: current.slice(0, 8).map((f) => `${at(f)} ${f.title}`), fix: "Rotate each key first, then remove it from the code." };
+  if (!history) return { ...base, status: "clear", evidence: ["None in the current files. Git history wasn't available to scan."] };
+  const scope = `${history.commits} commit${history.commits === 1 ? "" : "s"}${history.shallow ? " (latest only; older history not cloned)" : ""}`;
+  if (!history.hits.length) return { ...base, status: "pass", evidence: [`None in the current files or in ${scope} of git history.`] };
+  return {
+    ...base,
+    status: "manual",
+    evidence: history.hits.slice(0, 8).map((h) => `${h.commit} ${h.path}: ${h.title} (${h.snippet})`),
+    fix: "Rotate each key listed. Deleting it from the code doesn't remove it from git history.",
+  };
+}
+
 export function buildChecklist(input: ChecklistInput): ChecklistItem[] {
   const { root, files, deps, endpoints, security } = input;
   const open = security.findings.filter((f) => f.status === "open" || f.status === "confirmed");
@@ -143,7 +163,7 @@ export function buildChecklist(input: ChecklistInput): ChecklistItem[] {
   }
   {
     const secrets = openBy((f) => f.category === "secrets");
-    add({ id: "t1-git-secrets", tier: 1, title: "No secrets committed to the repository", status: secrets.length ? "fail" : "clear", evidence: secrets.length ? secrets.slice(0, 8).map((f) => `${at(f)} ${f.title}`) : ["None in the current files. Git history isn't scanned: run `npx gitleaks detect --log-opts=\"--all\"` once."], fix: secrets.length ? "Rotate each key first, then remove it from the code and history." : undefined, source: "scanner" });
+    add(gitSecretsCheck(secrets, input.gitHistory));
   }
   {
     const ev: string[] = [];

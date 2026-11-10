@@ -86,7 +86,7 @@ const CHOICES = [
 
 /** What to do for checks Lens can't settle from the code. */
 const TODO: Record<string, string> = {
-  "t1-git-secrets": "Run `gitleaks detect --log-opts=\"--all\"` and confirm it finds no leaks.",
+  "t1-git-secrets": "Rotate each key listed. It stays in git history after it's deleted.",
   "t1-spend": "Set a monthly limit in each AI provider's billing console.",
   "t1-env": "Gitignore .env, add .env.example, and add a gitleaks pre-commit hook.",
   "t1-stripe": "Take prices from the server and grant access only in the verified webhook.",
