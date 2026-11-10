@@ -129,7 +129,7 @@ export function Remediation({ source }: { source: Source }) {
   const refreshPush = useStore((s) => s.refreshPush);
   // GitHub doesn't push check results to us; poll while tests run or Lens repairs what they caught.
   const tests = pushed?.pr?.tests;
-  const checksRunning = pushed?.pr?.state === "open" && (!tests || tests.state === "running" || !!tests.repairing || (tests.state === "broken" && tests.attempts < MAX_TEST_REPAIRS));
+  const checksRunning = pushed?.pr?.state === "open" && (!tests || tests.state === "running" || !!tests.repairing || (tests.state === "broken" && (tests.attempts < MAX_TEST_REPAIRS || tests.broken.some((b) => !!b.permissions?.length))));
   useEffect(() => {
     if (!checksRunning) return;
     const t = setInterval(() => void refreshPush(), CHECKS_POLL_MS);

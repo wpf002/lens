@@ -171,6 +171,15 @@ export async function pushFixes(root: string, fixes: AppliedFix[] = []): Promise
   return { branch, compareUrl: r ? `https://github.com/${r.owner}/${r.name}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}?expand=1` : null, files: files - dropped };
 }
 
+/** Commit just `files` on the current fixes branch and push it. */
+export async function commitFilesAndPush(root: string, files: string[], message: string): Promise<void> {
+  const branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (!(await isFixesBranch(root, branch))) throw new Error("No fixes branch to push to.");
+  await git(root, ["add", "--", ...files]);
+  await commit(root, message);
+  await pushBranch(root, branch);
+}
+
 const WORKFLOWS = ".github/workflows";
 export const WORKFLOW_REJECTED = "GitHub won't accept changes to .github/workflows from Lens.";
 

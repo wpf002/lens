@@ -288,7 +288,7 @@ export function listCloudRepos(): Promise<{ repos: string[] }> {
 
 export type TestGate = {
   state: "running" | "passed" | "broken" | "none";
-  broken: Array<{ name: string; tests: string[] }>;
+  broken: Array<{ name: string; tests: string[]; permissions?: string[] }>;
   preexisting: number;
   attempts: number;
   repairing?: boolean;

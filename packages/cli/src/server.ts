@@ -18,8 +18,9 @@ import path from "node:path";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { authorizeUrl, disconnectGithub, finishOAuth, githubLogin, githubToken, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
-import { cloneOrUpdate, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, type PushInfo } from "./cloud.js";
-import { MAX_TEST_REPAIRS, recordRepairAttempt, repairItems, saveRepairItems } from "./ci.js";
+import { cloneOrUpdate, commitFilesAndPush, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, type PushInfo } from "./cloud.js";
+import { MAX_TEST_REPAIRS, gateNeedsWork, recordRepairAttempt, repairItems, saveRepairItems, type TestGate } from "./ci.js";
+import { grantCheckPermissions } from "./ci-permissions.js";
 import type { AppliedFix } from "./commit-text.js";
 import { SOURCES, applyFixes, loadRemediation, undoFix, type RemediationSource } from "./remediate.js";
 import { EnrichRunner, HEALTH_BATCH, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
@@ -121,6 +122,25 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
   // After Lens opens or updates a pull request, wait for its CI. Tests Lens broke get a repair
   // run, and the repair is pushed to the same pull request, up to MAX_TEST_REPAIRS times.
   let watchingTests: string | null = null;
+  const permissionTries = new Set<string>();
+  /** A check refused a GITHUB_TOKEN permission: grant it in the workflow and push. Once per head commit. */
+  const grantRefusedPermissions = async (root: string, gate: TestGate): Promise<boolean> => {
+    const key = `${root}#${gate.pr}@${gate.sha}`;
+    if (permissionTries.has(key)) return false;
+    permissionTries.add(key);
+    const files = new Set<string>();
+    const granted: string[] = [];
+    for (const check of gate.broken.filter((b) => b.permissions?.length)) {
+      const file = await grantCheckPermissions(root, check.name, check.permissions!);
+      if (!file) continue;
+      files.add(file);
+      granted.push(`${check.name} (${check.permissions!.join(", ")})`);
+    }
+    if (!files.size) return false;
+    console.log(`[tests] PR #${gate.pr}: granting workflow permissions to ${granted.join("; ")}`);
+    await commitFilesAndPush(root, [...files], `Grant CI jobs the GitHub token permissions they need\n\n${granted.join("\n")}`);
+    return true;
+  };
   const repairingTests = () => enrich.running && enrich.job?.checkId === TEST_REPAIR_ID;
   const withRepairFlag = (st: PushInfo | null): PushInfo | null =>
     st?.pr?.tests && repairingTests() ? { ...st, pr: { ...st.pr, tests: { ...st.pr.tests, repairing: true } } } : st;
@@ -140,7 +160,9 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
           await sleep(TEST_POLL_MS);
           continue;
         }
-        if (gate.state !== "broken" || gate.attempts >= MAX_TEST_REPAIRS) return;
+        if (gate.state !== "broken") return;
+        if (await grantRefusedPermissions(root, gate)) continue;
+        if (gate.attempts >= MAX_TEST_REPAIRS) return;
         const authProblem = await checkClaudeAuth();
         if (authProblem) return console.error(`[tests] can't repair: ${authProblem}`);
         const items = repairItems(gate, await pullRequestFiles(root, gate.pr).catch(() => []));
@@ -426,7 +448,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
       if (opts.cloud && req.method === "GET" && url.pathname === "/api/project/push") {
         const st = repoName(proj.root) ? await pushState(proj.root) : null;
         const tests = st?.pr?.state === "open" ? st.pr.tests : undefined;
-        if (tests && (tests.state === "running" || (tests.state === "broken" && tests.attempts < MAX_TEST_REPAIRS))) void watchTests(proj.root);
+        if (tests && gateNeedsWork(tests)) void watchTests(proj.root);
         return send(res, 200, { state: withRepairFlag(st) });
       }
       if (opts.cloud && req.method === "POST" && url.pathname === "/api/project/push") {

@@ -15,6 +15,8 @@ export interface BrokenCheck {
   /** Tests failing on the PR that pass on the base commit. Empty when the whole check is new breakage. */
   tests: string[];
   excerpt: string;
+  /** Workflow token permissions the job was refused, e.g. "pull-requests: read". Lens grants these in the workflow file. */
+  permissions?: string[];
 }
 export interface TestGate {
   pr: number;
@@ -29,12 +31,15 @@ export interface TestGate {
   repairing?: boolean;
   /** When Lens asked GitHub to re-run stale base-commit checks for this head commit. */
   baseRerunAt?: number;
+  /** Saved gates from an older format are recomputed. */
+  version?: number;
 }
 export interface RunResult {
   name: string;
   failed: boolean;
   tests: string[];
   excerpt: string;
+  permissions?: string[];
 }
 export interface RepairItem {
   id: string;
@@ -44,6 +49,8 @@ export interface RepairItem {
 }
 
 export const MAX_TEST_REPAIRS = 2;
+/** Bumped when a gate's contents change meaning; 2 added refused workflow permissions. */
+const GATE_VERSION = 2;
 /** After a push, how long missing check runs mean "CI hasn't started yet" rather than "no CI". */
 const CI_START_GRACE_MS = 10 * 60_000;
 const MAX_TESTS_LISTED = 50;
@@ -99,6 +106,32 @@ export function errorExcerpt(log: string): string {
   return text.length > EXCERPT_CHARS ? text.slice(-EXCERPT_CHARS) : text;
 }
 
+/** GitHub's 403 names the permission it wanted in this header; actions print it when an API call fails. */
+const ACCEPTED_PERMISSIONS = /x-accepted-github-permissions['"]?\s*[:=]\s*['"]?([a-z_]+=[a-z]+(?:\s*[,;]\s*[a-z_]+=[a-z]+)*)/i;
+const TOKEN_REFUSED = /Resource not accessible by integration/i;
+/** Keys a workflow `permissions:` block accepts; GitHub's header also lists ones it can't set, like metadata. */
+const WORKFLOW_PERMISSION_KEYS = new Set(["actions", "attestations", "checks", "contents", "deployments", "discussions", "id-token", "issues", "models", "packages", "pages", "pull-requests", "repository-projects", "security-events", "statuses"]);
+
+/**
+ * The workflow token permissions a job was refused, as `key: level` lines. The job's code is fine;
+ * its GITHUB_TOKEN lacked a permission, so it fails on every pull request whatever the change.
+ */
+export function missingPermissions(log: string): string[] {
+  if (!TOKEN_REFUSED.test(log)) return [];
+  const out = new Set<string>();
+  for (const line of cleanLines(log)) {
+    const m = ACCEPTED_PERMISSIONS.exec(line);
+    if (!m?.[1]) continue;
+    // Alternatives are separated by ";"; the first set is enough.
+    for (const pair of m[1].split(";")[0]!.split(",")) {
+      const [key, level] = pair.trim().toLowerCase().split("=") as [string, string];
+      const name = key.replace(/_/g, "-");
+      if (WORKFLOW_PERMISSION_KEYS.has(name) && (level === "read" || level === "write")) out.add(`${name}: ${level}`);
+    }
+  }
+  return [...out];
+}
+
 /** Failures on the PR that aren't failing on the base commit too. */
 export function compareRuns(head: RunResult[], base: RunResult[]): { broken: BrokenCheck[]; preexisting: number } {
   const broken: BrokenCheck[] = [];
@@ -106,7 +139,7 @@ export function compareRuns(head: RunResult[], base: RunResult[]): { broken: Bro
   for (const run of head.filter((r) => r.failed)) {
     const before = base.find((b) => b.name === run.name);
     if (!before?.failed) {
-      broken.push({ name: run.name, tests: run.tests, excerpt: run.excerpt });
+      broken.push({ name: run.name, tests: run.tests, excerpt: run.excerpt, ...(run.permissions?.length ? { permissions: run.permissions } : {}) });
       continue;
     }
     const known = new Set(before.tests);
@@ -134,7 +167,8 @@ async function runResult(repo: string, run: CheckRun): Promise<RunResult> {
   const failed = !!run.conclusion && FAILED_CONCLUSIONS.has(run.conclusion);
   if (!failed) return { name: run.name, failed, tests: [], excerpt: "" };
   const log = (await githubText(`/repos/${repo}/actions/jobs/${run.id}/logs`).catch(() => null)) ?? [run.output?.title, run.output?.summary, run.output?.text].filter(Boolean).join("\n");
-  return { name: run.name, failed, tests: failedTests(log), excerpt: errorExcerpt(log) };
+  const permissions = missingPermissions(log);
+  return { name: run.name, failed, tests: failedTests(log), excerpt: errorExcerpt(log), ...(permissions.length ? { permissions } : {}) };
 }
 
 export interface GateInput {
@@ -150,9 +184,9 @@ export interface GateInput {
 export async function testGate(root: string, input: GateInput, now = Date.now()): Promise<TestGate> {
   const saved = await readJson<TestGate>(gatePath(root));
   const attempts = saved?.pr === input.pr ? saved.attempts : 0;
-  if (saved && saved.pr === input.pr && saved.sha === input.headSha && saved.state !== "running") return saved;
+  if (saved && saved.pr === input.pr && saved.sha === input.headSha && saved.state !== "running" && saved.version === GATE_VERSION) return saved;
   const runs = await checkRuns(input.repo, input.headSha);
-  const base: TestGate = { pr: input.pr, sha: input.headSha, state: "running", broken: [], preexisting: 0, attempts };
+  const base: TestGate = { pr: input.pr, sha: input.headSha, state: "running", broken: [], preexisting: 0, attempts, version: GATE_VERSION };
   if (!runs.length) {
     const hasCi = existsSync(path.join(root, ".github", "workflows"));
     const fresh = input.pushedAt !== undefined && now - input.pushedAt < CI_START_GRACE_MS;
@@ -209,5 +243,9 @@ export async function saveRepairItems(root: string, items: RepairItem[]): Promis
 export async function loadRepairItems(root: string): Promise<RepairItem[]> {
   return (await readJson<RepairItem[]>(repairItemsPath(root))) ?? [];
 }
+
+/** The server should keep watching: CI is running, or a broken check still has a fix left to try. */
+export const gateNeedsWork = (gate: TestGate) =>
+  gate.state === "running" || (gate.state === "broken" && (gate.attempts < MAX_TEST_REPAIRS || gate.broken.some((b) => !!b.permissions?.length)));
 
 export const brokenCount = (gate: TestGate) => gate.broken.reduce((n, b) => n + Math.max(1, b.tests.length), 0);
