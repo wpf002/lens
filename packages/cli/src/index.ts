@@ -13,6 +13,7 @@ import {
   EDGE_KINDS, NODE_KINDS, ProbeRefused, type EdgeKind, type KnowledgeGraph, type NodeKind, type PatchKind, type EmbeddingStore, type Severity,
 } from "@lens/core";
 import { startServer, dashboardHtmlPath } from "./server.js";
+import { markVerifiedSafe } from "./enrich.js";
 import { ProbeCommandError, askYesNo, runProbeCommand } from "./probe.js";
 import { cloneOrUpdate, parseRepo, reposDir, sessionToken } from "./cloud.js";
 import { fileURLToPath } from "node:url";
@@ -250,6 +251,7 @@ program
       }
     }
     if (!(await loadGraph(root))) await scanAndSave(root);
+    await markVerifiedSafe(root);
 
     const token = login ? await sessionToken(workspace, login) : undefined;
     const s = await startServer({ root, token, port: Number(process.env.PORT ?? 8080), host: "0.0.0.0", cloud: { workspace, login } });

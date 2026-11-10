@@ -951,6 +951,7 @@ export class EnrichRunner {
     }
     merged.costUsd = job.costUsd;
     await writeJsonAtomic(remediationPath(root, source), merged, true);
+    if (source === "audit") await markVerifiedSafe(root);
     job.remediation = { source, proposed: merged.fixes.filter((f) => !f.invalid).length, invalid: merged.fixes.filter((f) => f.invalid).length, skipped: merged.skipped.length, applied: progress.fixed };
     this.finish(job, "done");
   }
@@ -962,6 +963,32 @@ export class EnrichRunner {
  */
 /** A skip where the agent found the code already handles the issue. Not offered again. */
 export const ALREADY_SAFE = /^(scanner was wrong|already (safe|hardened|handled|fixed))\b/i;
+/** Same cap the triage patch puts on a finding's note. */
+const FINDING_NOTE_MAX = 800;
+
+/**
+ * Mark findings Remediate checked and found already safe as No Fix Needed, then rescan so the
+ * risk score drops. Without this they stay Open in the Security table forever, since Remediate
+ * won't offer them again. Returns how many findings changed.
+ */
+export async function markVerifiedSafe(root: string): Promise<number> {
+  const g = await loadGraph(root);
+  const rec = await loadRemediation(root, "audit");
+  if (!g?.security || !rec) return 0;
+  const reasons = new Map(rec.skipped.filter((x) => ALREADY_SAFE.test(x.reason)).map((x) => [x.itemId, x.reason]));
+  let changed = 0;
+  for (const f of g.security.findings) {
+    const reason = reasons.get(findingItemId(f));
+    if (!reason || f.status === "false_positive" || f.status === "accepted") continue;
+    f.status = "false_positive";
+    f.triageNote = reason.replace(/^scanner was wrong[:.,]?\s*/i, "").slice(0, FINDING_NOTE_MAX);
+    changed++;
+  }
+  if (!changed) return 0;
+  await saveGraph(root, g);
+  await scanAndSave(root);
+  return changed;
+}
 
 /** Accepted findings stay as designed; Fix hardens them instead. */
 function acceptedFix(rule: string): string {
