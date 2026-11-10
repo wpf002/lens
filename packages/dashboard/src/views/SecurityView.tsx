@@ -7,7 +7,7 @@ import { EmptyState, SeverityBadge, cx } from "../components/ui";
 import { FixAllButton } from "../components/Remediation";
 import { useStore } from "../store";
 import { AUTH_COLOR, SEVERITIES, SEVERITY_COLOR } from "../utils/colors";
-import { appliedFixItemIds, buildSecurity, endpointCounts, filterFindings, inputPath, isClosedFinding, mergeChecklist, splitFindings, traceLimitsText } from "../utils/security";
+import { appliedFixItemIds, buildSecurity, checkGroup, endpointCounts, filterFindings, inputPath, isClosedFinding, mergeChecklist, splitFindings, toFixCount, traceLimitsText } from "../utils/security";
 import { useCompiledFilters, useModel, useOverlayInput } from "./hooks";
 
 const STATUSES: Finding["status"][] = ["open", "confirmed", "false_positive", "accepted"];
@@ -56,7 +56,8 @@ export function SecurityView() {
   const audit = useStore((s) => s.audit);
   const remediation = useStore((s) => s.remediation.audit);
   const checklist = useMemo(() => mergeChecklist(model.graph.security?.checklist ?? [], audit), [model, audit]);
-  const gaps = checklist.filter((c) => c.status === "fail").length;
+  const failingChecks = checklist.filter((c) => checkGroup(c.status) === "fix").length;
+  const needsYou = checklist.filter((c) => checkGroup(c.status) === "you").length;
   const fixed = useMemo(() => appliedFixItemIds(remediation), [remediation]);
   const isFixed = (f: Finding) => fixed.has(findingItemId(f));
   const sec = model.graph.security;
@@ -79,7 +80,7 @@ export function SecurityView() {
   }
   const bySev = SEVERITIES.reduce((a, s) => ({ ...a, [s]: openFindings.filter((f) => f.severity === s).length }), {} as Record<Severity, number>);
   const toggleSev = (s: Severity) => setSf({ severities: sf.severities.includes(s) ? sf.severities.filter((x) => x !== s) : [...sf.severities, s] });
-  const risk = sec.summary?.riskScore ?? 0;
+  const toFix = toFixCount(openFindings.length, checklist);
   const renderRow = (f: Finding) => {
     const on = selected === f.id;
     const fixedNow = isFixed(f);
@@ -160,17 +161,17 @@ export function SecurityView() {
     <div className="flex h-full w-full flex-col">
       {/* Summary strip */}
       <div className="flex shrink-0 flex-wrap items-stretch gap-x-5 gap-y-2 border-b border-line bg-panel px-4 py-2.5">
-        <div className="flex items-center gap-3">
-          <div className="relative h-10 w-10" role="img" aria-label={`Risk score ${risk} of 100`}>
-            <svg viewBox="0 0 36 36" className="h-10 w-10 -rotate-90">
-              <circle cx="18" cy="18" r="15" fill="none" stroke="var(--raised)" strokeWidth="3.5" />
-              <circle cx="18" cy="18" r="15" fill="none" stroke={risk >= 70 ? "var(--sev-critical)" : risk >= 40 ? "var(--sev-high)" : "var(--sev-medium)"} strokeWidth="3.5" strokeDasharray={`${(risk / 100) * 94.2} 94.2`} strokeLinecap="round" />
-            </svg>
-            <span className="absolute inset-0 flex items-center justify-center font-mono text-[12px] font-semibold tabular">{risk}</span>
+        <div className="flex items-center gap-5">
+          <div className="flex flex-col" title="Open findings plus failing checks. Remediate fixes these.">
+            <span className={cx("font-mono text-[20px] font-semibold leading-tight tabular", toFix ? "text-critical" : "text-guarded")}>{toFix}</span>
+            <span className="eyebrow">To Fix</span>
           </div>
-          <div>
-            <div className="eyebrow">Risk score</div>
-          </div>
+          {needsYou > 0 && (
+            <button type="button" className="flex flex-col items-start" title="Checks Lens can't settle from the code" onClick={() => (setPanel("checklist"), setTableOpen(true))}>
+              <span className="font-mono text-[20px] font-semibold leading-tight tabular text-[var(--sev-medium)]">{needsYou}</span>
+              <span className="eyebrow">Needs You</span>
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-1.5" role="group" aria-label="Filter by severity">
           {SEVERITIES.map((s) => {
@@ -238,8 +239,8 @@ export function SecurityView() {
               </span>
             </button>
             <button type="button" role="tab" aria-selected={panel === "checklist"} className={cx("flex items-center gap-1.5 rounded px-2 py-1", panel === "checklist" ? "bg-raised" : "hover:bg-raised")} onClick={() => (setPanel("checklist"), setTableOpen(true))}>
-              <span className={cx("eyebrow", panel === "checklist" && "!text-fg")}>Pre-Launch Checklist</span>
-              {gaps > 0 && <span className="rounded-full bg-critical/15 px-1.5 font-mono text-[10.5px] text-critical">{gaps}</span>}
+              <span className={cx("eyebrow", panel === "checklist" && "!text-fg")}>Checklist</span>
+              <span className="font-mono text-[11px] text-muted">{failingChecks}</span>
             </button>
           </div>
           <div className={cx("ml-auto flex flex-wrap items-center gap-2", panel !== "findings" && "hidden")}>

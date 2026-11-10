@@ -81,6 +81,18 @@ export function mergeChecklist(base: ChecklistItem[], audit: AuditRecord | null)
   });
 }
 
+/** What the owner does with a check: Lens fixes it, the owner settles it, or nothing. */
+export type CheckGroup = "fix" | "you" | "done";
+export function checkGroup(status: MergedCheck["status"]): CheckGroup {
+  if (status === "fail") return "fix";
+  return status === "unverified" || status === "manual" ? "you" : "done";
+}
+
+/** Everything still outstanding on the Security tab: open findings plus checks Lens has to fix. */
+export function toFixCount(openFindings: number, checks: MergedCheck[]): number {
+  return openFindings + checks.filter((c) => checkGroup(c.status) === "fix").length;
+}
+
 /**
  * Unguarded routes whose missing-auth finding was triaged as accepted count as public.
  * When the auth check passed (audit or owner), the remaining unguarded routes are public too.

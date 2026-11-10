@@ -13,7 +13,7 @@ import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_pro
 import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyFixes, buildRecord, loadRemediation, markUnaddressed, remediationPath, type RemediationSource } from "./remediate.js";
+import { applyFixes, buildRecord, loadRemediation, markUnaddressed, remediationPath, type RemediationRecord, type RemediationSource } from "./remediate.js";
 import { collectChanges, makeWorkspace } from "./workspace.js";
 import { actionPinFix } from "./action-pins.js";
 import { AuditVerdictsSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type Finding, type KnowledgeGraph } from "@lens/core";
@@ -103,6 +103,8 @@ const FIX_CHECK_DIFF_CHARS = 30_000;
 export const FIX_CHECK_RESERVE_USD = 2 * FIX_CHECK_LIMIT_USD;
 /** Fix All repeats fix, then check Lens's changes, at most this many times. */
 const FIX_ROUNDS = 3;
+/** Budget left below which Fix All skips the re-audit; an audit costs roughly this much. */
+const MIN_REAUDIT_USD = 1.5;
 
 /** Fix everything with no size limit per fix, with a limit at 1.5x the high end. */
 export function estimateFixAll(items: number): CostEstimate {
@@ -404,6 +406,18 @@ export class EnrichRunner {
 
   private async runAudit(job: EnrichJob) {
     if (await this.timed(job, "audit")) this.finish(job, "done");
+  }
+
+  /**
+   * Re-runs the audit after Lens fixed checklist checks, so a check that still fails somewhere
+   * else comes back for another pass. False when no check was fixed or the audit didn't finish.
+   */
+  private async reauditFixedChecks(job: EnrichJob, record: RemediationRecord, fixIds: string[]): Promise<boolean> {
+    const checkIds = new Set((await loadGraph(job.root))?.security?.checklist?.map((c) => c.id) ?? []);
+    const fixedChecks = record.fixes.some((f) => fixIds.includes(f.id) && checkIds.has(f.itemId));
+    if (!fixedChecks || job.budgetUsd - (job.costUsd ?? 0) < MIN_REAUDIT_USD) return false;
+    this.push(job, "Re-auditing the checks Lens fixed");
+    return this.timed(job, "audit");
   }
 
   /** Runs an audit or review step and records how long it took. */
@@ -931,8 +945,9 @@ export class EnrichRunner {
       await fixPending();
       const appliedNow = merged.fixes.filter((f) => f.status === "applied" && !before.has(f.id)).map((f) => f.id);
       if (!appliedNow.length) break;
+      const reaudited = source === "audit" && (await this.reauditFixedChecks(job, merged, appliedNow));
       const added = await this.reviewOwnChanges(job, changedPaths(merged, appliedNow), covered);
-      if (!added.length) break;
+      if (!added.length && !reaudited) break;
       for (const i of added) ownFindings.add(`review-${i}`);
       progress.total += added.length;
       // The last check's findings still get a fix pass.
@@ -1087,7 +1102,13 @@ export async function fixAllPlan(root: string, source: "audit" | "health"): Prom
   const refactors = source === "health" ? open.filter((i) => isRefactorItem(i.id)).length : 0;
   // Before the first run, assume about ten more items will turn up.
   const batch = estimateFixAll(Math.max(1, items - refactors + (first ? 10 : 0)));
-  const fix = { low: batch.low + refactors * REFACTOR_ITEM_LOW_USD, high: batch.high + refactors * REFACTOR_ITEM_HIGH_USD, limit: batch.limit + refactors * REFACTOR_ITEM_LIMIT_USD };
+  // Fixing a checklist check means auditing again to confirm it passes.
+  const reaudit = source === "audit" && open.some((i) => !i.id.startsWith("finding-")) ? estimateCost("audit", files) : { low: 0, high: 0, limit: 0 };
+  const fix = {
+    low: batch.low + refactors * REFACTOR_ITEM_LOW_USD + reaudit.low,
+    high: batch.high + refactors * REFACTOR_ITEM_HIGH_USD + reaudit.high,
+    limit: batch.limit + refactors * REFACTOR_ITEM_LIMIT_USD + reaudit.limit,
+  };
   const r = (n: number) => Math.round(n * 100) / 100;
   return { first, firstLimit: pre.limit, items, estimate: { low: r(pre.low + fix.low), high: r(pre.high + fix.high), limit: r(Math.min(MAX_FIX_ALL_USD, pre.limit + fix.limit + FIX_CHECK_RESERVE_USD)) } };
 }
@@ -1218,5 +1239,9 @@ export async function remediationItems(root: string, source: RemediationSource, 
     })
     .filter((c) => c.status === "fail")
     .map((c) => ({ id: c.id, title: c.title, evidence: c.evidence, fix: c.fix }));
-  return [...checks, ...findings].filter((i) => !applied.has(i.id)).slice(0, limit);
+  // The audit decides when a check is done. A fix or "already safe" skip hides a check only until the
+  // next audit re-checks it; one fix rarely covers every place a check fails.
+  const awaitingAudit = (Date.parse(rem?.generatedAt ?? "") || 0) > (Date.parse(audit?.generatedAt ?? "") || 0);
+  const openChecks = checks.filter((c) => !(awaitingAudit && applied.has(c.id)));
+  return [...openChecks, ...findings.filter((f) => !applied.has(f.id))].slice(0, limit);
 }

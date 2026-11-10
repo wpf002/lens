@@ -292,3 +292,15 @@ describe("inputPath", () => {
     expect(traceLimitsText(["depth", "body"])).toContain("call depth cap, long function bodies");
   });
 });
+
+describe("checklist groups", () => {
+  it("puts failing checks in To Fix and counts them with open findings", async () => {
+    const { checkGroup, toFixCount } = await import("./security");
+    expect(checkGroup("fail")).toBe("fix");
+    expect(checkGroup("unverified")).toBe("you");
+    expect(checkGroup("manual")).toBe("you");
+    expect(["pass", "clear", "na"].map((s) => checkGroup(s as never))).toEqual(["done", "done", "done"]);
+    const checks = [{ status: "fail" }, { status: "manual" }, { status: "pass" }] as never;
+    expect(toFixCount(2, checks)).toBe(3);
+  });
+});

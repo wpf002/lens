@@ -353,6 +353,14 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
 import fs from "node:fs";
 import path from "node:path";
 const prompt = process.argv[process.argv.indexOf("-p") + 1];
+const verdicts = /Verdicts path: (.+)/.exec(prompt);
+if (verdicts) {
+  // The re-audit after the fix confirms the check passes.
+  fs.writeFileSync(/Report path: (.+)/.exec(prompt)[1].trim(), "# Security audit\\n");
+  fs.writeFileSync(verdicts[1].trim(), JSON.stringify({ summary: "Fixed.", items: [{ id: "t3-logs", status: "pass", evidence: ["main.py:1 redacted"] }] }));
+  console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, total_cost_usd: 0.3 }));
+  process.exit(0);
+}
 const ws = /Project copy \\(edit files here\\): (.+)/.exec(prompt)[1].trim();
 const out = /Report path: (.+)/.exec(prompt)[1].trim();
 const main = path.join(ws, "main.py");
@@ -381,6 +389,9 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
       }
       expect(job.error).toBeUndefined();
       expect(job.remediation).toMatchObject({ proposed: 1, invalid: 0, applied: 1 });
+      // Lens re-audited the check it fixed, and the audit now passes it.
+      const reaudit = JSON.parse((await get(`${base}/api/audit`, auth())).body).audit;
+      expect(reaudit.items.find((i: { id: string }) => i.id === "t3-logs").status).toBe("pass");
       const remediation = JSON.parse((await get(`${base}/api/remediation`, auth())).body).records.audit;
       expect(remediation.edits).toBeUndefined(); // raw edits never leave the server
       const good = remediation.fixes.find((f: { title: string }) => f.title === "Return 2");

@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import type { CheckStatus } from "@lens/core/browser";
 import { decideCheck } from "../api";
-import { mergeChecklist, type MergedCheck } from "../utils/security";
+import { checkGroup, mergeChecklist, type CheckGroup, type MergedCheck } from "../utils/security";
 import { useStore } from "../store";
 import { useModel } from "../views/hooks";
 import { AuditAI } from "./AuditAI";
@@ -9,33 +9,12 @@ import { Remediation } from "./Remediation";
 import { IconChevronDown, IconChevronRight } from "./icons";
 import { cx, renderInlineCode } from "./ui";
 
-export const STATUS_META: Record<CheckStatus, { label: string; color: string; hint: string }> = {
-  fail: { label: "Fail", color: "var(--sev-critical)", hint: "Evidence of a gap" },
-  unverified: { label: "Unverified", color: "var(--sev-medium)", hint: "Needs code review (AI audit or you)" },
-  manual: { label: "Manual", color: "var(--sev-low)", hint: "Outside the repo: a to-do for you" },
-  clear: { label: "Clear", color: "var(--muted)", hint: "Scanner looked and found nothing wrong (not proof)" },
-  pass: { label: "Pass", color: "var(--auth-guarded)", hint: "Positive evidence the control exists" },
-  na: { label: "N/A", color: "var(--faint)", hint: "Doesn't apply to this project" },
-};
 const ORDER: CheckStatus[] = ["fail", "unverified", "manual", "clear", "pass", "na"];
-const TIERS: Array<{ tier: 1 | 2 | 3; name: string }> = [
-  { tier: 1, name: "Tier 1" },
-  { tier: 2, name: "Tier 2" },
-  { tier: 3, name: "Tier 3" },
+const GROUPS: Array<{ group: CheckGroup; name: string }> = [
+  { group: "fix", name: "To Fix" },
+  { group: "you", name: "Needs You" },
+  { group: "done", name: "Done" },
 ];
-
-export function StatusPill({ status }: { status: CheckStatus }) {
-  const m = STATUS_META[status];
-  return (
-    <span
-      className="inline-flex h-5 w-[78px] shrink-0 items-center justify-center rounded border font-mono text-[10.5px] font-semibold uppercase tracking-wide"
-      style={{ color: m.color, borderColor: `color-mix(in srgb, ${m.color} 45%, transparent)`, background: `color-mix(in srgb, ${m.color} 10%, transparent)` }}
-      title={m.hint}
-    >
-      {m.label}
-    </span>
-  );
-}
 
 /** `path/to/file.py:12 rest…` evidence becomes a link that opens the source viewer. */
 export function Evidence({ text }: { text: string }) {
@@ -61,8 +40,8 @@ function Row({ item, extra }: { item: Merged; extra?: ReactNode }) {
     <li className="border-b border-line last:border-b-0">
       <button type="button" className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-raised" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         {open ? <IconChevronDown size={13} className="shrink-0 text-faint" /> : <IconChevronRight size={13} className="shrink-0 text-faint" />}
-        <StatusPill status={item.status} />
         <span className={cx("min-w-0 flex-1 text-[12.5px]", item.status === "na" ? "text-muted" : "text-fg")}>{item.title}</span>
+        {item.status === "na" && <span className="shrink-0 text-[11px] text-faint">N/A</span>}
         {item.ai && (
           <span className="shrink-0 rounded border border-accent/40 px-1 font-mono text-[9.5px] text-accent" title="Status from the AI audit">
             AI
@@ -76,7 +55,7 @@ function Row({ item, extra }: { item: Merged; extra?: ReactNode }) {
         {!open && <span className="hidden min-w-0 max-w-[40%] truncate text-[11.5px] text-faint md:block">{item.evidence[0]}</span>}
       </button>
       {open && (
-        <div className="space-y-1.5 pb-3 pl-[118px] pr-3 text-[12px] text-muted">
+        <div className="space-y-1.5 pb-3 pl-[34px] pr-3 text-[12px] text-muted">
           <ul className="space-y-0.5">
             {item.evidence.map((e, i) => (
               <li key={i}>
@@ -98,30 +77,28 @@ function Row({ item, extra }: { item: Merged; extra?: ReactNode }) {
   );
 }
 
-const decidable = (i: Merged) => i.status === "unverified" || i.status === "manual";
+const decidable = (i: Merged) => checkGroup(i.status) === "you";
 
 const CHOICES = [
-  { status: "pass", label: "Pass" },
-  { status: "fail", label: "Fail" },
-  { status: "na", label: "N/A" },
+  { status: "pass", label: "Done" },
+  { status: "na", label: "Doesn't Apply" },
 ] as const;
 
-/** Lets the owner settle items the scanner and the AI can't verify. */
-/** What "Pass" means for checks Lens can't verify from the code. */
-const PASS_WHEN: Record<string, string> = {
-  "t1-git-secrets": "`gitleaks detect --log-opts=\"--all\"` reports no leaks.",
-  "t1-spend": "Each provider's billing console has a monthly limit set.",
-  "t1-env": ".env is gitignored, .env.example exists, and a gitleaks pre-commit hook runs.",
-  "t1-stripe": "Prices come from the server and access is granted only in the verified webhook.",
-  "t2-prodcreds": "Production keys live only in the host's settings, not in local files agents can read.",
-  "t2-staging": "Staging and previews use their own database and keys.",
-  "t2-storage": "Buckets are private and files are served through signed URLs.",
-  "t3-realdeps": "Every package in the manifest exists, is maintained, and is spelled right.",
-  "t3-agentcfg": "You've read CLAUDE.md, skills and MCP configs and they hold no secrets or risky commands.",
-  "t3-rls": "Clients never query the database directly, or every table has row-level security.",
-  "t3-logs": "Logs never include auth headers, cookies, tokens, passwords or personal data.",
-  "t3-auditlog": "Logins, permission changes, deletes, exports and payments are logged.",
-  "t3-backups": "Backups run and you've tested a restore.",
+/** What to do for checks Lens can't settle from the code. */
+const TODO: Record<string, string> = {
+  "t1-git-secrets": "Run `gitleaks detect --log-opts=\"--all\"` and confirm it finds no leaks.",
+  "t1-spend": "Set a monthly limit in each AI provider's billing console.",
+  "t1-env": "Gitignore .env, add .env.example, and add a gitleaks pre-commit hook.",
+  "t1-stripe": "Take prices from the server and grant access only in the verified webhook.",
+  "t2-prodcreds": "Keep production keys in your host's settings, not in local files.",
+  "t2-staging": "Give staging and previews their own database and keys.",
+  "t2-storage": "Make buckets private and serve files through signed URLs.",
+  "t3-realdeps": "Confirm every package in the manifest exists, is maintained, and is spelled right.",
+  "t3-agentcfg": "Read CLAUDE.md, skills and MCP configs for secrets or risky commands.",
+  "t3-rls": "Keep clients off the database, or turn on row-level security for every table.",
+  "t3-logs": "Keep auth headers, cookies, tokens, passwords and personal data out of logs.",
+  "t3-auditlog": "Log logins, permission changes, deletes, exports and payments.",
+  "t3-backups": "Turn on backups and test a restore.",
 };
 
 function Decide({ item }: { item: Merged }) {
@@ -142,14 +119,8 @@ function Decide({ item }: { item: Merged }) {
   };
   return (
     <>
-    {PASS_WHEN[item.id] && (
-      <p className="pt-1 text-fg">
-        <span className="text-faint">Pass When: </span>
-        {renderInlineCode(PASS_WHEN[item.id]!)}
-      </p>
-    )}
+    {TODO[item.id] && <p className="pt-1 text-fg">{renderInlineCode(TODO[item.id]!)}</p>}
     <div className="flex flex-wrap items-center gap-1.5 pt-1">
-      <span className="text-faint">Mark As</span>
       {CHOICES.map((c) => (
         <button
           key={c.status}
@@ -176,44 +147,39 @@ export function Checklist() {
   const model = useModel();
   const audit = useStore((s) => s.audit);
   const items: Merged[] = useMemo(() => mergeChecklist(model.graph.security?.checklist ?? [], audit), [model, audit]);
-  const counts = useMemo(() => {
-    const c = new Map<CheckStatus, number>();
-    for (const i of items) c.set(i.status, (c.get(i.status) ?? 0) + 1);
-    return c;
-  }, [items]);
+  const [showDone, setShowDone] = useState(false);
 
   if (!items.length) {
     return <p className="p-4 text-[12.5px] text-muted">No checklist in this graph. Rescan with the current version of Lens to build it.</p>;
   }
-  const shown = (tier: number) =>
-    items
-      .filter((i) => i.tier === tier)
-      .sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status));
+  const inGroup = (group: CheckGroup) =>
+    items.filter((i) => checkGroup(i.status) === group).sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status) || a.tier - b.tier);
+  const unverified = items.filter((i) => i.status === "unverified").length;
 
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line px-3 py-2">
-        {ORDER.map((s) => (
-          <span key={s} className="flex items-center gap-1.5 text-[12px]" title={STATUS_META[s].hint}>
-            <span className="h-2 w-2 rounded-full" style={{ background: STATUS_META[s].color }} />
-            <span className="font-mono font-semibold tabular">{counts.get(s) ?? 0}</span>
-            <span className="text-muted">{STATUS_META[s].label}</span>
-          </span>
-        ))}
-      </div>
-      <AuditAI unresolved={counts.get("unverified") ?? 0} />
+      <AuditAI unresolved={unverified} />
       <Remediation source="audit" />
-      {TIERS.map(({ tier, name }) => {
-        const list = shown(tier);
+      {GROUPS.map(({ group, name }) => {
+        const list = inGroup(group);
         if (!list.length) return null;
+        const collapsed = group === "done" && !showDone;
         return (
-          <section key={tier}>
-            <h3 className="eyebrow sticky top-0 z-[1] border-b border-line bg-panel px-3 py-1.5">{name}</h3>
-            <ul>
-              {list.map((i) => (
-                <Row key={i.id} item={i} />
-              ))}
-            </ul>
+          <section key={group}>
+            <h3 className="sticky top-0 z-[1] border-b border-line bg-panel px-3 py-1.5">
+              <button type="button" className="eyebrow flex items-center gap-1.5 hover:!text-fg" disabled={group !== "done"} onClick={() => setShowDone((v) => !v)} aria-expanded={!collapsed}>
+                {group === "done" && (collapsed ? <IconChevronRight size={11} /> : <IconChevronDown size={11} />)}
+                {name}
+                <span className={cx("font-mono", group === "fix" ? "text-critical" : "text-faint")}>{list.length}</span>
+              </button>
+            </h3>
+            {!collapsed && (
+              <ul>
+                {list.map((i) => (
+                  <Row key={i.id} item={i} />
+                ))}
+              </ul>
+            )}
           </section>
         );
       })}
