@@ -96,6 +96,11 @@ describe("scan (vuln fixture)", () => {
     }
   });
 
+  it("doesn't flag dangerouslySetInnerHTML with a string literal", () => {
+    const lines = g.security!.findings.filter((f) => f.rule === "react-dangerous-html" && f.path === "web/Profile.tsx").map((f) => f.line);
+    expect(lines).toEqual([2]);
+  });
+
   it("finds the planted infrastructure misconfigurations", () => {
     const hits = (path: string) => new Set(g.security!.findings.filter((f) => f.path === path).map((f) => f.rule));
     const expectRules = (path: string, rules: string[]) => {

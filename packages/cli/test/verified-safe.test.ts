@@ -56,3 +56,13 @@ describe("markVerifiedSafe", () => {
     expect(await markVerifiedSafe(dir)).toBe(0);
   });
 });
+
+describe("findingItems", () => {
+  it("gives one item per id with every line as evidence", async () => {
+    const { findingItems } = await import("../src/enrich.js");
+    const base = { rule: "react-dangerous-html", title: "dangerouslySetInnerHTML", path: "app/layout.tsx", message: "Raw HTML rendered.", status: "open" } as const;
+    const items = await findingItems([{ ...base, line: 94 }, { ...base, line: 99 }] as never);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.evidence).toEqual(["app/layout.tsx:94 Raw HTML rendered.", "app/layout.tsx:99 Raw HTML rendered."]);
+  });
+});

@@ -13,9 +13,10 @@ import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_pro
 import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyFixes, buildRecord, loadRemediation, markUnaddressed, remediationPath, splitWorkflowItems, type RemediationSource } from "./remediate.js";
+import { applyFixes, buildRecord, loadRemediation, markUnaddressed, remediationPath, type RemediationSource } from "./remediate.js";
 import { collectChanges, makeWorkspace } from "./workspace.js";
-import { AuditVerdictsSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type KnowledgeGraph } from "@lens/core";
+import { actionPinFix } from "./action-pins.js";
+import { AuditVerdictsSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type Finding, type KnowledgeGraph } from "@lens/core";
 
 export type EnrichTask = "domain" | "audit" | "summaries" | "review" | "remediate";
 
@@ -738,14 +739,7 @@ export class EnrichRunner {
    * Let Claude edit a copy of the project, then diff the copy into whole-file edits.
    * The project itself is untouched until applyFixes, which backs files up for Undo.
    */
-  private async draftFixes(job: EnrichJob, allItems: unknown[], single: boolean): Promise<{ data: Remediation | null; error?: string }> {
-    const { forClaude: items, forOwner } = splitWorkflowItems(allItems);
-    if (!items.length) return { data: { fixes: [], skipped: forOwner } };
-    const { data, error } = await this.draftFixesWithClaude(job, items, single);
-    return { data: data ? { ...data, skipped: [...forOwner, ...data.skipped] } : null, error };
-  }
-
-  private async draftFixesWithClaude(job: EnrichJob, items: unknown[], single: boolean): Promise<{ data: Remediation | null; error?: string }> {
+  private async draftFixes(job: EnrichJob, items: unknown[], single: boolean): Promise<{ data: Remediation | null; error?: string }> {
     const instructions = agentInstructions("remediator");
     if (!existsSync(instructions)) throw new Error(`missing ${instructions}`);
     this.push(job, "Copying the project");
@@ -963,6 +957,8 @@ export class EnrichRunner {
  */
 /** A skip where the agent found the code already handles the issue. Not offered again. */
 export const ALREADY_SAFE = /^(scanner was wrong|already (safe|hardened|handled|fixed))\b/i;
+/** Rule id for an action referenced by tag or branch instead of a commit SHA. */
+const GHA_UNPINNED = "gha-unpinned-action";
 /** Same cap the triage patch puts on a finding's note. */
 const FINDING_NOTE_MAX = 800;
 
@@ -988,6 +984,27 @@ export async function markVerifiedSafe(root: string): Promise<number> {
   await saveGraph(root, g);
   await scanAndSave(root);
   return changed;
+}
+
+/**
+ * One item per finding id. Findings of the same rule in the same file share an id, and a fix
+ * for that id closes all of them, so Claude gets every line, not just the first.
+ */
+export async function findingItems(findings: Finding[]): Promise<Array<{ id: string; title: string; evidence: string[]; fix?: string }>> {
+  const byId = new Map<string, { id: string; title: string; evidence: string[]; fix?: string }>();
+  for (const f of findings) {
+    const id = findingItemId(f);
+    const pin = f.rule === GHA_UNPINNED ? await actionPinFix(f.snippet ?? "") : undefined;
+    const fix = [f.status === "accepted" ? acceptedFix(f.rule) : undefined, pin].filter(Boolean).join(" ") || undefined;
+    const item = byId.get(id);
+    if (!item) {
+      byId.set(id, { id, title: f.title, evidence: [`${f.path}:${f.line} ${f.message}`], fix });
+      continue;
+    }
+    item.evidence.push(`${f.path}:${f.line} ${f.message}`);
+    if (fix && !item.fix?.includes(fix)) item.fix = item.fix ? `${item.fix} ${fix}` : fix;
+  }
+  return [...byId.values()];
 }
 
 /** Accepted findings stay as designed; Fix hardens them instead. */
@@ -1192,10 +1209,7 @@ export async function remediationItems(root: string, source: RemediationSource, 
   const rem = await loadRemediation(root, "audit");
   const applied = new Set([...(rem?.fixes ?? []).filter((f) => f.status === "applied").map((f) => f.itemId), ...(rem?.skipped ?? []).filter((x) => ALREADY_SAFE.test(x.reason)).map((x) => x.itemId)]);
   const FINDING_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
-  const findings = (g?.security?.findings ?? [])
-    .filter((f) => f.status !== "false_positive" && f.severity in FINDING_RANK)
-    .sort((a, b) => FINDING_RANK[a.severity]! - FINDING_RANK[b.severity]!)
-    .map((f) => ({ id: findingItemId(f), title: f.title, evidence: [`${f.path}:${f.line} ${f.message}`], fix: f.status === "accepted" ? acceptedFix(f.rule) : undefined }));
+  const findings = await findingItems((g?.security?.findings ?? []).filter((f) => f.status !== "false_positive" && f.severity in FINDING_RANK).sort((a, b) => FINDING_RANK[a.severity]! - FINDING_RANK[b.severity]!));
   const checks = (g?.security?.checklist ?? [])
     .filter((c) => c.status !== "manual" && c.source !== "manual")
     .map((c) => {

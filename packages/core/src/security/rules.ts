@@ -90,7 +90,7 @@ export const RULES: Rule[] = [
 
   /* ---- XSS / templating ---- */
   { id: "react-dangerous-html", title: "dangerouslySetInnerHTML", category: "xss", cwe: "CWE-79", severity: "medium", confidence: "medium", langs: JS,
-    pattern: /dangerouslySetInnerHTML\s*=\s*\{\{?\s*__html\s*:\s*(?!["'`])/, unless: /sanitize|DOMPurify|purify/i, message: "Raw HTML rendered; make sure it is sanitized.", taintBoost: true },
+    pattern: /dangerouslySetInnerHTML\s*=\s*\{\{?\s*__html\s*:\s*(?![\s"'`])/, unless: /sanitize|DOMPurify|purify/i, message: "Raw HTML rendered; make sure it is sanitized.", taintBoost: true },
   { id: "dom-innerhtml", title: "innerHTML/outerHTML/document.write assignment", category: "xss", cwe: "CWE-79", severity: "medium", confidence: "low", langs: JS,
     pattern: /\.(?:innerHTML|outerHTML)\s*[+]?=\s*(?!["'`][^${]*["'`]\s*;?$)|document\.write\s*\(|insertAdjacentHTML\s*\(/, unless: /sanitize|DOMPurify|escape/i, message: "HTML sink written from a non-literal value.", taintBoost: true },
   { id: "vue-v-html", title: "v-html directive", category: "xss", cwe: "CWE-79", severity: "medium", confidence: "low", langs: ["vue", "html"],

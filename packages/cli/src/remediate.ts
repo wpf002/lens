@@ -48,8 +48,7 @@ function backupDir(root: string, source: RemediationSource, id: string): string 
   return !existsSync(dir) && existsSync(path.join(legacy, "manifest.json")) ? legacy : dir;
 }
 
-// GitHub rejects pushes touching .github/workflows unless the credential has workflow scope.
-const FORBIDDEN = /(^|\/)(\.git|node_modules|\.lens)(\/|$)|^\.github\/workflows\/|(^|\/)\.env(\.|$)|(^|\/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|poetry\.lock|uv\.lock|pdm\.lock|Cargo\.lock|go\.sum)$/;
+const FORBIDDEN = /(^|\/)(\.git|node_modules|\.lens)(\/|$)|(^|\/)\.env(\.|$)|(^|\/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|poetry\.lock|uv\.lock|pdm\.lock|Cargo\.lock|go\.sum)$/;
 
 /** Resolve a repo-relative path, refusing anything outside the project or on the forbidden list. */
 export function safeTarget(root: string, rel: string): string {
@@ -142,40 +141,6 @@ export function markUnaddressed(rec: Pick<RemediationRecord, "fixes" | "skipped"
   const missing = [...new Set(itemIds)].filter((id) => !settled.has(id));
   rec.skipped.push(...missing.map((itemId) => ({ itemId, reason })));
   return missing.length;
-}
-
-const WORKFLOW_EVIDENCE = /^\.github\/workflows\/[^\s:]+(?::(\d+))?\s*(.*)$/;
-const REASON_MAX = 600;
-
-/**
- * GitHub rejects pushes that touch .github/workflows without the workflow scope, so Lens
- * never edits those files. Workflow evidence goes to the owner as a to-do with the exact
- * file, line, and change. Claude gets each item with its other evidence, if any is left.
- */
-export function splitWorkflowItems<T>(items: T[]): { forClaude: T[]; forOwner: Remediation["skipped"] } {
-  const forClaude: T[] = [];
-  const forOwner: Remediation["skipped"] = [];
-  for (const item of items) {
-    const { id, evidence, fix } = (item ?? {}) as { id?: unknown; evidence?: unknown; fix?: unknown };
-    const lines = Array.isArray(evidence) ? evidence.filter((e): e is string => typeof e === "string") : [];
-    const workflow = lines.filter((e) => WORKFLOW_EVIDENCE.test(e));
-    if (typeof id !== "string" || !workflow.length) {
-      forClaude.push(item);
-      continue;
-    }
-    forOwner.push({ itemId: id, reason: workflowTodo(workflow, typeof fix === "string" ? fix : undefined) });
-    const rest = lines.filter((e) => !WORKFLOW_EVIDENCE.test(e));
-    if (rest.length) forClaude.push({ ...item, evidence: rest });
-  }
-  return { forClaude, forOwner };
-}
-
-function workflowTodo(workflow: string[], fix: string | undefined): string {
-  const where = workflow.map((e) => {
-    const [, line, message] = WORKFLOW_EVIDENCE.exec(e)!;
-    return `${e.split(/[\s:]/)[0]}${line ? ` line ${line}` : ""}: ${message}`;
-  });
-  return `Outside code: GitHub won't accept workflow changes from Lens. Edit ${where.join(" Also ")}${fix ? ` ${fix}` : ""}`.slice(0, REASON_MAX);
 }
 
 export async function loadRemediation(root: string, source: RemediationSource): Promise<RemediationRecord | null> {
