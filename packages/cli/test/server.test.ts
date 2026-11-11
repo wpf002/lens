@@ -413,6 +413,55 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
     }
   });
 
+  it("keeps fixing a check past three rounds until the re-audit passes it", async () => {
+    const root = JSON.parse((await get(`${base}/api/meta`, auth())).body).root as string;
+    await fs.writeFile(
+      path.join(root, ".lens", "audit.json"),
+      JSON.stringify({ generatedAt: new Date().toISOString(), report: "", items: [{ id: "t3-logs", status: "fail", evidence: ["main.py:1 logs a token"] }] }),
+    );
+    const counter = path.join(os.tmpdir(), `fake-rounds-${process.pid}.txt`);
+    await fs.writeFile(counter, "0");
+    const fake = path.join(os.tmpdir(), `fake-rounds-${process.pid}.mjs`);
+    await fs.writeFile(fake, `#!/usr/bin/env node
+import fs from "node:fs";
+import path from "node:path";
+const prompt = process.argv[process.argv.indexOf("-p") + 1];
+const get = (k) => prompt.split("\\n").find((l) => l.startsWith(k + ": "))?.slice(k.length + 2).trim();
+const done = () => { console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, total_cost_usd: 0.01 })); process.exit(0); };
+if (get("Findings path")) { fs.writeFileSync(get("Findings path"), JSON.stringify({ findings: [] })); done(); }
+if (get("Verdicts path")) {
+  // Each fix covers one more spot; the check passes only after the fourth.
+  const fixes = Number(fs.readFileSync(${JSON.stringify(counter)}, "utf8"));
+  fs.writeFileSync(get("Report path"), "# Security audit\\n");
+  const item = fixes >= 4 ? { id: "t3-logs", status: "pass", evidence: ["main.py redacted"] } : { id: "t3-logs", status: "fail", evidence: ["main.py:" + (fixes + 2) + " logs a token"] };
+  fs.writeFileSync(get("Verdicts path"), JSON.stringify({ summary: "x", items: [item] }));
+  done();
+}
+const n = Number(fs.readFileSync(${JSON.stringify(counter)}, "utf8")) + 1;
+fs.writeFileSync(${JSON.stringify(counter)}, String(n));
+const ws = get("Project copy \\(edit files here\\)");
+fs.appendFileSync(path.join(ws, "main.py"), "# redacted " + n + "\\n");
+fs.writeFileSync(get("Report path"), JSON.stringify({ fixes: [{ itemId: "t3-logs", title: "Redact spot " + n, explanation: "x", files: ["main.py"] }], skipped: [] }));
+done();
+`);
+    await fs.chmod(fake, 0o755);
+    process.env.LENS_CLAUDE_BIN = fake;
+    try {
+      expect((await post(`${base}/api/enrich/remediate`, { source: "audit" }, auth())).status).toBe(202);
+      let job: { state: string; error?: string; fixAll?: { fixed: number } } = { state: "running" };
+      for (let i = 0; i < 300 && job.state === "running"; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        job = JSON.parse((await get(`${base}/api/enrich/status`, auth())).body);
+      }
+      expect(job.error).toBeUndefined();
+      expect(job.fixAll?.fixed).toBe(4);
+      const audit = JSON.parse((await get(`${base}/api/audit`, auth())).body).audit;
+      expect(audit.items.find((i: { id: string }) => i.id === "t3-logs").status).toBe("pass");
+    } finally {
+      delete process.env.LENS_CLAUDE_BIN;
+    }
+  });
+
   it("Fix on Health loops until nothing is left, deletes stale docs, and can undo", async () => {
     const meta = JSON.parse((await get(`${base}/api/meta`, auth())).body);
     const root = meta.root as string;

@@ -101,8 +101,6 @@ const FIX_CHECK_LIMIT_USD = 1.5;
 const FIX_CHECK_DIFF_CHARS = 30_000;
 /** Budget added to every Fix run for that check: one review pass and one repair round. */
 export const FIX_CHECK_RESERVE_USD = 2 * FIX_CHECK_LIMIT_USD;
-/** Fix All repeats fix, then check Lens's changes, at most this many times. */
-const FIX_ROUNDS = 3;
 /** Budget left below which Fix All skips the re-audit; an audit costs roughly this much. */
 const MIN_REAUDIT_USD = 1.5;
 
@@ -940,7 +938,8 @@ export class EnrichRunner {
     };
     const covered = await coveredFiles(root);
     // Fix everything, check Lens's changes, fix what the check found, until a check comes back clean.
-    for (let round = 0; round < FIX_ROUNDS && job.state === "running" && !progress.stopped; round++) {
+    // No round limit: the run's budget stops it, and a round that applies nothing ends it.
+    while (job.state === "running" && !progress.stopped) {
       const before = new Set(merged.fixes.filter((f) => f.status === "applied").map((f) => f.id));
       await fixPending();
       const appliedNow = merged.fixes.filter((f) => f.status === "applied" && !before.has(f.id)).map((f) => f.id);
@@ -950,8 +949,6 @@ export class EnrichRunner {
       if (!added.length && !reaudited) break;
       for (const i of added) ownFindings.add(`review-${i}`);
       progress.total += added.length;
-      // The last check's findings still get a fix pass.
-      if (round === FIX_ROUNDS - 1) await fixPending();
     }
     // Anything still open after the run says why: Lens stopped first, or couldn't fix it.
     if (job.state === "running") {
