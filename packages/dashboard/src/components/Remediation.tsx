@@ -354,7 +354,7 @@ function Elapsed({ since, typicalMs }: { since?: number; typicalMs?: number }) {
       <span className="font-mono text-[12px] font-medium tabular text-fg">
         {Math.floor(sec / 60)}:{String(sec % 60).padStart(2, "0")}
       </span>
-      {typical && <span className="text-[11px] text-faint">of ~{typical} min</span>}
+      {typical && <span className="text-[11px] text-faint">of {typical} min</span>}
     </span>
   );
 }
