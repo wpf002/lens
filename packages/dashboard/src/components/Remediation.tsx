@@ -149,6 +149,8 @@ export function Remediation({ source }: { source: Source }) {
       setPush({ busy: null });
     } catch (e) {
       setPush({ busy: null, error: e instanceof Error ? e.message : String(e) });
+      // Polling stops once tests pass, so a newer commit on the PR goes unseen until a refused merge; show its state.
+      await refreshPush();
     }
   };
   // The Health panel also covers single-item runs on review findings.
