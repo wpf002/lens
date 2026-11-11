@@ -95,8 +95,10 @@ function FixRow({ fix, source }: { fix: ProposedFix; source: Source }) {
 /** Confirm, progress, and results of a Fix run for one report. */
 export function Remediation({ source }: { source: Source }) {
   const job = useStore((s) => s.enrichJob);
-  // The server refuses PR and merge while an AI run is changing files.
-  const aiBusy = job.state === "running";
+  // The server refuses PR and merge while an AI run is changing files. A test repair is a server-started run,
+  // so this tab's job doesn't show it.
+  const testRepair = useStore((s) => !!s.push?.pr?.tests?.repairing);
+  const aiBusy = job.state === "running" || testRepair;
   const mine = useStore((s) => s.remediation[source] ?? null);
   // The Health page shows one Fixes panel; fold in earlier review-only runs.
   const extra = useStore((s) => (source === "health" ? s.remediation.review ?? null : null));
