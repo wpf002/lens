@@ -17,7 +17,7 @@ import { promises as fs, statSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { authorizeUrl, disconnectGithub, finishOAuth, githubLogin, githubToken, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
+import { authorizeUrl, disconnectGithub, ensureGithubLoaded, finishOAuth, githubLogin, githubToken, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
 import { cloneOrUpdate, commitFilesAndPush, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, type PushInfo } from "./cloud.js";
 import { MAX_TEST_REPAIRS, gateNeedsWork, recordRepairAttempt, repairItems, saveRepairItems, type TestGate } from "./ci.js";
 import { grantCheckPermissions } from "./ci-permissions.js";
@@ -241,6 +241,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
       if (!LOOPBACK.has(hostHeader) && opts.host !== "0.0.0.0" && !opts.cloud) return send(res, 421, { error: "bad host" });
       const url = new URL(req.url ?? "/", "http://localhost");
       if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) return send(res, 200, html, "text/html; charset=utf-8");
+      if (opts.cloud && url.pathname.startsWith("/api/")) await ensureGithubLoaded();
       if (req.method === "GET" && url.pathname === "/favicon.ico") return send(res, 204, "");
       if (opts.cloud && req.method === "GET" && url.pathname === "/github/callback") {
         try {

@@ -15,6 +15,8 @@ interface Stored {
 
 let stored: Stored | null = null;
 let file: string | null = null;
+/** A token GitHub rejected. Kept on disk until the user reconnects or disconnects, but never used. */
+let rejectedToken: string | null = null;
 const states = new Map<string, number>();
 
 export const oauthAvailable = () => !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET);
@@ -22,14 +24,44 @@ export const oauthAvailable = () => !!(process.env.GITHUB_CLIENT_ID && process.e
 export const githubToken = (): string | null => stored?.token || process.env.GITHUB_TOKEN || null;
 export const githubLogin = (): string | null => stored?.login ?? null;
 
+/** The saved connection, or null when there is none. Throws when the file exists but can't be read. */
+export async function readStoredGithub(target: string): Promise<Stored | null> {
+  let text: string;
+  try {
+    text = await fs.readFile(target, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw e;
+  }
+  const s = JSON.parse(text) as Partial<Stored>;
+  if (typeof s.token !== "string" || typeof s.login !== "string") throw new Error(`${target} has no GitHub account in it`);
+  return { token: s.token, login: s.login };
+}
+
 export async function loadGithub(workspace: string): Promise<void> {
   file = path.join(workspace, "github.json");
   try {
-    const s = JSON.parse(await fs.readFile(file, "utf8")) as Stored;
-    if (typeof s.token === "string" && typeof s.login === "string") stored = s;
-  } catch {
-    stored = null;
+    const s = await readStoredGithub(file);
+    stored = s && s.token !== rejectedToken ? s : null;
+  } catch (e) {
+    // Keep whatever is in memory; a failed read must not drop a working connection.
+    console.error(`[github] couldn't read the saved connection: ${e instanceof Error ? e.message : String(e)}`);
   }
+}
+
+/**
+ * Picks up the saved connection when memory has none, e.g. after a startup read failed.
+ * Call before any action that needs GitHub.
+ */
+export async function ensureGithubLoaded(): Promise<void> {
+  if (!stored && file) await loadGithub(path.dirname(file));
+}
+
+async function saveStored(target: string, s: Stored): Promise<void> {
+  // Write then rename, so a deploy that stops the server mid-write can't leave a truncated file.
+  const tmp = `${target}.${randomBytes(4).toString("hex")}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(s), { mode: 0o600 });
+  await fs.rename(tmp, target);
 }
 
 export function authorizeUrl(redirectUri: string): string {
@@ -54,12 +86,17 @@ export async function finishOAuth(code: string, state: string, redirectUri: stri
   if (!body.access_token) throw new Error(body.error_description ?? "GitHub didn't return access.");
   const user = (await api("/user", body.access_token)) as { login: string };
   stored = { token: body.access_token, login: user.login };
-  if (file) await fs.writeFile(file, JSON.stringify(stored), { mode: 0o600 });
+  rejectedToken = null;
+  if (file) await saveStored(file, stored);
+  console.log(`[github] connected as ${user.login}`);
 }
 
+/** Only the Disconnect button removes the saved connection. */
 export async function disconnectGithub(): Promise<void> {
   stored = null;
+  rejectedToken = null;
   if (file) await fs.rm(file, { force: true });
+  console.log("[github] disconnected");
 }
 
 export interface GithubRepo {
@@ -89,7 +126,12 @@ async function api(p: string, token: string, method = "GET", body?: unknown): Pr
     signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
   });
   if (res.status === 401) {
-    if (stored?.token === token) await disconnectGithub();
+    if (stored?.token === token) {
+      // Stop using it, but leave the file: deleting it on one 401 is how the connection used to vanish.
+      rejectedToken = token;
+      stored = null;
+      console.error(`[github] GitHub rejected the saved connection (401 on ${method} ${p.split("?")[0]})`);
+    }
     throw new Error("GitHub access was revoked. Connect GitHub again.");
   }
   if (!res.ok) {
