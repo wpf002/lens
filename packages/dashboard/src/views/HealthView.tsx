@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { checkHitIds, healthScore, reviewKey, type HealthCheck, type ScoreGroup, type Severity } from "@lens/core/browser";
 import type { ReviewRecord } from "../api";
 import { Evidence } from "../components/Checklist";
 import { IconChevronDown, IconChevronRight } from "../components/icons";
 import { Mascot } from "../components/Mascot";
-import { FixAllButton, Remediation, SAFE } from "../components/Remediation";
+import { Elapsed, FixAllButton, ProgressBar, Remediation, SAFE } from "../components/Remediation";
 
 const DECISION = /^decision:\s*/i;
 /** Refactor checks run one item per Claude session; each costs more than a small fix. */
@@ -23,18 +23,6 @@ type Row = { key: string; severity: keyof typeof SEV_ORDER; closed: boolean; ask
   | { kind: "check"; c: HealthCheck }
 );
 const usd = (n: number) => `$${n < 0.1 ? n.toFixed(3) : n.toFixed(2)}`;
-
-function useElapsed(since?: number, running?: boolean): string {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!running) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [running]);
-  if (!since) return "";
-  const s = Math.max(0, Math.round((now - since) / 1000));
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
-}
 
 function Hit({ path, line, detail }: { path: string; line?: number; detail: string }) {
   const openCode = useStore((s) => s.openCode);
@@ -277,31 +265,34 @@ function ReviewPanel() {
   const mine = job.task === "review";
   const running = mine && job.state === "running";
   const failed = mine && job.state === "error";
-  const elapsed = useElapsed(job.startedAt, running);
   const setConfirming = (v: boolean) => useStore.setState({ reviewConfirm: v });
   const box = "mx-4 mt-3 rounded-lg border border-line bg-panel-2 px-3 py-2.5 text-[12px]";
   const mergedPr = push?.pr?.state === "merged" ? push.pr : null;
   const outdated = !!review && !!mergedPr?.mergedAt && mergedPr.mergedAt > review.generatedAt;
 
-  if (running)
+  if (running) {
+    const done = job.review?.batchesDone ?? 0;
+    const total = job.review?.batchesTotal ?? 0;
+    const pct = !job.fixAll && total ? Math.min(100, Math.round((done / total) * 100)) : null;
     return (
-      <div className={box} role="status">
-        <div className="flex items-center gap-2 text-[12.5px] text-fg">
-          <Spinner size={14} /> {job.fixAll ? "Fixing…" : "Reviewing…"}{!job.fixAll && job.review?.batchesTotal ? <span className="font-mono text-muted tabular">{job.review.batchesDone ?? 0}/{job.review.batchesTotal}</span> : null} <span className="font-mono text-muted tabular">{elapsed}</span>
-          <Button size="sm" variant="ghost" className="ml-auto" onClick={() => void cancel()}>
+      <div className="mx-4 mt-3 overflow-hidden rounded-lg border border-line bg-panel-2 text-[12.5px] text-fg" role="status">
+        <div className="flex items-center gap-2 px-3 pb-2 pt-2.5">
+          <Spinner size={14} />
+          <span className="shrink-0 font-medium">
+            {job.fixAll ? "Fixing" : "Reviewing"}
+            {pct !== null && <span className="font-mono tabular"> {done}/{total}</span>}
+            {job.costUsd ? <span className="font-normal text-muted"> · ${job.costUsd.toFixed(2)}</span> : null}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-[11.5px] text-faint">{(job.progress ?? []).at(-1)}</span>
+          <Elapsed since={job.step?.startedAt ?? job.startedAt} typicalMs={job.step?.typicalMs} />
+          <Button size="sm" variant="ghost" onClick={() => void cancel()}>
             Cancel
           </Button>
         </div>
-        <ul className="mt-1.5 space-y-0.5 font-mono text-[11px]">
-          {(job.progress ?? []).slice(-4).map((p, i, a) => (
-            <li key={`${i}:${p}`} className={i === a.length - 1 ? "text-muted" : "text-faint"}>
-              {i === a.length - 1 ? "› " : "  "}
-              {p}
-            </li>
-          ))}
-        </ul>
+        <ProgressBar pct={pct} />
       </div>
     );
+  }
   if (confirming)
     return (
       <div className={cx(box, "flex flex-wrap items-center gap-2 text-muted")}>

@@ -178,13 +178,7 @@ export function Remediation({ source }: { source: Source }) {
             Cancel
           </Button>
         </div>
-        <div className="relative h-[3px] bg-line">
-          {pct === null ? (
-            <div className="lens-scanbar !absolute !inset-0 !h-full !w-full !rounded-none !bg-transparent" />
-          ) : (
-            <div className="h-full bg-accent transition-[width] duration-500" style={{ width: `${pct}%` }} />
-          )}
-        </div>
+        <ProgressBar pct={pct} />
       </div>
     );
   }
@@ -343,7 +337,20 @@ export function Remediation({ source }: { source: Source }) {
 export const SAFE = /^(scanner was wrong|already (safe|hardened|handled|fixed))\b/i;
 const SAFE_PREFIX = /^scanner was wrong[:.,]?\s*/i;
 
-function Elapsed({ since, typicalMs }: { since?: number; typicalMs?: number }) {
+/** Thin bar under a running job. `null` shows the indeterminate sweep. */
+export function ProgressBar({ pct }: { pct: number | null }) {
+  return (
+    <div className="relative h-[3px] bg-line" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct ?? undefined}>
+      {pct === null ? (
+        <div className="lens-scanbar !absolute !inset-0 !h-full !w-full !rounded-none !bg-transparent" />
+      ) : (
+        <div className="h-full bg-accent transition-[width] duration-500" style={{ width: `${pct}%` }} />
+      )}
+    </div>
+  );
+}
+
+export function Elapsed({ since, typicalMs }: { since?: number; typicalMs?: number }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
