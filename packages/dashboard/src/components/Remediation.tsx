@@ -350,9 +350,11 @@ function Elapsed({ since, typicalMs }: { since?: number; typicalMs?: number }) {
   const sec = Math.max(0, Math.floor((now - since) / 1000));
   const typical = typicalMs ? Math.max(1, Math.round(typicalMs / 60_000)) : null;
   return (
-    <span className="whitespace-nowrap font-mono text-[11px] tabular text-faint">
-      {Math.floor(sec / 60)}:{String(sec % 60).padStart(2, "0")}
-      {typical && <> / ~{typical}:00</>}
+    <span className="flex shrink-0 items-baseline gap-1.5 whitespace-nowrap" title={typical ? "Elapsed, and how long this step usually takes" : "Elapsed"}>
+      <span className="font-mono text-[12px] font-medium tabular text-fg">
+        {Math.floor(sec / 60)}:{String(sec % 60).padStart(2, "0")}
+      </span>
+      {typical && <span className="text-[11px] text-faint">of ~{typical} min</span>}
     </span>
   );
 }
