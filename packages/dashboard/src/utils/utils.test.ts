@@ -134,6 +134,13 @@ describe("security view", () => {
     expect(reps).toContain("sink:LNS-002");
     expect(reps).toContain("en:endpoint:GET /api/tasks/search");
   });
+  it("leaves guarded endpoints that reach no finding off the map", () => {
+    const vm = buildSecurity(model, cf, DEFAULT_SECURITY_FILTER);
+    const onPath = new Set((graph.security!.exposure ?? []).flatMap((x) => x.path));
+    const hidden = graph.nodes.filter((n) => n.endpoint?.auth === "guarded" && !onPath.has(n.id));
+    expect(hidden.length).toBeGreaterThan(0);
+    for (const n of hidden) expect(vm.nodes.some((v) => v.id === `en:${n.id}`)).toBe(false);
+  });
   it("filters findings", () => {
     const all = graph.security!.findings;
     expect(filterFindings(all, { severities: ["critical"], categories: [], statuses: [] })).toHaveLength(1);
@@ -207,6 +214,16 @@ describe("layout", () => {
   it("column layout orders by barycenter", () => {
     const pos = columnLayout([["a", "b"], ["y", "x"]], [{ source: "a", target: "x" }, { source: "b", target: "y" }], () => ({ w: 10, h: 10 }));
     expect(pos.x!.y).toBeLessThan(pos.y!.y);
+  });
+  it("column layout wraps a tall column to fit the aspect ratio", () => {
+    const tall = Array.from({ length: 40 }, (_, i) => `n${i}`);
+    const pos = columnLayout([tall, ["z"]], [], () => ({ w: 100, h: 20 }), { aspectRatio: 2 });
+    const xs = new Set(tall.map((id) => pos[id]!.x));
+    const ys = Object.values(pos).map((p) => p.y + p.h);
+    const width = Math.max(...Object.values(pos).map((p) => p.x + p.w));
+    expect(xs.size).toBeGreaterThan(1);
+    expect(width / Math.max(...ys)).toBeGreaterThan(1);
+    expect(pos.z!.x).toBeGreaterThan(Math.max(...[...xs]));
   });
   it("shelf packs within width", () => {
     const r = shelfPack(["a", "b", "c"], [{ w: 50, h: 10 }, { w: 50, h: 20 }, { w: 50, h: 10 }], 110, 10);

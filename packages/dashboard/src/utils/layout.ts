@@ -230,10 +230,11 @@ export function columnLayout(
   columns: string[][],
   edges: LayoutEdge[],
   sizeOf: (id: string) => { w: number; h: number },
-  opts: { colGap?: number; rowGap?: number; sweeps?: number } = {},
+  opts: { colGap?: number; rowGap?: number; sweeps?: number; aspectRatio?: number; subColGap?: number } = {},
 ): Positions {
   const colGap = opts.colGap ?? 120;
   const rowGap = opts.rowGap ?? 14;
+  const subColGap = opts.subColGap ?? 18;
   const cols = columns.map((c) => [...c]);
   const colOf = new Map<string, number>();
   cols.forEach((c, i) => c.forEach((id) => colOf.set(id, i)));
@@ -261,21 +262,62 @@ export function columnLayout(
       reindex();
     }
   }
+  // With an aspect ratio, a column taller than the target height wraps into sub-columns,
+  // kept in order top to bottom, then left to right.
+  const limit = opts.aspectRatio ? wrapHeight(cols, sizeOf, rowGap, colGap, opts.aspectRatio) : Infinity;
   const pos: Positions = {};
   let x = 0;
-  const heights = cols.map((c) => c.reduce((a, id) => a + sizeOf(id).h + rowGap, -rowGap));
-  const maxH = Math.max(0, ...heights);
-  cols.forEach((c, ci) => {
-    const w = Math.max(0, ...c.map((id) => sizeOf(id).w));
-    let y = (maxH - heights[ci]!) / 2;
-    for (const id of c) {
-      const s = sizeOf(id);
-      pos[id] = { x: x + (w - s.w) / 2, y, w: s.w, h: s.h } satisfies Position;
-      y += s.h + rowGap;
-    }
-    x += w + colGap;
+  const wrapped = cols.map((c) => splitByHeight(c, sizeOf, rowGap, limit));
+  const stackHeight = (ids: string[]) => ids.reduce((a, id) => a + sizeOf(id).h + rowGap, -rowGap);
+  const maxH = Math.max(0, ...wrapped.flat().map(stackHeight));
+  wrapped.forEach((subs) => {
+    subs.forEach((sub, si) => {
+      const w = Math.max(0, ...sub.map((id) => sizeOf(id).w));
+      let y = (maxH - stackHeight(sub)) / 2;
+      for (const id of sub) {
+        const s = sizeOf(id);
+        pos[id] = { x: x + (w - s.w) / 2, y, w: s.w, h: s.h } satisfies Position;
+        y += s.h + rowGap;
+      }
+      x += w + (si < subs.length - 1 ? subColGap : colGap);
+    });
   });
   return pos;
+}
+
+/** Column height at which the whole layout comes out about `aspectRatio` times wider than tall. */
+function wrapHeight(cols: string[][], sizeOf: (id: string) => { w: number; h: number }, rowGap: number, colGap: number, aspectRatio: number): number {
+  let area = 0;
+  let gaps = 0;
+  let tallest = 0;
+  for (const c of cols) {
+    if (!c.length) continue;
+    gaps += colGap;
+    for (const id of c) {
+      const s = sizeOf(id);
+      area += s.w * (s.h + rowGap);
+      tallest = Math.max(tallest, s.h);
+    }
+  }
+  // Solve (area / H + gaps) / H = aspectRatio for H.
+  const h = (gaps + Math.sqrt(gaps * gaps + 4 * aspectRatio * area)) / (2 * aspectRatio);
+  return Math.max(tallest, h);
+}
+
+function splitByHeight(ids: string[], sizeOf: (id: string) => { w: number; h: number }, rowGap: number, limit: number): string[][] {
+  if (!ids.length) return [];
+  const subs: string[][] = [[]];
+  let h = 0;
+  for (const id of ids) {
+    const next = sizeOf(id).h;
+    if (subs.at(-1)!.length && h + rowGap + next > limit) {
+      subs.push([]);
+      h = 0;
+    }
+    h += (subs.at(-1)!.length ? rowGap : 0) + next;
+    subs.at(-1)!.push(id);
+  }
+  return subs;
 }
 
 /**

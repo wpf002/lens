@@ -185,7 +185,9 @@ export function buildSecurity(model: GraphModel, cf: CompiledFilters, sf: Securi
       AUTH_ORDER[a.endpoint?.auth ?? "unknown"] - AUTH_ORDER[b.endpoint?.auth ?? "unknown"] ||
       a.name.localeCompare(b.name),
   );
-  for (const e of endpoints.slice(0, MAX_ENDPOINTS)) col.set(e.id, 0);
+  // A guarded endpoint that reaches no finding adds nothing to the map; the header still counts it.
+  const shown = endpoints.filter((e) => onPath.has(e.id) || e.endpoint?.auth !== "guarded");
+  for (const e of shown.slice(0, MAX_ENDPOINTS)) col.set(e.id, 0);
 
   const maxMid = Math.max(1, ...[...col.values()]);
   const sinkCol = maxMid + 1;
@@ -237,7 +239,7 @@ export function buildSecurity(model: GraphModel, cf: CompiledFilters, sf: Securi
   const edges = [...edgeMap.values()];
 
   const sizeOf = new Map(nodes.map((n) => [n.id, { w: n.w, h: n.h }]));
-  const pos = columnLayout(columns, edges, (id) => sizeOf.get(id)!, { colGap: 110, rowGap: 12 });
+  const pos = columnLayout(columns, edges, (id) => sizeOf.get(id)!, { colGap: 110, rowGap: 12, aspectRatio: 2.6 });
   for (const n of nodes) {
     const p = pos[n.id];
     if (p) {
