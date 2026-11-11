@@ -263,9 +263,6 @@ function FindingRow({ f, i, st, canFix, isNew }: { f: ReviewRecord["findings"][n
 }
 
 /** Progress, confirm, results, and errors for the AI review. Entry point is the header button. */
-/** Merged PR numbers this page already re-reviewed. */
-const autoReviewed = new Set<number>();
-
 function ReviewPanel() {
   const meta = useStore((s) => s.meta);
   const job = useStore((s) => s.enrichJob);
@@ -285,13 +282,6 @@ function ReviewPanel() {
   const box = "mx-4 mt-3 rounded-lg border border-line bg-panel-2 px-3 py-2.5 text-[12px]";
   const mergedPr = push?.pr?.state === "merged" ? push.pr : null;
   const outdated = !!review && !!mergedPr?.mergedAt && mergedPr.mergedAt > review.generatedAt;
-  const busy = job.state === "running";
-  // Findings from before a merge are stale. Re-review once per merge (and fix what it finds), so a failed run doesn't repeat on every render.
-  useEffect(() => {
-    if (!outdated || busy || !mergedPr || autoReviewed.has(mergedPr.number)) return;
-    autoReviewed.add(mergedPr.number);
-    void run("review", { fixNew: true });
-  }, [outdated, busy, mergedPr, run]);
 
   if (running)
     return (
@@ -325,7 +315,8 @@ function ReviewPanel() {
           autoFocus
           onClick={() => {
             setConfirming(false);
-            void run("review");
+            // After a merge, the findings the re-review adds go straight to Fix.
+            void run("review", outdated ? { fixNew: true } : {});
           }}
         >
           Run

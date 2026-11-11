@@ -303,4 +303,21 @@ describe("checklist groups", () => {
     const checks = [{ status: "fail" }, { status: "manual" }, { status: "pass" }] as never;
     expect(toFixCount(2, checks)).toBe(3);
   });
+
+  it("scores security 100 when nothing is left to fix, and lower per open item", async () => {
+    const { securityScore } = await import("./security");
+    expect(securityScore([], [{ status: "manual", tier: 1 }, { status: "pass", tier: 1 }])).toBe(100);
+    const one = securityScore([], [{ status: "fail", tier: 1 }]);
+    expect(one).toBeLessThan(100);
+    expect(securityScore([{ severity: "critical" }], [])).toBeLessThan(securityScore([{ severity: "high" }], []));
+    expect(securityScore([{ severity: "low" }], [])).toBeGreaterThan(one);
+  });
+
+  it("builds a Claude Code prompt from open checks", async () => {
+    const { checkPrompt } = await import("./security");
+    const text = checkPrompt("you", [{ title: "Spend caps", evidence: ["No cap found"], fix: "Add a cap" }], { "t1-spend": "Set a monthly limit." }, ["t1-spend"]);
+    expect(text).toContain("Never print secret values.");
+    expect(text).toContain("1. Spend caps\n   Goal: Set a monthly limit.\n   - No cap found");
+    expect(checkPrompt("fix", [{ title: "X", evidence: [], fix: "Do Y" }])).toContain("Goal: Do Y");
+  });
 });

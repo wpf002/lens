@@ -1,4 +1,4 @@
-import { effectiveAuth, findingItemId, publicByTriage, type ChecklistItem, type EndpointMeta, type Finding, type ExposurePath, type GraphNode, type Severity, type TaintLimit } from "@lens/core/browser";
+import { effectiveAuth, findingItemId, healthScore, publicByTriage, type ScoreGroup, type ChecklistItem, type EndpointMeta, type Finding, type ExposurePath, type GraphNode, type Severity, type TaintLimit } from "@lens/core/browser";
 import type { AuditRecord, RemediationRecord } from "../api";
 import type { VEdge, VNode, ViewModel } from "../types";
 import { SEVERITY_RANK, layerColor } from "./colors";
@@ -91,6 +91,19 @@ export function checkGroup(status: MergedCheck["status"]): CheckGroup {
 /** Everything still outstanding on the Security tab: open findings plus checks Lens has to fix. */
 export function toFixCount(openFindings: number, checks: MergedCheck[]): number {
   return openFindings + checks.filter((c) => checkGroup(c.status) === "fix").length;
+}
+
+const FINDING_WEIGHT: Record<Severity, ScoreGroup["severity"]> = { critical: "high", high: "high", medium: "medium", low: "low", info: "low" };
+const TIER_WEIGHT: Record<number, ScoreGroup["severity"]> = { 1: "high", 2: "medium", 3: "low" };
+
+/**
+ * 0-100, 100 when nothing is left to fix. Same math as the Health score. Critical findings
+ * count twice. Needs You rows don't lower it, since Lens can't tell whether they're done.
+ */
+export function securityScore(openFindings: Pick<Finding, "severity">[], checks: Pick<MergedCheck, "status" | "tier">[]): number {
+  const groups: ScoreGroup[] = openFindings.map((f) => ({ severity: FINDING_WEIGHT[f.severity], open: f.severity === "critical" ? 2 : 1 }));
+  for (const c of checks) if (checkGroup(c.status) === "fix") groups.push({ severity: TIER_WEIGHT[c.tier] ?? "medium", open: 1 });
+  return healthScore(groups);
 }
 
 /**
@@ -252,4 +265,21 @@ export function buildSecurity(model: GraphModel, cf: CompiledFilters, sf: Securi
     rep: (id) => vid.get(id),
     empty: nodes.length ? undefined : { title: "Nothing to show", body: "No endpoints or findings match the current filters." },
   };
+}
+
+const PROMPT_INTRO: Record<Exclude<CheckGroup, "done">, string> = {
+  fix: "Fix these security checks in this repo. If one needs a decision from me, ask before changing code. Run the tests after each fix and commit.",
+  you: "Help me close these security checks. Do what you can from this machine (CLIs, config files). For anything in a web console, give me exact steps. Never print secret values.",
+};
+
+/** A prompt the owner pastes into Claude Code to work through checks Lens left open. */
+export function checkPrompt(group: Exclude<CheckGroup, "done">, checks: Array<Pick<MergedCheck, "title" | "evidence" | "fix">>, todo: Record<string, string> = {}, ids: string[] = []): string {
+  const items = checks.map((c, i) => {
+    const lines = [`${i + 1}. ${c.title}`];
+    const step = todo[ids[i] ?? ""] ?? c.fix;
+    if (step) lines.push(`   Goal: ${step}`);
+    for (const e of c.evidence) lines.push(`   - ${e}`);
+    return lines.join("\n");
+  });
+  return [PROMPT_INTRO[group], "", ...items].join("\n");
 }

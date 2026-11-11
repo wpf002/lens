@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import type { CheckStatus } from "@lens/core/browser";
 import { decideCheck } from "../api";
-import { checkGroup, mergeChecklist, type CheckGroup, type MergedCheck } from "../utils/security";
+import { checkGroup, checkPrompt, mergeChecklist, type CheckGroup, type MergedCheck } from "../utils/security";
 import { useStore } from "../store";
 import { useModel } from "../views/hooks";
 import { AuditAI } from "./AuditAI";
@@ -33,6 +33,26 @@ export function Evidence({ text }: { text: string }) {
 }
 
 type Merged = MergedCheck;
+
+/** Copies a Claude Code prompt for these checks. */
+function CopyPrompt({ group, items, label }: { group: Exclude<CheckGroup, "done">; items: Merged[]; label: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(checkPrompt(group, items, TODO, items.map((i) => i.id)));
+      setState("copied");
+    } catch (e) {
+      console.error("Copy failed", e);
+      setState("failed");
+    }
+    setTimeout(() => setState("idle"), 2000);
+  };
+  return (
+    <button type="button" className="text-[11.5px] text-accent hover:underline" title="Paste into Claude Code" onClick={() => void copy()}>
+      {state === "copied" ? "Copied" : state === "failed" ? "Copy Failed" : label}
+    </button>
+  );
+}
 
 function Row({ item, extra }: { item: Merged; extra?: ReactNode }) {
   const [open, setOpen] = useState(item.status === "fail");
@@ -71,6 +91,7 @@ function Row({ item, extra }: { item: Merged; extra?: ReactNode }) {
           )}
           {extra}
           {(decidable(item) || item.by === "you") && <Decide item={item} />}
+          {checkGroup(item.status) !== "done" && <CopyPrompt group={checkGroup(item.status) as "fix" | "you"} items={[item]} label="Copy Prompt" />}
         </div>
       )}
     </li>
@@ -166,12 +187,13 @@ export function Checklist() {
         const collapsed = group === "done" && !showDone;
         return (
           <section key={group}>
-            <h3 className="sticky top-0 z-[1] border-b border-line bg-panel px-3 py-1.5">
+            <h3 className="sticky top-0 z-[1] flex items-center border-b border-line bg-panel px-3 py-1.5">
               <button type="button" className="eyebrow flex items-center gap-1.5 hover:!text-fg" disabled={group !== "done"} onClick={() => setShowDone((v) => !v)} aria-expanded={!collapsed}>
                 {group === "done" && (collapsed ? <IconChevronRight size={11} /> : <IconChevronDown size={11} />)}
                 {name}
                 <span className={cx("font-mono", group === "fix" ? "text-critical" : "text-faint")}>{list.length}</span>
               </button>
+              {group !== "done" && <span className="ml-auto"><CopyPrompt group={group} items={list} label="Copy All" /></span>}
             </h3>
             {!collapsed && (
               <ul>

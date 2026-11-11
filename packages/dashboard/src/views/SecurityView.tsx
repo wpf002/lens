@@ -7,7 +7,7 @@ import { EmptyState, SeverityBadge, cx } from "../components/ui";
 import { FixAllButton } from "../components/Remediation";
 import { useStore } from "../store";
 import { AUTH_COLOR, SEVERITIES, SEVERITY_COLOR } from "../utils/colors";
-import { appliedFixItemIds, buildSecurity, checkGroup, endpointCounts, filterFindings, inputPath, isClosedFinding, mergeChecklist, splitFindings, toFixCount, traceLimitsText } from "../utils/security";
+import { appliedFixItemIds, buildSecurity, checkGroup, endpointCounts, filterFindings, inputPath, isClosedFinding, mergeChecklist, securityScore, splitFindings, toFixCount, traceLimitsText } from "../utils/security";
 import { useCompiledFilters, useModel, useOverlayInput } from "./hooks";
 
 const STATUSES: Finding["status"][] = ["open", "confirmed", "false_positive", "accepted"];
@@ -81,6 +81,7 @@ export function SecurityView() {
   const bySev = SEVERITIES.reduce((a, s) => ({ ...a, [s]: openFindings.filter((f) => f.severity === s).length }), {} as Record<Severity, number>);
   const toggleSev = (s: Severity) => setSf({ severities: sf.severities.includes(s) ? sf.severities.filter((x) => x !== s) : [...sf.severities, s] });
   const toFix = toFixCount(openFindings.length, checklist);
+  const score = securityScore(openFindings, checklist);
   const renderRow = (f: Finding) => {
     const on = selected === f.id;
     const fixedNow = isFixed(f);
@@ -162,6 +163,16 @@ export function SecurityView() {
       {/* Summary strip */}
       <div className="flex shrink-0 flex-wrap items-stretch gap-x-5 gap-y-2 border-b border-line bg-panel px-4 py-2.5">
         <div className="flex items-center gap-5">
+          <div className="flex items-center gap-3" title="100 when nothing is left to fix">
+            <div className="relative h-10 w-10" role="img" aria-label={`Security score ${score} of 100`}>
+              <svg viewBox="0 0 36 36" className="h-10 w-10 -rotate-90" aria-hidden>
+                <circle cx="18" cy="18" r="15" fill="none" stroke="var(--border)" strokeWidth="3.5" />
+                <circle cx="18" cy="18" r="15" fill="none" stroke={score >= 80 ? "var(--auth-guarded)" : score >= 50 ? "var(--sev-medium)" : "var(--sev-high)"} strokeWidth="3.5" strokeDasharray={`${(score / 100) * 94.2} 94.2`} strokeLinecap="round" />
+              </svg>
+              <span className="absolute inset-0 flex items-center justify-center font-mono text-[12px] font-semibold tabular">{score}</span>
+            </div>
+            <div className="eyebrow">Security</div>
+          </div>
           <div className="flex flex-col" title="Open findings plus failing checks. Remediate fixes these.">
             <span className={cx("font-mono text-[20px] font-semibold leading-tight tabular", toFix ? "text-critical" : "text-guarded")}>{toFix}</span>
             <span className="eyebrow">To Fix</span>
