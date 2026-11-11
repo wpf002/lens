@@ -113,6 +113,15 @@ export function estimateFixAll(items: number): CostEstimate {
 
 /** Sonnet handles all four jobs well at a fraction of the cost of the largest model. */
 const MODEL_ARGS = ["--model", "sonnet"];
+/** Review batches cover disjoint files, so several Claude runs can work at once. */
+const REVIEW_CONCURRENCY = 4;
+
+interface ClaudeRunOptions {
+  /** Spend cap for this one process; defaults to the job's limit. */
+  budgetUsd?: number;
+  /** Receives this process's running cost; without it the cost is added to `job.costBase`. */
+  onCost?: (usd: number) => void;
+}
 export const REVIEW_REPORT = "CODE_REVIEW.md";
 export const reviewPath = (root: string) => path.join(paths(root).dir, "review.json");
 export const AUDIT_REPORT = "SECURITY_AUDIT.md";
@@ -257,7 +266,7 @@ function friendlyError(msg: string): string {
 
 export class EnrichRunner {
   job: EnrichJob | null = null;
-  private child: ChildProcess | null = null;
+  private children = new Set<ChildProcess>();
 
   get running(): boolean {
     return this.job?.state === "running";
@@ -274,7 +283,6 @@ export class EnrichRunner {
 
   cancel(): void {
     if (!this.running || !this.job) return;
-    this.child?.kill("SIGTERM");
     this.finish(this.job, "cancelled", "cancelled");
   }
 
@@ -285,7 +293,9 @@ export class EnrichRunner {
     console.log(`[ai] ${state} ${job.task} after ${secs}s, $${(job.costUsd ?? 0).toFixed(2)}${error ? `: ${error.slice(0, 300)}` : ""}`);
     job.finishedAt = Date.now();
     if (error && state !== "done") job.error = friendlyError(error).slice(0, 400);
-    this.child = null;
+    // Parallel review batches may still be running; a finished job owns none of them.
+    for (const child of this.children) child.kill("SIGTERM");
+    this.children.clear();
   }
 
   private push(job: EnrichJob, line: string) {
@@ -295,18 +305,18 @@ export class EnrichRunner {
   }
 
   /** Spawn Claude Code, stream its tool calls into the job's progress, resolve on exit. */
-  private async runClaude(job: EnrichJob, prompt: string, tools: string[], extraArgs: string[] = [], cwd = job.root): Promise<{ code: number | null; stderr: string; resultError?: string; resultText: string }> {
+  private async runClaude(job: EnrichJob, prompt: string, tools: string[], extraArgs: string[] = [], cwd = job.root, run: ClaudeRunOptions = {}): Promise<{ code: number | null; stderr: string; resultError?: string; resultText: string }> {
     const args = [
       "-p", prompt,
       "--output-format", "stream-json", "--verbose",
       "--no-session-persistence",
-      "--max-budget-usd", String(job.budgetUsd),
+      "--max-budget-usd", String(run.budgetUsd ?? job.budgetUsd),
       ...extraArgs,
       "--allowedTools", ...tools,
     ];
     this.push(job, "Starting Claude Code");
     const child = spawn(claudeBin(), args, { cwd, stdio: ["ignore", "pipe", "pipe"], env: childEnv() });
-    this.child = child;
+    this.children.add(child);
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
       this.finish(job, "error", `timed out after ${TIMEOUT_MS / 60_000} minutes`);
@@ -332,10 +342,13 @@ export class EnrichRunner {
         if (msg.type === "assistant") {
           for (const c of msg.message?.content ?? []) if (c.type === "tool_use" && c.name) this.push(job, describeTool(c.name, c.input ?? {}, cwd));
         } else if (msg.type === "result") {
-          if (typeof msg.total_cost_usd === "number") job.costUsd = (job.costBase ?? 0) + msg.total_cost_usd;
+          if (typeof msg.total_cost_usd === "number") {
+            if (run.onCost) run.onCost(msg.total_cost_usd);
+            else job.costUsd = (job.costBase ?? 0) + msg.total_cost_usd;
+          }
           if (typeof msg.result === "string") resultText = msg.result;
           if (msg.is_error || (msg.subtype && msg.subtype !== "success")) {
-            resultError = msg.subtype === "error_max_budget_usd" ? `stopped at the $${job.budgetUsd.toFixed(2)} safety limit` : String(msg.result ?? msg.subtype ?? "Claude Code reported an error");
+            resultError = msg.subtype === "error_max_budget_usd" ? `stopped at the $${(run.budgetUsd ?? job.budgetUsd).toFixed(2)} safety limit` : String(msg.result ?? msg.subtype ?? "Claude Code reported an error");
           }
         }
       }
@@ -352,6 +365,7 @@ export class EnrichRunner {
       child.on("close", (c) => resolve(c));
     });
     clearTimeout(timer);
+    this.children.delete(child);
     return { code, stderr, resultError, resultText };
   }
 
@@ -618,8 +632,7 @@ export class EnrichRunner {
     }
     const dir = paths(root).intermediate;
     await fs.mkdir(dir, { recursive: true });
-    const ctxPath = path.join(dir, "context-health.json");
-    const outPath = path.join(dir, "review.json");
+    for (const f of await fs.readdir(dir)) if (/^(context-health|review)-\d+\.json$/.test(f)) await fs.rm(path.join(dir, f), { force: true });
     const instructions = agentInstructions("code-reviewer");
     if (!existsSync(instructions)) throw new Error(`missing ${instructions}`);
     const existing = new Set(files.map((f) => f.path));
@@ -627,19 +640,26 @@ export class EnrichRunner {
     const added: number[] = [];
     let lastError: string | undefined;
 
-    for (const [n, batch] of batches.entries()) {
-      const remaining = opts.limitUsd - ((job.costUsd ?? 0) - startCost);
-      if (remaining < MIN_RUN_USD) {
-        progress.stoppedEarly = "reached the spending limit; the next review continues from here";
-        break;
-      }
+    // Cost per batch: finished batches keep their final cost, running ones their latest report.
+    const batchCost = new Map<number, number>();
+    // Spend caps of running batches, so parallel batches can't overrun the review's limit together.
+    const reservedCap = new Map<number, number>();
+    const spent = () => [...batchCost.values()].reduce((a, b) => a + b, 0);
+    const available = () => opts.limitUsd - spent() - [...reservedCap.entries()].reduce((a, [n, cap]) => a + cap - (batchCost.get(n) ?? 0), 0);
+    // Ledger and coverage writes run one at a time; batches finish in any order.
+    let saveChain: Promise<void> = Promise.resolve();
+    let next = 0;
+
+    const reviewBatch = async (n: number, cap: number) => {
+      const batch = batches[n]!;
+      const ctxPath = path.join(dir, `context-health-${n}.json`);
+      const outPath = path.join(dir, `review-${n}.json`);
       this.push(job, batches.length > 1 ? `Batch ${n + 1} of ${batches.length}: ${batch.length} files` : `Reviewing ${batch.length} files`);
       const batchPaths = new Set(batch.map((f) => f.path));
       const closed = await reviewClosed(root);
       const ledger = await loadReview(root);
       const health = (g.health?.checks ?? []).map((c) => ({ id: c.id, title: c.title, hits: c.hits.filter((h) => h.path && batchPaths.has(h.path)).slice(0, 10) })).filter((c) => c.hits.length);
       await writeJsonAtomic(ctxPath, { project: g.project, mode: scoped ? "changes" : "full", files: batch, priorFindings: priorFindingsFor(ledger.findings, batchPaths, closed), health, ...(scoped ? { diff: opts.scope!.diff } : {}) }, true);
-      await fs.rm(outPath, { force: true });
       const prompt = [
         `Follow the agent instructions in ${instructions} (read that file first).`,
         `Project root: ${root}`,
@@ -648,34 +668,58 @@ export class EnrichRunner {
         "Read-only: write the findings file and nothing else.",
         "If the write is refused, put the findings inside a ```json fence in your final message instead.",
       ].join("\n");
-      const saved = job.budgetUsd;
-      job.costBase = job.costUsd ?? 0;
-      job.budgetUsd = Math.round(Math.min(remaining, REVIEW_BATCH_LIMIT_USD) * 100) / 100;
-      const { code, stderr, resultError, resultText } = await this.runClaude(job, prompt, ["Read", "Grep", "Glob", "Edit(./.lens/intermediate/review.json)"], MODEL_ARGS);
-      job.budgetUsd = saved;
-      if (job.state !== "running") return null;
+      const onCost = (usd: number) => {
+        batchCost.set(n, usd);
+        job.costUsd = startCost + spent();
+      };
+      const tools = ["Read", "Grep", "Glob", `Edit(./.lens/intermediate/review-${n}.json)`];
+      const { code, stderr, resultError, resultText } = await this.runClaude(job, prompt, tools, MODEL_ARGS, root, { budgetUsd: cap, onCost });
+      reservedCap.delete(n);
+      if (job.state !== "running") return;
 
       const parsed = ReviewFindingsSchema.safeParse((await readJson<unknown>(outPath)) ?? fencedJson(resultText));
+      await fs.rm(ctxPath, { force: true });
+      await fs.rm(outPath, { force: true });
       if (!parsed.success) {
         lastError = resultError ?? (code ? `Claude Code exited with code ${code}: ${stderr.trim().split("\n").pop() ?? ""}` : `review findings failed validation:\n${formatZodError(parsed.error)}`);
         this.push(job, `Batch ${n + 1} failed: ${lastError.split("\n")[0]}`);
-        continue;
+        return;
       }
-      const now = new Date().toISOString();
-      const merged = mergeReview(ledger.findings, parsed.data, { ...closed, reviewed: batchPaths, existing, now, byFix: scoped });
-      const record: ReviewRecord = { ...ledger, generatedAt: now, costUsd: (job.costUsd ?? 0) - startCost, summary: undefined, findings: merged.findings };
-      await saveReview(root, record);
-      // A scoped check counts as a review only for files that were fully reviewed before Lens edited them.
-      const nowCovered = scoped ? batch.filter((f) => opts.scope!.covered.has(f.path)) : batch;
-      if (nowCovered.length) {
-        for (const f of nowCovered) coverage[f.path] = hashes.get(f.path)!;
-        await saveCoverage(root, coverage);
+      const save = saveChain.then(async () => {
+        const now = new Date().toISOString();
+        const current = await loadReview(root);
+        const merged = mergeReview(current.findings, parsed.data, { ...closed, reviewed: batchPaths, existing, now, byFix: scoped });
+        const record: ReviewRecord = { ...current, generatedAt: now, costUsd: (job.costUsd ?? 0) - startCost, summary: undefined, findings: merged.findings };
+        await saveReview(root, record);
+        // A scoped check counts as a review only for files that were fully reviewed before Lens edited them.
+        const nowCovered = scoped ? batch.filter((f) => opts.scope!.covered.has(f.path)) : batch;
+        if (nowCovered.length) {
+          for (const f of nowCovered) coverage[f.path] = hashes.get(f.path)!;
+          await saveCoverage(root, coverage);
+        }
+        added.push(...merged.added);
+        progress.findings += merged.added.length;
+        progress.batchesDone = (progress.batchesDone ?? 0) + 1;
+      });
+      saveChain = save;
+      await save;
+    };
+
+    const worker = async () => {
+      while (next < batches.length && job.state === "running") {
+        const room = available();
+        if (room < MIN_RUN_USD) {
+          progress.stoppedEarly = "reached the spending limit; the next review continues from here";
+          return;
+        }
+        const n = next++;
+        const cap = Math.round(Math.min(room, REVIEW_BATCH_LIMIT_USD) * 100) / 100;
+        reservedCap.set(n, cap);
+        await reviewBatch(n, cap);
       }
-      added.push(...merged.added);
-      progress.findings += merged.added.length;
-      progress.batchesDone = n + 1;
-    }
-    await fs.rm(outPath, { force: true });
+    };
+    await Promise.all(Array.from({ length: Math.min(REVIEW_CONCURRENCY, batches.length) }, worker));
+    if (job.state !== "running") return null;
     if (!progress.batchesDone && lastError) throw new Error(lastError);
     if (!scoped) {
       this.push(job, "Rescanning");

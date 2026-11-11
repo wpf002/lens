@@ -325,7 +325,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
       expect(rem.healthItems).toBeGreaterThanOrEqual(1);
       const args = JSON.parse(await fs.readFile(argsLog, "utf8")) as string[];
       const tools = args.slice(args.indexOf("--allowedTools") + 1);
-      expect(tools).toEqual(["Read", "Grep", "Glob", "Edit(./.lens/intermediate/review.json)"]);
+      expect(tools).toEqual(["Read", "Grep", "Glob", "Edit(./.lens/intermediate/review-0.json)"]);
       // Every file was reviewed, so nothing is pending and a second run finds no new findings.
       const after = JSON.parse((await get(`${base}/api/meta`, auth())).body);
       expect(after.reviewPending.files).toBe(0);
