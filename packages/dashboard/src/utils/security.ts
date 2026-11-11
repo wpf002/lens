@@ -1,5 +1,5 @@
 import { effectiveAuth, findingItemId, healthScore, publicByTriage, type ScoreGroup, type ChecklistItem, type EndpointMeta, type Finding, type ExposurePath, type GraphNode, type Severity, type TaintLimit } from "@lens/core/browser";
-import type { AuditRecord, RemediationRecord } from "../api";
+import type { AuditRecord, EnrichJob, RemediationRecord } from "../api";
 import type { VEdge, VNode, ViewModel } from "../types";
 import { SEVERITY_RANK, layerColor } from "./colors";
 import type { CompiledFilters } from "./filters";
@@ -282,4 +282,21 @@ export function checkPrompt(group: Exclude<CheckGroup, "done">, checks: Array<Pi
     return lines.join("\n");
   });
   return [PROMPT_INTRO[group], "", ...items].join("\n");
+}
+
+export type JobTab = "audit" | "health" | "other";
+const TAB_NAME: Record<JobTab, string> = { audit: "Security", health: "Health", other: "AI" };
+
+/** Which tab's Remediate a running AI job belongs to. Audit and its fixes are Security's; review and its fixes are Health's. */
+export function jobTab(job: Pick<EnrichJob, "task" | "source">): JobTab {
+  if (job.task === "audit" || (job.task === "remediate" && job.source === "audit")) return "audit";
+  if (job.task === "review" || job.task === "remediate") return "health";
+  return "other";
+}
+
+/** Remediate button label: its own job reads Running, another tab's job names that tab. */
+export function remediateLabel(source: "audit" | "health", job: Pick<EnrichJob, "task" | "source" | "state">): string {
+  if (job.state !== "running") return "Remediate";
+  const tab = jobTab(job);
+  return tab === source ? "Running…" : `${TAB_NAME[tab]} Running`;
 }

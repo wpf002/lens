@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { createPullRequest, fixesPatch, mergePullRequest, type ProposedFix, type RemediationSource, type PullRequest } from "../api";
 import { useStore } from "../store";
 import { costRange } from "../utils/format";
+import { remediateLabel } from "../utils/security";
 import { IconChevronDown, IconChevronRight } from "./icons";
 import { Mascot } from "./Mascot";
 import { checkHitIds, findingItemId, type Severity } from "@lens/core/browser";
@@ -16,7 +17,9 @@ const CHECKS_POLL_MS = 20_000;
 const MAX_TEST_REPAIRS = 2;
 
 export function FixAllButton({ source, onOpen }: { source: "audit" | "health"; onOpen?: () => void }) {
-  const aiRunning = useStore((s) => s.enrichJob.state === "running");
+  const job = useStore((s) => s.enrichJob);
+  const aiRunning = job.state === "running";
+  const label = remediateLabel(source, job);
   const plan = useStore((s) => s.fixable.plans?.[source]);
   const nothing = !!plan && !plan.items && !plan.first;
   return (
@@ -24,13 +27,13 @@ export function FixAllButton({ source, onOpen }: { source: "audit" | "health"; o
       size="sm"
       variant="accent"
       disabled={aiRunning || nothing}
-      title={nothing ? "Nothing left to fix" : undefined}
+      title={nothing ? "Nothing left to fix" : aiRunning && label !== "Running…" ? "One AI run at a time. Start this when that one finishes." : undefined}
       onClick={() => {
         onOpen?.();
         useStore.setState({ remediateConfirm: { source }, auditConfirm: false, reviewConfirm: false });
       }}
     >
-      <Mascot size={16} /> {aiRunning ? "Running…" : "Remediate"}
+      <Mascot size={16} /> {label}
     </Button>
   );
 }

@@ -313,6 +313,18 @@ describe("checklist groups", () => {
     expect(securityScore([{ severity: "low" }], [])).toBeGreaterThan(one);
   });
 
+  it("labels each tab's Remediate by whose job is running", async () => {
+    const { remediateLabel } = await import("./security");
+    const run = (task: string, source?: string) => ({ task, source, state: "running" }) as never;
+    expect(remediateLabel("audit", run("review"))).toBe("Health Running");
+    expect(remediateLabel("health", run("review"))).toBe("Running…");
+    expect(remediateLabel("health", run("remediate", "audit"))).toBe("Security Running");
+    expect(remediateLabel("audit", run("remediate", "audit"))).toBe("Running…");
+    expect(remediateLabel("health", run("remediate", "review"))).toBe("Running…");
+    expect(remediateLabel("audit", run("domain"))).toBe("AI Running");
+    expect(remediateLabel("audit", { task: "review", state: "done" } as never)).toBe("Remediate");
+  });
+
   it("builds a Claude Code prompt from open checks", async () => {
     const { checkPrompt } = await import("./security");
     const text = checkPrompt("you", [{ title: "Spend caps", evidence: ["No cap found"], fix: "Add a cap" }], { "t1-spend": "Set a monthly limit." }, ["t1-spend"]);
