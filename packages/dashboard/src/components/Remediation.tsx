@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { createPullRequest, fixesPatch, mergePullRequest, type ProposedFix, type RemediationSource, type PullRequest } from "../api";
+import { createPullRequest, fixBrokenTests, fixesPatch, mergePullRequest, type ProposedFix, type RemediationSource, type PullRequest, type TestGate } from "../api";
 import { useStore } from "../store";
 import { costRange } from "../utils/format";
 import { remediateLabel } from "../utils/security";
@@ -134,7 +134,7 @@ export function Remediation({ source }: { source: Source }) {
   const refreshPush = useStore((s) => s.refreshPush);
   // GitHub doesn't push check results to us; poll while tests run or Lens repairs what they caught.
   const tests = pushed?.pr?.tests;
-  const checksRunning = pushed?.pr?.state === "open" && (!tests || tests.state === "running" || !!tests.repairing || (tests.state === "broken" && (tests.attempts < MAX_TEST_REPAIRS || tests.broken.some((b) => !!b.permissions?.length))));
+  const checksRunning = pushed?.pr?.state === "open" && (!tests || tests.state === "running" || !!tests.repairing || (tests.state === "broken" && (repairsLeft(tests) || tests.broken.some((b) => !!b.permissions?.length))));
   useEffect(() => {
     if (!checksRunning) return;
     const t = setInterval(() => void refreshPush(), CHECKS_POLL_MS);
@@ -269,6 +269,10 @@ export function Remediation({ source }: { source: Source }) {
                 {pushed?.dirty ? (
                   <Button size="sm" variant="accent" disabled={aiBusy || !!push.busy || op.busy} onClick={() => void step("Updating…", createPullRequest)}>
                     {push.busy ?? "Update Pull Request"}
+                  </Button>
+                ) : needsFixTests(pr) ? (
+                  <Button size="sm" variant="accent" disabled={aiBusy || !!push.busy || op.busy} onClick={() => void step("Starting…", fixBrokenTests)}>
+                    {push.busy ?? "Fix Tests"}
                   </Button>
                 ) : (
                   <Button size="sm" variant="accent" disabled={aiBusy || !!push.busy || op.busy || !canMerge(pr)} onClick={() => void step("Merging…", mergePullRequest, true)}>
@@ -435,6 +439,9 @@ function ItemList({ info, items }: { info: ItemInfo; items: Array<{ itemId: stri
 
 /** Merge waits for CI and is refused while Lens's changes break tests that pass on the base branch. */
 const canMerge = (pr: PullRequest) => pr.tests?.state === "passed" || pr.tests?.state === "none";
+const repairsLeft = (t: TestGate) => t.attempts < (t.allowedRepairs ?? MAX_TEST_REPAIRS);
+/** Lens's automatic repairs ran out with tests still broken; the user can start another. */
+const needsFixTests = (pr: PullRequest) => pr.tests?.state === "broken" && !pr.tests.repairing && !repairsLeft(pr.tests) && !pr.tests.broken.some((b) => !!b.permissions?.length);
 
 /** Test results for an open fixes PR, counting only failures Lens's changes caused. */
 function TestsStatus({ pr }: { pr: PullRequest }) {

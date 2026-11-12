@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { compareRuns, errorExcerpt, failedTests, repairItems, staleBaseRuns, type TestGate } from "../src/ci.js";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { paths, writeJsonAtomic } from "@lens/core";
+import { MAX_TEST_REPAIRS, allowAnotherRepair, compareRuns, errorExcerpt, failedTests, gateNeedsWork, repairItems, staleBaseRuns, type TestGate } from "../src/ci.js";
 import { mergeBlock } from "../src/cloud.js";
 
 const PYTEST_LOG = [
@@ -75,5 +79,18 @@ describe("test gate", () => {
     expect(item?.evidence.join("\n")).toContain("t::xml");
     expect(item?.evidence.join("\n")).toContain("AttributeError");
     expect(item?.evidence.join("\n")).toContain("backend/services/xml_safe.py");
+  });
+
+  it("lets Fix Tests start another repair once the automatic ones are used up", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-fix-tests-"));
+    const gate: TestGate = { pr: 19, sha: "a", state: "broken", broken: [{ name: "build", tests: [], excerpt: "Cannot find package 'zod'" }], preexisting: 0, attempts: MAX_TEST_REPAIRS };
+    await writeJsonAtomic(path.join(paths(root).dir, "test-gate.json"), gate, true);
+    expect(gateNeedsWork(gate)).toBe(false);
+
+    expect(await allowAnotherRepair(root, 19)).toBe(true);
+    const saved = JSON.parse(await fs.readFile(path.join(paths(root).dir, "test-gate.json"), "utf8")) as TestGate;
+    expect(gateNeedsWork(saved)).toBe(true);
+    expect(await allowAnotherRepair(root, 19)).toBe(false);
+    expect(repairItems(saved, [])[0]?.evidence.join("\n")).toMatch(/2 earlier repair attempts/);
   });
 });

@@ -19,7 +19,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { authorizeUrl, configureGithubApp, disconnectGithub, ensureGithubLoaded, finishOAuth, githubAppMode, githubConnected, githubLogin, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
 import { cloneOrUpdate, commitFilesAndPush, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, type PushInfo } from "./cloud.js";
-import { MAX_TEST_REPAIRS, gateNeedsWork, recordRepairAttempt, repairItems, saveRepairItems, type TestGate } from "./ci.js";
+import { MAX_TEST_REPAIRS, allowAnotherRepair, gateNeedsWork, recordRepairAttempt, repairItems, repairsLeft, saveRepairItems, type TestGate } from "./ci.js";
 import { grantCheckPermissions } from "./ci-permissions.js";
 import type { AppliedFix } from "./commit-text.js";
 import { SOURCES, applyFixes, loadRemediation, undoFix, type RemediationSource } from "./remediate.js";
@@ -162,13 +162,13 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         }
         if (gate.state !== "broken") return;
         if (await grantRefusedPermissions(root, gate)) continue;
-        if (gate.attempts >= MAX_TEST_REPAIRS) return;
+        if (!repairsLeft(gate)) return;
         const authProblem = await checkClaudeAuth();
         if (authProblem) return console.error(`[tests] can't repair: ${authProblem}`);
         const items = repairItems(gate, await pullRequestFiles(root, gate.pr).catch(() => []));
         await saveRepairItems(root, items);
         await recordRepairAttempt(root, gate.pr);
-        console.log(`[tests] PR #${gate.pr} broke ${items.length} check(s); repair ${gate.attempts + 1} of ${MAX_TEST_REPAIRS}`);
+        console.log(`[tests] PR #${gate.pr} broke ${items.length} check(s); repair ${gate.attempts + 1} of ${gate.allowedRepairs ?? MAX_TEST_REPAIRS}`);
         const job = enrich.start("remediate", root, remediateLimit(TEST_REPAIR_ID, items.length), { source: "health", checkId: TEST_REPAIR_ID });
         while (job.state === "running") await sleep(JOB_POLL_MS);
         if (job.state !== "done" || !job.remediation?.applied) return console.error(`[tests] repair made no changes${job.error ? `: ${job.error}` : ""}`);
@@ -456,6 +456,14 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         const tests = st?.pr?.state === "open" ? st.pr.tests : undefined;
         if (tests && gateNeedsWork(tests)) void watchTests(proj.root);
         return send(res, 200, { state: withRepairFlag(st) });
+      }
+      if (opts.cloud && req.method === "POST" && url.pathname === "/api/project/pr/fix-tests") {
+        if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });
+        const st = repoName(proj.root) ? await pushState(proj.root) : null;
+        const pr = st?.pr?.state === "open" ? st.pr : null;
+        if (!pr || !(await allowAnotherRepair(proj.root, pr.number))) return send(res, 400, { error: "No broken tests to fix." });
+        void watchTests(proj.root);
+        return send(res, 200, { state: withRepairFlag(await pushState(proj.root)) });
       }
       if (opts.cloud && req.method === "POST" && url.pathname === "/api/project/push") {
         if (!githubConnected()) return send(res, 400, { error: "Connect GitHub to push, or use Download Patch." });

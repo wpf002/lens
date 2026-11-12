@@ -27,6 +27,8 @@ export interface TestGate {
   preexisting: number;
   /** Automatic repair runs for this pull request. */
   attempts: number;
+  /** Repair runs allowed for this pull request; Fix Tests raises it past MAX_TEST_REPAIRS. */
+  allowedRepairs?: number;
   /** Set by the server while a repair run is going. */
   repairing?: boolean;
   /** When Lens asked GitHub to re-run stale base-commit checks for this head commit. */
@@ -184,9 +186,10 @@ export interface GateInput {
 export async function testGate(root: string, input: GateInput, now = Date.now()): Promise<TestGate> {
   const saved = await readJson<TestGate>(gatePath(root));
   const attempts = saved?.pr === input.pr ? saved.attempts : 0;
+  const allowed = saved?.pr === input.pr && saved.allowedRepairs !== undefined ? { allowedRepairs: saved.allowedRepairs } : {};
   if (saved && saved.pr === input.pr && saved.sha === input.headSha && saved.state !== "running" && saved.version === GATE_VERSION) return saved;
   const runs = await checkRuns(input.repo, input.headSha);
-  const base: TestGate = { pr: input.pr, sha: input.headSha, state: "running", broken: [], preexisting: 0, attempts, version: GATE_VERSION };
+  const base: TestGate = { pr: input.pr, sha: input.headSha, state: "running", broken: [], preexisting: 0, attempts, ...allowed, version: GATE_VERSION };
   if (!runs.length) {
     const hasCi = existsSync(path.join(root, ".github", "workflows"));
     const fresh = input.pushedAt !== undefined && now - input.pushedAt < CI_START_GRACE_MS;
@@ -221,6 +224,16 @@ export async function recordRepairAttempt(root: string, pr: number): Promise<voi
   if (saved?.pr === pr) await save(root, { ...saved, attempts: saved.attempts + 1 });
 }
 
+/** Fix Tests: allow one more repair run once the automatic ones are used up. False when there's nothing to repair. */
+export async function allowAnotherRepair(root: string, pr: number): Promise<boolean> {
+  const saved = await readJson<TestGate>(gatePath(root));
+  if (saved?.pr !== pr || saved.state !== "broken" || repairsLeft(saved)) return false;
+  await save(root, { ...saved, allowedRepairs: saved.attempts + 1 });
+  return true;
+}
+
+export const repairsLeft = (gate: TestGate) => gate.attempts < (gate.allowedRepairs ?? MAX_TEST_REPAIRS);
+
 /** What the remediator gets: each broken check with its failing tests, log excerpt, and the PR's files. */
 export function repairItems(gate: TestGate, changedFiles: string[]): RepairItem[] {
   const files = changedFiles.slice(0, 100).join(", ");
@@ -231,8 +244,9 @@ export function repairItems(gate: TestGate, changedFiles: string[]): RepairItem[
       ...(b.tests.length ? [`Failing tests that pass on the base branch: ${b.tests.join(", ")}`] : [`The ${b.name} check passes on the base branch and fails on this pull request.`]),
       `CI log:\n${b.excerpt}`,
       `Files this pull request changed: ${files}`,
+      ...(gate.attempts ? [`${gate.attempts} earlier repair attempt${gate.attempts === 1 ? "" : "s"} didn't fix this. Try a different approach.`] : []),
     ],
-    fix: "Find which change in this pull request broke these tests and fix that code so they pass. Don't delete, skip, or loosen tests unless a test checks behavior the fix intentionally and correctly changed.",
+    fix: "Find which change in this pull request broke these tests and fix that code so they pass. Don't delete, skip, or loosen tests unless a test checks behavior the fix intentionally and correctly changed. If the log says a module or package can't be found, check the package.json nearest the failing file: import from a dependency that file can already reach, or declare the missing one there.",
   }));
 }
 
@@ -246,6 +260,6 @@ export async function loadRepairItems(root: string): Promise<RepairItem[]> {
 
 /** The server should keep watching: CI is running, or a broken check still has a fix left to try. */
 export const gateNeedsWork = (gate: TestGate) =>
-  gate.state === "running" || (gate.state === "broken" && (gate.attempts < MAX_TEST_REPAIRS || gate.broken.some((b) => !!b.permissions?.length)));
+  gate.state === "running" || (gate.state === "broken" && (repairsLeft(gate) || gate.broken.some((b) => !!b.permissions?.length)));
 
 export const brokenCount = (gate: TestGate) => gate.broken.reduce((n, b) => n + Math.max(1, b.tests.length), 0);

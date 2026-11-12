@@ -291,12 +291,19 @@ export type TestGate = {
   broken: Array<{ name: string; tests: string[]; permissions?: string[] }>;
   preexisting: number;
   attempts: number;
+  allowedRepairs?: number;
   repairing?: boolean;
 };
 export type PullRequest = { number: number; url: string; state: "open" | "merged" | "closed"; mergedAt?: string; tests?: TestGate };
 export type PushState = { branch: string | null; dirty: boolean; pr: PullRequest | null } | null;
 export const createPullRequest = () => request<{ pr: PullRequest }>("/api/project/pr", { method: "POST" }).then((r) => r.pr);
 export const mergePullRequest = () => request<{ pr: PullRequest }>("/api/project/merge", { method: "POST" }).then((r) => r.pr);
+/** Hosted server: one more repair run after the automatic ones failed. */
+export const fixBrokenTests = () =>
+  request<{ state: PushState }>("/api/project/pr/fix-tests", { method: "POST" }).then((r) => {
+    if (!r.state?.pr) throw new Error("No open pull request.");
+    return r.state.pr;
+  });
 export const setWontFix = (id: string, on: boolean) =>
   request<{ wontFix: string[] }>("/api/items/wontfix", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, on }) }).then((r) => r.wontFix);
 export const fetchPushState = () => request<{ state: PushState }>("/api/project/push").then((r) => r.state);
