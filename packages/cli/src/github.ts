@@ -55,6 +55,7 @@ export async function loadGithub(workspace: string): Promise<void> {
   try {
     const s = await readStoredGithub(file);
     stored = s && s.token !== rejectedToken ? s : null;
+    if (stored) console.log(`[github] loaded ${describeConnection(stored)}`);
   } catch (e) {
     // Keep whatever is in memory; a failed read must not drop a working connection.
     console.error(`[github] couldn't read the saved connection: ${e instanceof Error ? e.message : String(e)}`);
@@ -90,6 +91,13 @@ async function requestToken(params: Record<string, string>): Promise<TokenRespon
     signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
   });
   return (await res.json()) as TokenResponse;
+}
+
+/** Log-safe summary: login, token kind from its prefix, expiry. Never the token itself. */
+function describeConnection(connection: Stored): string {
+  const kind = connection.token.startsWith("ghu_") ? "GitHub App" : connection.token.startsWith("gho_") ? "OAuth App" : "unknown kind";
+  const expiry = connection.expiresAt ? `expires ${new Date(connection.expiresAt).toISOString()}` : "no expiry";
+  return `as ${connection.login} (${kind}, ${expiry}, ${connection.refreshToken ? "refreshable" : "no refresh token"})`;
 }
 
 function storedFrom(body: TokenResponse, login: string, now = Date.now()): Stored {
@@ -147,7 +155,7 @@ export async function finishOAuth(code: string, state: string, redirectUri: stri
   stored = storedFrom(body, user.login);
   rejectedToken = null;
   if (file) await saveStored(file, stored);
-  console.log(`[github] connected as ${user.login}${stored.expiresAt ? `, expires ${new Date(stored.expiresAt).toISOString()}, refreshable` : ", no expiry"}`);
+  console.log(`[github] connected ${describeConnection(stored)}`);
 }
 
 /** Only the Disconnect button removes the saved connection. */
