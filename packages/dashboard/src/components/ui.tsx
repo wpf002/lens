@@ -25,7 +25,8 @@ export function Button({ variant = "outline", size = "md", active, className, ch
         variant === "ghost" && "text-muted hover:text-fg hover:bg-raised",
         variant === "outline" && "border border-line text-fg bg-panel hover:border-line-strong hover:bg-raised",
         variant === "solid" && "bg-raised text-fg hover:bg-line",
-        variant === "accent" && "bg-accent text-accent-fg hover:brightness-110",
+        // A faded amber still reads as clickable, so a disabled accent button goes grey.
+        variant === "accent" && "bg-accent text-accent-fg hover:brightness-110 disabled:bg-raised disabled:text-faint disabled:hover:brightness-100",
         active && variant !== "accent" && "!border-accent !text-accent bg-accent-soft",
         className,
       )}
