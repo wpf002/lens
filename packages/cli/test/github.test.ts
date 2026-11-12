@@ -35,6 +35,24 @@ describe("saved GitHub connection", () => {
     expect(githubLogin()).toBe("octo");
   });
 
+  it("refreshes an expired GitHub App sign-in and retries", async () => {
+    const dir = await workspaceWith(JSON.stringify({ ...saved, token: "test-old", refreshToken: "test-refresh", expiresAt: Date.now() + 3_600_000 }));
+    await loadGithub(dir);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("/login/oauth/access_token")) {
+        expect(JSON.parse(String(init?.body))).toMatchObject({ grant_type: "refresh_token", refresh_token: "test-refresh" });
+        return Response.json({ access_token: "test-new", refresh_token: "test-refresh-2", expires_in: 28_800 });
+      }
+      const auth = (init?.headers as Record<string, string>).Authorization;
+      return auth === "Bearer test-new" ? Response.json({ login: "octo" }) : new Response("{}", { status: 401 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(githubApi("/user")).resolves.toEqual({ login: "octo" });
+    expect(githubLogin()).toBe("octo");
+    expect(await readStoredGithub(path.join(dir, "github.json"))).toMatchObject({ token: "test-new", refreshToken: "test-refresh-2" });
+  });
+
   it("reads no connection when the file doesn't exist", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-gh-"));
     expect(await readStoredGithub(path.join(dir, "github.json"))).toBeNull();

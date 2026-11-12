@@ -11,7 +11,14 @@ import { randomBytes } from "node:crypto";
 interface Stored {
   token: string;
   login: string;
+  /** GitHub App sign-ins expire (8 hours by default) and come with a refresh token. OAuth App tokens have neither. */
+  refreshToken?: string;
+  /** Epoch ms when `token` expires. */
+  expiresAt?: number;
 }
+
+/** Refresh this long before expiry, so a request never goes out with a token about to lapse. */
+const REFRESH_MARGIN_MS = 5 * 60_000;
 
 let stored: Stored | null = null;
 let file: string | null = null;
@@ -35,7 +42,12 @@ export async function readStoredGithub(target: string): Promise<Stored | null> {
   }
   const s = JSON.parse(text) as Partial<Stored>;
   if (typeof s.token !== "string" || typeof s.login !== "string") throw new Error(`${target} has no GitHub account in it`);
-  return { token: s.token, login: s.login };
+  return {
+    token: s.token,
+    login: s.login,
+    ...(typeof s.refreshToken === "string" ? { refreshToken: s.refreshToken } : {}),
+    ...(typeof s.expiresAt === "number" ? { expiresAt: s.expiresAt } : {}),
+  };
 }
 
 export async function loadGithub(workspace: string): Promise<void> {
@@ -55,6 +67,58 @@ export async function loadGithub(workspace: string): Promise<void> {
  */
 export async function ensureGithubLoaded(): Promise<void> {
   if (!stored && file) await loadGithub(path.dirname(file));
+  if (stored?.refreshToken && stored.expiresAt && Date.now() > stored.expiresAt - REFRESH_MARGIN_MS) {
+    await refreshGithub().catch((e: unknown) => console.error(`[github] refresh failed: ${e instanceof Error ? e.message : String(e)}`));
+  }
+}
+
+interface TokenResponse {
+  access_token?: string;
+  expires_in?: number;
+  refresh_token?: string;
+  error?: string;
+  error_description?: string;
+}
+
+const tokenUrl = "https://github.com/login/oauth/access_token";
+
+async function requestToken(params: Record<string, string>): Promise<TokenResponse> {
+  const res = await fetch(tokenUrl, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: process.env.GITHUB_CLIENT_ID, client_secret: process.env.GITHUB_CLIENT_SECRET, ...params }),
+    signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+  });
+  return (await res.json()) as TokenResponse;
+}
+
+function storedFrom(body: TokenResponse, login: string, now = Date.now()): Stored {
+  return {
+    token: body.access_token!,
+    login,
+    ...(body.refresh_token ? { refreshToken: body.refresh_token } : {}),
+    ...(body.expires_in ? { expiresAt: now + body.expires_in * 1000 } : {}),
+  };
+}
+
+let refreshing: Promise<boolean> | null = null;
+
+/** Swap an expiring GitHub App sign-in for a new one. One refresh at a time: GitHub retires the refresh token on use. */
+function refreshGithub(): Promise<boolean> {
+  refreshing ??= (async () => {
+    const current = stored;
+    if (!current?.refreshToken) return false;
+    const body = await requestToken({ grant_type: "refresh_token", refresh_token: current.refreshToken });
+    if (!body.access_token) throw new Error(body.error_description ?? body.error ?? "GitHub didn't return access.");
+    stored = storedFrom(body, current.login);
+    rejectedToken = null;
+    if (file) await saveStored(file, stored);
+    console.log(`[github] refreshed the connection for ${current.login}`);
+    return true;
+  })().finally(() => {
+    refreshing = null;
+  });
+  return refreshing;
 }
 
 async function saveStored(target: string, s: Stored): Promise<void> {
@@ -77,18 +141,13 @@ export async function finishOAuth(code: string, state: string, redirectUri: stri
   const exp = states.get(state);
   states.delete(state);
   if (!exp || exp < Date.now()) throw new Error("This sign-in link expired. Try Connect GitHub again.");
-  const res = await fetch("https://github.com/login/oauth/access_token", {
-    method: "POST",
-    headers: { Accept: "application/json", "Content-Type": "application/json" },
-    body: JSON.stringify({ client_id: process.env.GITHUB_CLIENT_ID, client_secret: process.env.GITHUB_CLIENT_SECRET, code, redirect_uri: redirectUri }),
-  });
-  const body = (await res.json()) as { access_token?: string; error_description?: string };
+  const body = await requestToken({ code, redirect_uri: redirectUri });
   if (!body.access_token) throw new Error(body.error_description ?? "GitHub didn't return access.");
   const user = (await api("/user", body.access_token)) as { login: string };
-  stored = { token: body.access_token, login: user.login };
+  stored = storedFrom(body, user.login);
   rejectedToken = null;
   if (file) await saveStored(file, stored);
-  console.log(`[github] connected as ${user.login}`);
+  console.log(`[github] connected as ${user.login}${stored.expiresAt ? `, expires ${new Date(stored.expiresAt).toISOString()}, refreshable` : ", no expiry"}`);
 }
 
 /** Only the Disconnect button removes the saved connection. */
@@ -118,7 +177,7 @@ export async function listGithubRepos(): Promise<GithubRepo[]> {
 
 const GITHUB_API_TIMEOUT_MS = 30_000;
 
-async function api(p: string, token: string, method = "GET", body?: unknown): Promise<unknown> {
+async function api(p: string, token: string, method = "GET", body?: unknown, retried = false): Promise<unknown> {
   const res = await fetch(`https://api.github.com${p}`, {
     method,
     headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "lens", ...(body ? { "Content-Type": "application/json" } : {}) },
@@ -126,6 +185,11 @@ async function api(p: string, token: string, method = "GET", body?: unknown): Pr
     signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
   });
   if (res.status === 401) {
+    // An expired GitHub App sign-in: refresh once and retry with the new token.
+    if (!retried && stored?.token === token && stored.refreshToken) {
+      const ok = await refreshGithub().catch((e: unknown) => (console.error(`[github] refresh failed: ${e instanceof Error ? e.message : String(e)}`), false));
+      if (ok && stored) return api(p, stored.token, method, body, true);
+    }
     if (stored?.token === token) {
       // Stop using it, but leave the file: deleting it on one 401 is how the connection used to vanish.
       rejectedToken = token;
