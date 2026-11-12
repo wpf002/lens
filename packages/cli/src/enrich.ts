@@ -277,7 +277,11 @@ export class EnrichRunner {
     const job: EnrichJob = { task, root, state: "running", startedAt: Date.now(), budgetUsd, progress: ["Preparing context"], ...(task === "remediate" ? { source: opts.source ?? "audit", checkId: opts.checkId } : {}) };
     this.job = job;
     console.log(`[ai] start ${task}${job.source ? `/${job.source}` : ""} in ${path.basename(root)}, limit $${budgetUsd}`);
-    (task === "audit" ? this.runAudit(job) : task === "summaries" ? this.runSummaries(job) : task === "review" ? this.runReview(job, !!opts.fixNew) : task === "remediate" ? this.runRemediate(job, opts.source ?? "audit", opts.checkId, opts.note) : this.runDomain(job)).catch((e: unknown) => this.finish(job, "error", (e as Error).message));
+    (task === "audit" ? this.runAudit(job) : task === "summaries" ? this.runSummaries(job) : task === "review" ? this.runReview(job, !!opts.fixNew) : task === "remediate" ? this.runRemediate(job, opts.source ?? "audit", opts.checkId, opts.note) : this.runDomain(job)).catch((e: unknown) => {
+      // The message alone doesn't say which step failed (a WASM trap reads "memory access out of bounds").
+      if (e instanceof Error && e.stack) console.error(`[ai] ${task} failed: ${e.stack}`);
+      this.finish(job, "error", e instanceof Error ? e.message : String(e));
+    });
     return job;
   }
 

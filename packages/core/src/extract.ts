@@ -2,7 +2,7 @@
  * Structural extraction from tree-sitter ASTs. One table-driven walker covers
  * every grammar; per-language tables only list node types and import shapes.
  */
-import { parse, type SyntaxNode } from "./treesitter.js";
+import { dropParser, parse, type SyntaxNode, type Tree } from "./treesitter.js";
 
 export interface SymbolInfo {
   name: string;
@@ -526,6 +526,26 @@ export async function extractStructure(grammar: string, source: string): Promise
   if (!spec) return empty;
   const tree = await parse(grammar, source);
   if (!tree) return empty;
+  try {
+    return walkStructure(grammar, spec, tree, source);
+  } catch (e) {
+    // A WASM trap can leave the parser unusable; later files get a fresh one.
+    dropParser(grammar);
+    throw e;
+  } finally {
+    freeTree(tree);
+  }
+}
+
+function freeTree(tree: Tree): void {
+  try {
+    tree.delete();
+  } catch {
+    // Freeing a tree whose parser trapped can trap again; the memory is lost either way.
+  }
+}
+
+function walkStructure(grammar: string, spec: Spec, tree: Tree, source: string): Structure {
   SRC = source;
 
   const symbols: SymbolInfo[] = [];
@@ -658,7 +678,6 @@ export async function extractStructure(grammar: string, source: string): Promise
   const first = tree.rootNode.namedChild(0);
   if (first && /comment/.test(first.type) && first.startPosition.row < 3) fileDoc = cleanComment(first.text);
   else if (first?.type === "expression_statement" && first.namedChild(0)?.type === "string") fileDoc = cleanComment(first.text);
-  tree.delete();
   return { symbols, imports, calls, exports: [...exports], fileDoc, parsed: true };
 }
 

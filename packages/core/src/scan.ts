@@ -170,17 +170,23 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
     const tFile = Date.now();
     const { lang } = r.f;
     if (lang.category === "code" || lang.category === "test" || lang.category === "script") {
-      if (supportsGrammar(lang.grammar)) r.structure = await extractStructure(lang.grammar!, r.src);
-      else if (lang.id === "vue" || lang.id === "svelte") {
-        const script = /<script[^>]*>([\s\S]*?)<\/script>/.exec(r.src);
-        if (script) {
-          const offset = r.src.slice(0, script.index).split("\n").length - 1;
-          const s = await extractStructure(/lang=["']ts["']/.test(script[0]) ? "typescript" : "javascript", script[1]!);
-          for (const x of s.symbols) x.lines = [x.lines[0] + offset, x.lines[1] + offset];
-          for (const x of s.imports) x.line += offset;
-          for (const x of s.calls) x.line += offset;
-          r.structure = s;
+      try {
+        if (supportsGrammar(lang.grammar)) r.structure = await extractStructure(lang.grammar!, r.src);
+        else if (lang.id === "vue" || lang.id === "svelte") {
+          const script = /<script[^>]*>([\s\S]*?)<\/script>/.exec(r.src);
+          if (script) {
+            const offset = r.src.slice(0, script.index).split("\n").length - 1;
+            const s = await extractStructure(/lang=["']ts["']/.test(script[0]) ? "typescript" : "javascript", script[1]!);
+            for (const x of s.symbols) x.lines = [x.lines[0] + offset, x.lines[1] + offset];
+            for (const x of s.imports) x.line += offset;
+            for (const x of s.calls) x.line += offset;
+            r.structure = s;
+          }
         }
+      } catch (e) {
+        // One file the parser can't handle shouldn't fail the whole scan; it falls back to the non-code parser.
+        delete r.structure;
+        console.error(`[scan] couldn't parse ${r.f.path}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
     if (!r.structure?.parsed || lang.category !== "code") r.noncode = parseNonCode(r.f.path, lang.id, r.src);

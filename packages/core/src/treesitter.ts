@@ -67,7 +67,19 @@ export async function parse(grammar: string, source: string): Promise<Tree | nul
   try {
     return parser.parse(source);
   } catch {
+    dropParser(grammar);
     return null;
+  }
+}
+
+/** Forget a grammar's parser after it trapped, so the next file gets a fresh one. */
+export function dropParser(grammar: string): void {
+  const parser = parsers.get(grammar);
+  parsers.delete(grammar);
+  try {
+    parser?.delete();
+  } catch {
+    // A parser that already trapped may fail to free; it is unreachable either way.
   }
 }
 
