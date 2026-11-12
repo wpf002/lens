@@ -21,7 +21,7 @@ export interface Meta {
   /** Hosted server: projects are GitHub repos and fixes leave as a pushed branch. */
   cloud?: boolean;
   /** Hosted server: GitHub sign-in state. */
-  github?: { available: boolean; login: string | null };
+  github?: { available: boolean; login: string | null; app?: boolean };
   /** Hosted server can push fix branches. */
   canPush?: boolean;
   /** `owner/name` of the repo being shown (hosted server only). */

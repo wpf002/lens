@@ -1,5 +1,6 @@
 /**
- * Hosted mode: "Connect GitHub" via a GitHub OAuth App. The app's client ID and
+ * Hosted mode. With GITHUB_APP_ID set, the server authenticates as a GitHub App
+ * installation (github-app.ts) and nobody signs in. Otherwise "Connect GitHub" via a GitHub OAuth App. The app's client ID and
  * secret come from GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET. The access token
  * GitHub returns is stored in the workspace volume (mode 600) and only ever
  * reaches git as a per-command auth header.
@@ -7,6 +8,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { AppAuth, readAppConfig } from "./github-app.js";
 
 interface Stored {
   token: string;
@@ -25,11 +27,27 @@ let file: string | null = null;
 /** A token GitHub rejected. Kept on disk until the user reconnects or disconnects, but never used. */
 let rejectedToken: string | null = null;
 const states = new Map<string, number>();
+let app: AppAuth | null = null;
 
 export const oauthAvailable = () => !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET);
-// The account connected in the app wins, so reconnecting fixes a stale server credential.
-export const githubToken = (): string | null => stored?.token || process.env.GITHUB_TOKEN || null;
-export const githubLogin = (): string | null => stored?.login ?? null;
+export const githubAppMode = () => app !== null;
+export const githubConnected = (): boolean => app !== null || !!stored?.token || !!process.env.GITHUB_TOKEN;
+/** The last token handed out, without renewing it. Only for scrubbing it out of messages. */
+export const githubToken = (): string | null => (app ? app.current() : stored?.token || process.env.GITHUB_TOKEN || null);
+export const githubLogin = (): string | null => (app ? app.login() : (stored?.login ?? null));
+
+/** A usable token: a fresh app installation token, or the connected account's. */
+export async function githubAuthToken(): Promise<string | null> {
+  // The account connected in the app wins over GITHUB_TOKEN, so reconnecting fixes a stale server credential.
+  return app ? app.token() : stored?.token || process.env.GITHUB_TOKEN || null;
+}
+
+/** Turns on GitHub App mode when its env is set. Throws on a half-set config so the server fails at startup. */
+export function configureGithubApp(env: NodeJS.ProcessEnv = process.env): void {
+  const config = readAppConfig(env);
+  app = config ? new AppAuth(config) : null;
+  if (app) console.log("[github] using the GitHub App installation");
+}
 
 /** The saved connection, or null when there is none. Throws when the file exists but can't be read. */
 export async function readStoredGithub(target: string): Promise<Stored | null> {
@@ -67,6 +85,10 @@ export async function loadGithub(workspace: string): Promise<void> {
  * Call before any action that needs GitHub.
  */
 export async function ensureGithubLoaded(): Promise<void> {
+  if (app) {
+    await app.token().catch((e: unknown) => console.error(`[github] couldn't mint an app token: ${e instanceof Error ? e.message : String(e)}`));
+    return;
+  }
   if (!stored && file) await loadGithub(path.dirname(file));
   if (stored?.refreshToken && stored.expiresAt && Date.now() > stored.expiresAt - REFRESH_MARGIN_MS) {
     await refreshGithub().catch((e: unknown) => console.error(`[github] refresh failed: ${e instanceof Error ? e.message : String(e)}`));
@@ -172,15 +194,23 @@ export interface GithubRepo {
   pushedAt: string;
 }
 
+interface RepoRow {
+  full_name: string;
+  private: boolean;
+  pushed_at: string;
+}
+
+const toGithubRepo = (r: RepoRow): GithubRepo => ({ name: r.full_name, private: r.private, pushedAt: r.pushed_at });
+
 export async function listGithubRepos(): Promise<GithubRepo[]> {
-  const t = githubToken();
+  const t = await githubAuthToken();
   if (!t) return [];
-  const rows = (await api("/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member", t)) as {
-    full_name: string;
-    private: boolean;
-    pushed_at: string;
-  }[];
-  return rows.map((r) => ({ name: r.full_name, private: r.private, pushedAt: r.pushed_at }));
+  if (app) {
+    const body = (await api("/installation/repositories?per_page=100", t)) as { repositories: RepoRow[] };
+    return body.repositories.map(toGithubRepo).sort((a, b) => b.pushedAt.localeCompare(a.pushedAt));
+  }
+  const rows = (await api("/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member", t)) as RepoRow[];
+  return rows.map(toGithubRepo);
 }
 
 const GITHUB_API_TIMEOUT_MS = 30_000;
@@ -192,6 +222,12 @@ async function api(p: string, token: string, method = "GET", body?: unknown, ret
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
   });
+  if (res.status === 401 && app) {
+    // Installation tokens are minted on demand: drop the refused one and mint again once.
+    app.invalidate(token);
+    if (!retried) return api(p, await app.token(), method, body, true);
+    throw new Error("GitHub refused the GitHub App's token. Check the app is still installed.");
+  }
   if (res.status === 401) {
     // An expired GitHub App sign-in: refresh once and retry with the new token.
     if (!retried && stored?.token === token && stored.refreshToken) {
@@ -216,8 +252,8 @@ async function api(p: string, token: string, method = "GET", body?: unknown, ret
 }
 
 /** Authenticated GitHub REST call for the connected account. */
-export function githubApi(p: string, method = "GET", body?: unknown): Promise<unknown> {
-  const t = githubToken();
+export async function githubApi(p: string, method = "GET", body?: unknown): Promise<unknown> {
+  const t = await githubAuthToken();
   if (!t) throw new Error("Connect GitHub first.");
   return api(p, t, method, body);
 }
@@ -227,22 +263,25 @@ export interface GitIdentity {
   email: string;
 }
 
-let identityCache: { token: string; identity: GitIdentity } | null = null;
+let identityCache: { key: string; identity: GitIdentity } | null = null;
 
 /** The connected account as a commit author, with GitHub's private noreply email. Null when not connected. */
 export async function githubIdentity(): Promise<GitIdentity | null> {
-  const t = githubToken();
+  const t = await githubAuthToken();
   if (!t) return null;
-  if (identityCache?.token === t) return identityCache.identity;
-  const user = (await api("/user", t)) as { id: number; login: string; name: string | null };
+  // App tokens can't read /user; commits go out as the account the app is installed on.
+  const login = app?.login();
+  const key = login ? `app:${login}` : t;
+  if (identityCache?.key === key) return identityCache.identity;
+  const user = (await api(login ? `/users/${encodeURIComponent(login)}` : "/user", t)) as { id: number; login: string; name: string | null };
   const identity = { name: user.name?.trim() || user.login, email: `${user.id}+${user.login}@users.noreply.github.com` };
-  identityCache = { token: t, identity };
+  identityCache = { key, identity };
   return identity;
 }
 
 /** Plain-text GitHub download (Actions job logs). Returns null when GitHub has no log for it. */
 export async function githubText(p: string, maxBytes = 5_000_000): Promise<string | null> {
-  const t = githubToken();
+  const t = await githubAuthToken();
   if (!t) throw new Error("Connect GitHub first.");
   // Logs redirect to a signed URL; fetch drops the auth header on that cross-origin hop.
   const res = await fetch(`https://api.github.com${p}`, { headers: { Authorization: `Bearer ${t}`, "User-Agent": "lens" }, signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) });

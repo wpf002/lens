@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { createHmac, randomBytes } from "node:crypto";
-import { githubApi, githubIdentity, githubToken, type GitIdentity } from "./github.js";
+import { githubApi, githubAuthToken, githubConnected, githubIdentity, githubToken, type GitIdentity } from "./github.js";
 import { branchNameFor, commitMessage, fixesTouching, pullRequestText, type AppliedFix } from "./commit-text.js";
 import { brokenCount, testGate, type TestGate } from "./ci.js";
 
@@ -32,19 +32,20 @@ export function parseRepo(input: string): RepoRef | null {
 export const reposDir = (workspace: string) => path.join(workspace, "repos");
 export const repoDir = (workspace: string, r: RepoRef) => path.join(reposDir(workspace), r.owner, r.name);
 
-function authArgs(): string[] {
-  const t = githubToken();
+async function authArgs(): Promise<string[]> {
+  const t = await githubAuthToken();
   if (!t) return [];
   const basic = Buffer.from(`x-access-token:${t}`).toString("base64");
   return ["-c", `http.https://github.com/.extraheader=Authorization: Basic ${basic}`];
 }
 
-function git(cwd: string, args: string[], timeout = 5 * 60_000): Promise<string> {
+async function git(cwd: string, args: string[], timeout = 5 * 60_000): Promise<string> {
+  const auth = await authArgs();
   return new Promise((resolve, reject) => {
     execFile(
       "git",
       // HTTP/2 drops large pushes to GitHub ("RPC failed; curl 92"); HTTP/1.1 with a big buffer doesn't.
-      [...authArgs(), "-c", "http.version=HTTP/1.1", "-c", "http.postBuffer=524288000", ...args],
+      [...auth, "-c", "http.version=HTTP/1.1", "-c", "http.postBuffer=524288000", ...args],
       { cwd, timeout, maxBuffer: 20_000_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
       (err, stdout, stderr) => {
         if (err) return reject(new Error(scrub(stderr.trim() || err.message)));
@@ -307,11 +308,11 @@ export async function pushState(root: string): Promise<PushInfo | null> {
     const [n, url, saved] = merged.split(" ");
     if (!n || !url) return null;
     // Merges recorded before Lens saved the time: ask GitHub once and keep the answer.
-    const mergedAt = saved || (githubToken() ? await mergedTime(root, Number(n)).catch(() => undefined) : undefined);
+    const mergedAt = saved || (githubConnected() ? await mergedTime(root, Number(n)).catch(() => undefined) : undefined);
     return { branch: null, dirty, pr: { number: Number(n), url, state: "merged", ...(mergedAt ? { mergedAt } : {}) } };
   }
   // Shallow clones are single-branch, so there's no local origin/<branch> ref to check. Ask GitHub.
-  const pr = githubToken() ? await findPr(root, await repoOf(root), branch).catch(() => null) : null;
+  const pr = githubConnected() ? await findPr(root, await repoOf(root), branch).catch(() => null) : null;
   return { branch, dirty, pr };
 }
 

@@ -17,7 +17,7 @@ import { promises as fs, statSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { authorizeUrl, disconnectGithub, ensureGithubLoaded, finishOAuth, githubLogin, githubToken, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
+import { authorizeUrl, configureGithubApp, disconnectGithub, ensureGithubLoaded, finishOAuth, githubAppMode, githubConnected, githubLogin, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
 import { cloneOrUpdate, commitFilesAndPush, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, type PushInfo } from "./cloud.js";
 import { MAX_TEST_REPAIRS, gateNeedsWork, recordRepairAttempt, repairItems, saveRepairItems, type TestGate } from "./ci.js";
 import { grantCheckPermissions } from "./ci-permissions.js";
@@ -220,7 +220,10 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
     res.end(data);
   };
 
-  if (opts.cloud) await loadGithub(opts.cloud.workspace);
+  if (opts.cloud) {
+    configureGithubApp();
+    await loadGithub(opts.cloud.workspace);
+  }
   /** OAuth callback on this host, as the browser sees it behind Railway's proxy. */
   const callbackUrl = (req: http.IncomingMessage) => {
     const first = (h: string | string[] | undefined) => (Array.isArray(h) ? h[0] : h)?.split(",")[0]?.trim();
@@ -281,7 +284,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
 
       if (req.method === "GET" && url.pathname === "/api/meta") {
         const { graph } = await getGraph();
-        return send(res, 200, { project: graph.project, hasEmbeddings: !!proj.embeddings, git: proj.git, root: proj.root, canPick: !opts.cloud && process.platform === "darwin", cloud: !!opts.cloud, canPush: !!opts.cloud && !!githubToken(), github: opts.cloud ? { available: oauthAvailable(), login: githubLogin() } : undefined, repo: repoName(proj.root), canEnrich: !proj.graphFile, ...(await estimatesFor(proj.root, graph, !proj.graphFile)) });
+        return send(res, 200, { project: graph.project, hasEmbeddings: !!proj.embeddings, git: proj.git, root: proj.root, canPick: !opts.cloud && process.platform === "darwin", cloud: !!opts.cloud, canPush: !!opts.cloud && githubConnected(), github: opts.cloud ? { available: oauthAvailable() || githubAppMode(), login: githubLogin(), app: githubAppMode() } : undefined, repo: repoName(proj.root), canEnrich: !proj.graphFile, ...(await estimatesFor(proj.root, graph, !proj.graphFile)) });
       }
       if (req.method === "GET" && url.pathname === "/api/graph") {
         const { graph } = await getGraph();
@@ -424,6 +427,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         return send(res, 200, enrich.job ?? { state: "idle" });
       }
       if (opts.cloud && req.method === "GET" && url.pathname === "/api/github/connect") {
+        if (githubAppMode()) return send(res, 400, { error: "Lens is connected through the GitHub App." });
         if (!oauthAvailable()) return send(res, 400, { error: "Add GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in Railway." });
         return send(res, 200, { url: authorizeUrl(callbackUrl(req)) });
       }
@@ -454,13 +458,13 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         return send(res, 200, { state: withRepairFlag(st) });
       }
       if (opts.cloud && req.method === "POST" && url.pathname === "/api/project/push") {
-        if (!githubToken()) return send(res, 400, { error: "Connect GitHub to push, or use Download Patch." });
+        if (!githubConnected()) return send(res, 400, { error: "Connect GitHub to push, or use Download Patch." });
         if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });
         if (!repoName(proj.root)) return send(res, 400, { error: "this project isn't a cloned repo" });
         return send(res, 200, await pushFixes(proj.root, await appliedFixes(proj.root)));
       }
       if (opts.cloud && req.method === "POST" && (url.pathname === "/api/project/pr" || url.pathname === "/api/project/merge")) {
-        if (!githubToken()) return send(res, 400, { error: "Connect GitHub first." });
+        if (!githubConnected()) return send(res, 400, { error: "Connect GitHub first." });
         if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });
         if (!repoName(proj.root)) return send(res, 400, { error: "this project isn't a cloned repo" });
         if (url.pathname === "/api/project/merge") {

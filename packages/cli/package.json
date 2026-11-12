@@ -14,7 +14,8 @@
   "dependencies": {
     "@lens/core": "workspace:*",
     "commander": "^14.0.0",
-    "picocolors": "^1.1.1"
+    "picocolors": "^1.1.1",
+    "zod": "4.1.12"
   },
   "devDependencies": {
     "@lens/dashboard": "workspace:*",

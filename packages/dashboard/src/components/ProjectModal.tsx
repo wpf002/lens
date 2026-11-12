@@ -76,9 +76,11 @@ export function ProjectModal() {
                   <span className="text-[12px] text-muted">
                     GitHub <span className="font-mono text-fg">@{ghLogin}</span>
                   </span>
-                  <Button size="sm" onClick={() => void disconnect()}>
-                    Disconnect
-                  </Button>
+                  {!gh.app && (
+                    <Button size="sm" onClick={() => void disconnect()}>
+                      Disconnect
+                    </Button>
+                  )}
                 </>
               ) : (
                 <Button variant="accent" className="h-10 w-full text-[13px]" onClick={() => void connect()}>
