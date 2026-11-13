@@ -14,7 +14,7 @@ import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyFixes, buildRecord, loadRemediation, markUnaddressed, remediationPath, type RemediationRecord, type RemediationSource } from "./remediate.js";
-import { collectChanges, makeWorkspace } from "./workspace.js";
+import { collectChanges, makeWorkspace, NO_CHANGE_REASON } from "./workspace.js";
 import { actionPinFix } from "./action-pins.js";
 import { AuditVerdictsSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type Finding, type KnowledgeGraph } from "@lens/core";
 
@@ -94,6 +94,15 @@ const REVIEW_BATCH_HIGH_USD = 0.9;
 const MAX_REVIEW_USD = 150;
 /** Per-batch cap passed to Claude, so one batch can't take the whole review's budget. */
 const REVIEW_BATCH_LIMIT_USD = 2;
+/** One thing for Claude to fix, as items.json lists it. */
+interface RemediationItem {
+  id: string;
+  title: string;
+  evidence: string[];
+  fix?: string;
+}
+/** Added to an item's evidence when Lens retries a fix that changed no files. */
+const NO_CHANGE_NOTE = "An earlier attempt reported this fixed but changed no files. Make the edit this time, or skip it with the reason no change is needed.";
 /** Below this, a Claude run can't do useful work. */
 const MIN_RUN_USD = 0.3;
 /** Spend allowed for reviewing Lens's own changes after a fix run, and for fixing what it finds. */
@@ -756,37 +765,70 @@ export class EnrichRunner {
     return added ?? [];
   }
 
-  /** One fix round for problems the check found in Lens's own changes. */
-  private async fixFindings(job: EnrichJob, source: RemediationSource, added: number[]) {
+  /**
+   * Fix what the check of Lens's own changes found, then check those fixes, until a check
+   * comes back clean. The run's budget stops it, and a round that changes nothing ends it.
+   */
+  private async fixOwnFindings(job: EnrichJob, source: RemediationSource, added: number[], covered: Set<string>): Promise<void> {
+    let found = added;
+    while (found.length && job.state === "running") {
+      const changed = await this.fixFindings(job, source, found);
+      if (!changed.length) return;
+      found = await this.reviewOwnChanges(job, changed, covered);
+    }
+  }
+
+  /** One fix round for problems the check found in Lens's own changes. Returns the files it changed. */
+  private async fixFindings(job: EnrichJob, source: RemediationSource, added: number[]): Promise<string[]> {
     const { root } = job;
     const ledger = await loadReview(root);
     const items = added.map((i) => ({ i, f: ledger.findings[i]! })).map(({ i, f }) => ({ id: `review-${i}`, title: f.title, evidence: [`${f.path}${f.line ? `:${f.line}` : ""} ${f.detail}`], fix: f.fix }));
+    if (!items.length) return [];
+    const first = await this.fixRound(job, source, items);
+    const retry = items.filter((i) => first?.noChange.includes(i.id)).map((i) => ({ ...i, evidence: [...i.evidence, NO_CHANGE_NOTE] }));
+    const second = retry.length && job.state === "running" ? await this.fixRound(job, source, retry, true) : null;
+    await this.settleItems(root, source, items.map((i) => i.id));
+    return [...new Set([...(first?.changed ?? []), ...(second?.changed ?? [])])];
+  }
+
+  /** Draft and apply fixes for these items. A retry replaces the attempt that changed no files. */
+  private async fixRound(job: EnrichJob, source: RemediationSource, items: RemediationItem[], retry = false): Promise<{ changed: string[]; noChange: string[] } | null> {
+    const { root } = job;
+    const ids = items.map((i) => i.id);
     const remaining = job.budgetUsd - (job.costUsd ?? 0);
-    if (!items.length) return;
-    if (remaining < MIN_RUN_USD) return this.settleItems(root, source, items.map((i) => i.id), "Lens stopped first: reached the spending limit.");
-    this.push(job, `Fixing ${items.length} problem${items.length === 1 ? "" : "s"} in Lens's changes`);
+    if (remaining < MIN_RUN_USD) {
+      await this.settleItems(root, source, ids, "Lens stopped first: reached the spending limit.");
+      return null;
+    }
+    const plural = items.length === 1 ? "" : "s";
+    this.push(job, retry ? `Retrying ${items.length} fix${plural === "s" ? "es" : ""} that changed no files` : `Fixing ${items.length} problem${plural} in Lens's changes`);
     const saved = job.budgetUsd;
     job.costBase = job.costUsd ?? 0;
     job.budgetUsd = Math.round(Math.min(remaining, estimateCost("remediate", items.length).limit) * 100) / 100;
     const { data, error } = await this.draftFixes(job, items, false);
     job.budgetUsd = saved;
-    if (job.state !== "running") return;
+    if (job.state !== "running") return null;
     if (!data) {
       this.push(job, `No fix for the problems in Lens's changes${error ? `: ${error.split("\n")[0]}` : ""}`);
-      return this.settleItems(root, source, items.map((i) => i.id), error?.split("\n")[0]?.slice(0, 600));
+      await this.settleItems(root, source, ids, error?.split("\n")[0]?.slice(0, 600));
+      return null;
     }
     const rec = buildRecord(root, source, data, undefined, undefined, `c${Date.now().toString(36)}`);
     const prior = await loadRemediation(root, source);
-    const merged = prior ? { ...prior, generatedAt: rec.generatedAt, costUsd: job.costUsd, fixes: [...prior.fixes, ...rec.fixes], skipped: [...prior.skipped, ...rec.skipped], edits: { ...prior.edits, ...rec.edits } } : rec;
+    const mine = new Set(ids);
+    const priorSkipped = (prior?.skipped ?? []).filter((x) => !(retry && mine.has(x.itemId) && x.reason === NO_CHANGE_REASON));
+    const merged = prior ? { ...prior, generatedAt: rec.generatedAt, costUsd: job.costUsd, fixes: [...prior.fixes, ...rec.fixes], skipped: [...priorSkipped, ...rec.skipped], edits: { ...prior.edits, ...rec.edits } } : rec;
     await writeJsonAtomic(remediationPath(root, source), merged, true);
     const valid = rec.fixes.filter((f) => !f.invalid).map((f) => f.id);
+    let applied: string[] = [];
     if (valid.length) {
-      const { applied } = await applyFixes(root, source, valid);
+      applied = (await applyFixes(root, source, valid)).applied;
       if (job.remediation) job.remediation.applied = (job.remediation.applied ?? 0) + applied.length;
       this.push(job, "Rescanning");
       await scanAndSave(root);
     }
-    await this.settleItems(root, source, items.map((i) => i.id));
+    const fixedNow = new Set(rec.fixes.filter((f) => !f.invalid).map((f) => f.itemId));
+    return { changed: changedPaths(rec, applied), noChange: rec.skipped.filter((x) => x.reason === NO_CHANGE_REASON && !fixedNow.has(x.itemId)).map((x) => x.itemId) };
   }
 
   /** Every item a run sent to Claude ends fixed or with a reason on the row. */
@@ -881,8 +923,7 @@ export class EnrichRunner {
     }
     await this.settleItems(root, source, items.map((i) => i.id));
     job.remediation = { source, proposed: valid.length, invalid: record.fixes.filter((f) => f.invalid).length, skipped: record.skipped.length, applied };
-    const added = await this.reviewOwnChanges(job, changedPaths(record, valid), covered);
-    if (added.length) await this.fixFindings(job, source, added);
+    await this.fixOwnFindings(job, source, await this.reviewOwnChanges(job, changedPaths(record, valid), covered), covered);
     this.finish(job, "done");
   }
 
@@ -912,6 +953,8 @@ export class EnrichRunner {
     const progress = { attempted: 0, total, fixed: 0, batches: 0 } as NonNullable<EnrichJob["fixAll"]>;
     job.fixAll = progress;
     const tried = new Set<string>();
+    // Items whose fix changed no files get one more attempt, told so.
+    const retried = new Set<string>();
     const runTag = Date.now().toString(36);
     // Keep earlier applied fixes (for Undo and the FIXED badge) and skips that found the code already safe.
     // Review ids (review-<i>) are stable since the ledger started; older records used other numbering.
@@ -929,7 +972,9 @@ export class EnrichRunner {
     // One pass over every untried open item, in batches.
     const fixPending = async () => {
       while (job.state === "running") {
-        const left = (await pending()).filter((i) => !tried.has(`${i.title}|${i.evidence[0]}`));
+        const left = (await pending())
+          .filter((i) => !tried.has(`${i.title}|${i.evidence[0]}`))
+          .map((i) => (retried.has(i.id) ? { ...i, evidence: [...i.evidence, NO_CHANGE_NOTE] } : i));
         // A refactor runs alone so Claude has the whole budget and time for it.
         const items = left[0] && isRefactorItem(left[0].id) ? [left[0]] : left.filter((i) => !isRefactorItem(i.id)).slice(0, FIX_ALL_BATCH);
         if (!items.length) break;
@@ -981,7 +1026,15 @@ export class EnrichRunner {
           progress.stopped = "three batches in a row produced nothing to apply";
           break;
         }
-        markUnaddressed(merged, items.map((i) => i.id));
+        const fixedNow = new Set(rec.fixes.filter((f) => !f.invalid).map((f) => f.itemId));
+        const retry = new Set(rec.skipped.filter((x) => x.reason === NO_CHANGE_REASON && !fixedNow.has(x.itemId) && !retried.has(x.itemId)).map((x) => x.itemId));
+        if (retry.size) {
+          merged.skipped = merged.skipped.filter((x) => !(retry.has(x.itemId) && x.reason === NO_CHANGE_REASON));
+          for (const i of items) if (retry.has(i.id)) tried.delete(`${i.title}|${i.evidence[0]}`);
+          for (const id of retry) retried.add(id);
+          await writeJsonAtomic(remediationPath(root, source), merged, true);
+        }
+        markUnaddressed(merged, items.map((i) => i.id).filter((id) => !retry.has(id)));
       }
     };
     const covered = await coveredFiles(root);
@@ -1050,7 +1103,7 @@ export async function markVerifiedSafe(root: string): Promise<number> {
  * One item per finding id. Findings of the same rule in the same file share an id, and a fix
  * for that id closes all of them, so Claude gets every line, not just the first.
  */
-export async function findingItems(findings: Finding[]): Promise<Array<{ id: string; title: string; evidence: string[]; fix?: string }>> {
+export async function findingItems(findings: Finding[]): Promise<RemediationItem[]> {
   const byId = new Map<string, { id: string; title: string; evidence: string[]; fix?: string }>();
   for (const f of findings) {
     const id = findingItemId(f);
@@ -1198,7 +1251,7 @@ export const FIX_ALL_LIMIT = 20;
 const FIX_ALL_BATCH = 5;
 const SEV_RANK = { high: 0, medium: 1, low: 2 } as const;
 
-export async function remediationItems(root: string, source: RemediationSource, checkId?: string, limit = FIX_ALL_LIMIT): Promise<Array<{ id: string; title: string; evidence: string[]; fix?: string }>> {
+export async function remediationItems(root: string, source: RemediationSource, checkId?: string, limit = FIX_ALL_LIMIT): Promise<RemediationItem[]> {
   if (source === "review") {
     const rec = await readJson<ReviewRecord>(reviewPath(root));
     // ids keep the finding's position in the review so the dashboard can mark it fixed.

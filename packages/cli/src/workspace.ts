@@ -51,6 +51,9 @@ const isBinary = (b: Buffer) => b.subarray(0, 8000).includes(0);
  * keeps no edits and is applied with it. A fix that changed nothing becomes a skip.
  * A file the agent emptied is deleted.
  */
+/** Skip reason for a fix Claude reported without editing anything; Lens retries these once. */
+export const NO_CHANGE_REASON = "Claude reported a fix but changed no files.";
+
 export async function collectChanges(root: string, ws: string, report: WorkspaceReport): Promise<{ data: Remediation; ignored: string[] }> {
   const [before, after] = await Promise.all([listFiles(root), listFiles(ws)]);
   const changed: Array<{ rel: string; old: string | null; now: string | null }> = [];
@@ -85,7 +88,7 @@ export async function collectChanges(root: string, ws: string, report: Workspace
     const edits = changed
       .filter((c) => owner.get(c.rel) === i)
       .map((c) => (c.now === null ? { path: c.rel, find: "", replace: "", delete: true } : { path: c.rel, find: c.old ?? "", replace: c.now }));
-    if (!edits.length && !f.files.some((p) => touched.has(norm(p)))) skipped.push({ itemId: f.itemId, reason: "Claude reported a fix but changed no files." });
+    if (!edits.length && !f.files.some((p) => touched.has(norm(p)))) skipped.push({ itemId: f.itemId, reason: NO_CHANGE_REASON });
     else fixes.push({ itemId: f.itemId, title: f.title, explanation: f.explanation, edits });
   });
   return { data: { summary: report.summary, fixes, skipped }, ignored };

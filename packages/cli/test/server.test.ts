@@ -643,6 +643,77 @@ if (get("Findings path")) {
     }
   });
 
+  it("Fixing one finding keeps fixing what each check of its edits finds, and retries a fix that changed nothing", async () => {
+    const fake = path.join(os.tmpdir(), `fake-loop-${process.pid}.mjs`);
+    const counter = path.join(os.tmpdir(), `fake-loop-count-${process.pid}`);
+    await fs.rm(counter, { force: true });
+    await fs.writeFile(fake, `#!/usr/bin/env node
+import fs from "node:fs";
+const prompt = process.argv[process.argv.indexOf("-p") + 1];
+const get = (k) => new RegExp(k + ": (.+)").exec(prompt)?.[1].trim();
+const done = () => console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, total_cost_usd: 0.05 }));
+const finding = (title) => ({ title, severity: "low", category: "bug", path: "main.py", line: 1, detail: title + ".", fix: "Fix it." });
+if (get("Findings path")) {
+  const ctx = JSON.parse(fs.readFileSync(get("Context"), "utf8"));
+  let findings = [];
+  if (ctx.mode === "changes") {
+    const n = (fs.existsSync(${JSON.stringify(counter)}) ? Number(fs.readFileSync(${JSON.stringify(counter)}, "utf8")) : 0) + 1;
+    fs.writeFileSync(${JSON.stringify(counter)}, String(n));
+    if (n === 1) findings = [finding("First own bug")];
+    if (n === 2) findings = [finding("Second own bug")];
+  } else findings = [{ ...finding("Original bug"), severity: "medium" }];
+  fs.writeFileSync(get("Findings path"), JSON.stringify({ findings }));
+  done();
+} else {
+  const items = JSON.parse(fs.readFileSync(get("Items"), "utf8")).items;
+  const ws = get("Project copy \\\\(edit files here\\\\)");
+  const fixes = [];
+  for (const it of items) {
+    const told = it.evidence.some((e) => e.includes("changed no files"));
+    // The first attempt at the first own bug claims a fix without editing anything.
+    if (it.title === "First own bug" && !told) { fixes.push({ itemId: it.id, title: "Fix", explanation: "Demo.", files: [] }); continue; }
+    fs.appendFileSync(ws + "/main.py", "# " + it.id + "\\n");
+    fixes.push({ itemId: it.id, title: "Fix " + it.title, explanation: "Demo.", files: ["main.py"] });
+  }
+  fs.writeFileSync(get("Report path"), JSON.stringify({ fixes, skipped: [] }));
+  done();
+}
+`);
+    await fs.chmod(fake, 0o755);
+    process.env.LENS_CLAUDE_BIN = fake;
+    const wait = async () => {
+      let job: { state: string; error?: string } = { state: "running" };
+      for (let i = 0; i < 200 && job.state === "running"; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        job = JSON.parse((await get(`${base}/api/enrich/status`, auth())).body);
+      }
+      return job;
+    };
+    const index = async (title: string) => JSON.parse((await get(`${base}/api/review`, auth())).body).review.findings.findIndex((f: { title: string }) => f.title === title);
+    // A new file gives the review something pending to report on.
+    const root = JSON.parse((await get(`${base}/api/meta`, auth())).body).root as string;
+    await fs.writeFile(path.join(root, "loop.py"), "def loop():\n    return 1\n");
+    expect((await post(`${base}/api/project/open`, { path: root }, auth())).status).toBe(200);
+    try {
+      expect((await post(`${base}/api/enrich/review`, {}, auth())).status).toBe(202);
+      expect((await wait()).error).toBeUndefined();
+      const original = await index("Original bug");
+      expect(original).toBeGreaterThanOrEqual(0);
+
+      expect((await post(`${base}/api/enrich/remediate`, { source: "review", checkId: `review-${original}` }, auth())).status).toBe(202);
+      const job = await wait();
+      expect(job.error).toBeUndefined();
+      expect(job.state).toBe("done");
+      const rec = JSON.parse((await get(`${base}/api/remediation`, auth())).body).records.review;
+      const applied = rec.fixes.filter((f: { status: string }) => f.status === "applied").map((f: { itemId: string }) => f.itemId);
+      for (const title of ["Original bug", "First own bug", "Second own bug"]) expect(applied).toContain(`review-${await index(title)}`);
+      expect(rec.skipped).toEqual([]);
+      expect(Number(await fs.readFile(counter, "utf8"))).toBe(3); // checked until a check came back clean
+    } finally {
+      delete process.env.LENS_CLAUDE_BIN;
+    }
+  });
+
   it("The re-review after a merge fixes the findings it adds", async () => {
     const fake = path.join(os.tmpdir(), `fake-merge-${process.pid}.mjs`);
     // An earlier test switched projects; the last job ran in the current one.
