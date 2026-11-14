@@ -15,6 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyFixes, buildRecord, loadRemediation, markUnaddressed, remediationPath, type RemediationRecord, type RemediationSource } from "./remediate.js";
 import { collectChanges, makeWorkspace, NO_CHANGE_REASON } from "./workspace.js";
+import { itemRate, loadFixCosts, recordFixCost, type ItemRate } from "./fix-costs.js";
 import { actionPinFix } from "./action-pins.js";
 import { AuditVerdictsSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type Finding, type KnowledgeGraph } from "@lens/core";
 
@@ -113,10 +114,13 @@ export const FIX_CHECK_RESERVE_USD = 2 * FIX_CHECK_LIMIT_USD;
 /** Budget left below which Fix All skips the re-audit; an audit costs roughly this much. */
 const MIN_REAUDIT_USD = 1.5;
 
+/** Per-item cost of a batch fix before any runs are logged for the project. */
+const DEFAULT_BATCH_ITEM_RATE: ItemRate = { low: 0.15, high: 0.4 };
+
 /** Fix everything with no size limit per fix, with a limit at 1.5x the high end. */
-export function estimateFixAll(items: number): CostEstimate {
-  const low = Math.max(0.3, 0.15 * items);
-  const high = Math.max(0.8, 0.4 * items);
+export function estimateFixAll(items: number, rate: ItemRate = DEFAULT_BATCH_ITEM_RATE): CostEstimate {
+  const low = Math.max(0.3, rate.low * items);
+  const high = Math.max(0.8, rate.high * items);
   return { low: Math.round(low * 100) / 100, high: Math.round(high * 100) / 100, limit: Math.round(Math.min(150, high * 1.5) * 100) / 100 };
 }
 
@@ -188,8 +192,7 @@ const TIMEOUT_MS = 45 * 60_000;
 /** Checks whose fixes are refactors: each item gets its own Claude run and a larger cap. */
 export const REFACTOR_CHECKS = new Set(["oversized", "hotspots", "import-cycles", "layer-violations", "fragmented"]);
 export const REFACTOR_ITEM_LIMIT_USD = 8;
-const REFACTOR_ITEM_LOW_USD = 1;
-const REFACTOR_ITEM_HIGH_USD = 4;
+const DEFAULT_REFACTOR_ITEM_RATE: ItemRate = { low: 1, high: 4 };
 /** Ceiling for one Remediate run over a whole project, review included. */
 const MAX_FIX_ALL_USD = 400;
 const REFACTOR_JOB_LIMIT_USD = 60;
@@ -841,7 +844,7 @@ export class EnrichRunner {
    * Let Claude edit a copy of the project, then diff the copy into whole-file edits.
    * The project itself is untouched until applyFixes, which backs files up for Undo.
    */
-  private async draftFixes(job: EnrichJob, items: unknown[], single: boolean): Promise<{ data: Remediation | null; error?: string }> {
+  private async draftFixes(job: EnrichJob, items: Array<{ id: string }>, single: boolean): Promise<{ data: Remediation | null; error?: string }> {
     const instructions = agentInstructions("remediator");
     if (!existsSync(instructions)) throw new Error(`missing ${instructions}`);
     this.push(job, "Copying the project");
@@ -858,7 +861,9 @@ export class EnrichRunner {
         "If the report write is refused, put the JSON in your final message inside a ```json fence instead.",
         ...(single ? ["The owner picked this one item to fix. If it has an ownerNote, that is the owner's decision on how to fix it. Follow it."] : []),
       ].join("\n");
+      const costBefore = job.costUsd ?? 0;
       const { code, stderr, resultError, resultText } = await this.runClaude(job, prompt, ["Read", "Grep", "Glob", "Edit", "Write"], MODEL_ARGS, ws);
+      if (items.length) await recordFixCost(job.root, items.every((i) => isRefactorItem(i.id)) ? "refactor" : "batch", { items: items.length, usd: Math.max(0, (job.costUsd ?? 0) - costBefore) });
       if (job.state !== "running") return { data: null };
       let raw = await readJson<unknown>(outPath);
       if (!raw) {
@@ -1198,17 +1203,22 @@ export async function fixAllPlan(root: string, source: "audit" | "health"): Prom
   const items = open.length;
   // Refactors each get their own run and cap, so they're priced apart from batch fixes.
   const refactors = source === "health" ? open.filter((i) => isRefactorItem(i.id)).length : 0;
+  // Price from what this project's fixes have cost so far.
+  const costs = await loadFixCosts(root);
+  const refactorRate = itemRate(costs.refactor, DEFAULT_REFACTOR_ITEM_RATE);
   // Before the first run, assume about ten more items will turn up.
-  const batch = estimateFixAll(Math.max(1, items - refactors + (first ? 10 : 0)));
+  const batch = estimateFixAll(Math.max(1, items - refactors + (first ? 10 : 0)), itemRate(costs.batch, DEFAULT_BATCH_ITEM_RATE));
   // Fixing a checklist check means auditing again to confirm it passes.
   const reaudit = source === "audit" && open.some((i) => !i.id.startsWith("finding-")) ? estimateCost("audit", files) : { low: 0, high: 0, limit: 0 };
   const fix = {
-    low: batch.low + refactors * REFACTOR_ITEM_LOW_USD + reaudit.low,
-    high: batch.high + refactors * REFACTOR_ITEM_HIGH_USD + reaudit.high,
+    low: batch.low + refactors * refactorRate.low + reaudit.low,
+    high: batch.high + refactors * refactorRate.high + reaudit.high,
     limit: batch.limit + refactors * REFACTOR_ITEM_LIMIT_USD + reaudit.limit,
   };
   const r = (n: number) => Math.round(n * 100) / 100;
-  return { first, firstLimit: pre.limit, items, estimate: { low: r(pre.low + fix.low), high: r(pre.high + fix.high), limit: r(Math.min(MAX_FIX_ALL_USD, pre.limit + fix.limit + FIX_CHECK_RESERVE_USD)) } };
+  // The run stops at the limit, so no end of the range can sit above it.
+  const limit = r(Math.min(MAX_FIX_ALL_USD, pre.limit + fix.limit + FIX_CHECK_RESERVE_USD));
+  return { first, firstLimit: pre.limit, items, estimate: { low: Math.min(limit, r(pre.low + fix.low)), high: Math.min(limit, r(pre.high + fix.high)), limit } };
 }
 
 /** Files the given fixes changed, without deletions. */

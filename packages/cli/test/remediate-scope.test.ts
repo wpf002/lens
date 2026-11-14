@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { paths, scanAndSave } from "@lens/core";
 import { fixAllPlan, remediationItems, REFACTOR_CHECKS, setWontFix } from "../src/enrich.js";
+import { itemRate, recordFixCost } from "../src/fix-costs.js";
 
 const FIX = path.resolve(__dirname, "../../core/test/fixtures/vuln-app");
 
@@ -48,5 +49,36 @@ describe("Remediate scope", () => {
     expect(after.items).toBe(before.items - 1);
     expect(after.items).toBe((await remediationItems(dir, "health", undefined, Infinity)).length);
     await setWontFix(dir, first!.id, false);
+  });
+
+  it("prices Fix All from the project's logged fix costs once there are enough runs", async () => {
+    const before = await fixAllPlan(dir, "health");
+    for (const usd of [0.02, 0.02, 0.02, 0.02]) await recordFixCost(dir, "batch", { items: 2, usd });
+    const after = await fixAllPlan(dir, "health");
+    expect(after.estimate.high).toBeLessThan(before.estimate.high);
+    await fs.rm(path.join(paths(dir).dir, "fix-costs.json"));
+  });
+
+  it("never shows a high end above the run's limit", async () => {
+    for (const usd of [500, 500, 500]) await recordFixCost(dir, "batch", { items: 1, usd });
+    const plan = await fixAllPlan(dir, "health");
+    expect(plan.estimate.high).toBe(plan.estimate.limit);
+    expect(plan.estimate.low).toBeLessThanOrEqual(plan.estimate.limit);
+    await fs.rm(path.join(paths(dir).dir, "fix-costs.json"));
+  });
+});
+
+describe("itemRate", () => {
+  const fallback = { low: 0.15, high: 0.4 };
+
+  it("keeps the default until three runs are logged", () => {
+    expect(itemRate([{ items: 5, usd: 5 }, { items: 5, usd: 5 }], fallback)).toEqual(fallback);
+  });
+
+  it("uses the 25th and 75th percentile of per-item cost", () => {
+    const runs = [0.1, 0.2, 0.3, 0.4].map((perItem) => ({ items: 5, usd: perItem * 5 }));
+    const rate = itemRate(runs, fallback);
+    expect(rate.low).toBeCloseTo(0.2);
+    expect(rate.high).toBeCloseTo(0.4);
   });
 });
