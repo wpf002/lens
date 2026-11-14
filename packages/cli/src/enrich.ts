@@ -44,7 +44,7 @@ export interface FixAllProgress {
   current?: string;
   /** Claude runs still to go after the running one, at the current batch sizes. */
   runsLeft?: number;
-  /** Average time per finished batch, for the time-left figure. */
+  /** Wall-clock time per finished batch, so batches running side by side shorten it. */
   msPerRun?: number;
 }
 
@@ -350,6 +350,26 @@ class BatchBudget {
     };
     await Promise.all(Array.from({ length: Math.min(REVIEW_CONCURRENCY, count) }, worker));
     return outOfBudget;
+  }
+}
+
+/** A job's cost while several Claude runs report their own running totals at once. */
+class ParallelCost {
+  private readonly live = new Map<number, number>();
+  private done: number;
+  constructor(private readonly job: EnrichJob) {
+    this.done = job.costUsd ?? 0;
+  }
+  update(run: number, usd: number) {
+    this.live.set(run, usd);
+    this.job.costUsd = this.done + [...this.live.values()].reduce((a, b) => a + b, 0);
+  }
+  settle(run: number) {
+    this.done += this.live.get(run) ?? 0;
+    this.live.delete(run);
+  }
+  settled(): number {
+    return this.done;
   }
 }
 
@@ -941,7 +961,7 @@ export class EnrichRunner {
    * Let Claude edit a copy of the project, then diff the copy into whole-file edits.
    * The project itself is untouched until applyFixes, which backs files up for Undo.
    */
-  private async draftFixes(job: EnrichJob, items: Array<{ id: string }>, single: boolean): Promise<{ data: Remediation | null; error?: string; timedOut?: boolean }> {
+  private async draftFixes(job: EnrichJob, items: Array<{ id: string }>, single: boolean, run: Pick<ClaudeRunOptions, "budgetUsd" | "onCost"> = {}): Promise<{ data: Remediation | null; error?: string; timedOut?: boolean }> {
     const instructions = agentInstructions("remediator");
     if (!existsSync(instructions)) throw new Error(`missing ${instructions}`);
     this.push(job, "Copying the project");
@@ -959,8 +979,14 @@ export class EnrichRunner {
         ...(single ? ["The owner picked this one item to fix. If it has an ownerNote, that is the owner's decision on how to fix it. Follow it."] : []),
       ].join("\n");
       const costBefore = job.costUsd ?? 0;
-      const { code, stderr, resultError, resultText, timedOut } = await this.runClaude(job, prompt, ["Read", "Grep", "Glob", "Edit", "Write"], MODEL_ARGS, ws, { timeoutEndsJob: false });
-      if (items.length) await recordFixCost(job.root, items.every((i) => isRefactorItem(i.id)) ? "refactor" : "batch", { items: items.length, usd: Math.max(0, (job.costUsd ?? 0) - costBefore) });
+      let spent = 0;
+      const onCost = (usd: number) => {
+        spent = usd;
+        if (run.onCost) run.onCost(usd);
+        else job.costUsd = costBefore + usd;
+      };
+      const { code, stderr, resultError, resultText, timedOut } = await this.runClaude(job, prompt, ["Read", "Grep", "Glob", "Edit", "Write"], MODEL_ARGS, ws, { timeoutEndsJob: false, budgetUsd: run.budgetUsd, onCost });
+      if (items.length) await recordFixCost(job.root, items.every((i) => isRefactorItem(i.id)) ? "refactor" : "batch", { items: items.length, usd: spent });
       if (job.state !== "running") return { data: null };
       if (timedOut) return { data: null, error: resultError, timedOut };
       const raw = (await readJson<unknown>(outPath)) ?? fencedJson(resultText);
@@ -1142,7 +1168,6 @@ export class EnrichRunner {
     const progress: FixAllProgress = { attempted: 0, total, fixed: 0, batches: 0 };
     // Items from a batch that ran out of time, retried one per run.
     const alone = new Set<string>();
-    let runMs = 0;
     // Runs that finished, so a timed-out batch doesn't count toward the average or the no-progress stop.
     let finishedRuns = 0;
     const EMPTY_RUNS_BEFORE_STOP = 3;
@@ -1164,54 +1189,36 @@ export class EnrichRunner {
       skipped: (prior?.skipped ?? []).filter((x) => ALREADY_SAFE.test(x.reason) && stable(x.itemId)),
       edits: Object.fromEntries(kept.map((f) => [f.id, prior?.edits?.[f.id] ?? []])),
     };
-    // One pass over every untried open item, in batches.
-    const fixPending = async () => {
-      while (job.state === "running") {
-        const left = (await pending())
-          .filter((i) => !tried.has(`${i.title}|${i.evidence[0]}`))
-          .map((i) => (retried.has(i.id) ? { ...i, evidence: [...i.evidence, NO_CHANGE_NOTE] } : i));
-        const solo = left.find((i) => alone.has(i.id));
-        const items = solo ? [solo] : nextFixBatch(left);
-        if (!items.length) break;
-        const remaining = job.budgetUsd - (job.costUsd ?? 0);
-        if (remaining < 0.3) {
-          progress.stopped = "reached the spending limit";
-          break;
+    const key = (i: { title: string; evidence: string[] }) => `${i.title}|${i.evidence[0]}`;
+    let cost = new ParallelCost(job);
+    const applyInOrder = serialQueue();
+    const startedAt = Date.now();
+    // Drafts one batch on its own copy of the project, then applies it while no other batch is applying.
+    const runBatch = async (items: RemediationItem[], batch: number, budgetUsd: number) => {
+      const { data, error, timedOut } = await this.draftFixes(job, items, false, { budgetUsd, onCost: (usd) => cost.update(batch, usd) });
+      cost.settle(batch);
+      if (job.state !== "running") return;
+      if (timedOut && items.length > 1) {
+        this.push(job, `Batch ${batch} ran past ${timeoutLabel(claudeTimeoutMs())}. Retrying its ${items.length} issues one at a time`);
+        for (const i of items) {
+          alone.add(i.id);
+          tried.delete(key(i));
         }
-        for (const i of items) tried.add(`${i.title}|${i.evidence[0]}`);
-        progress.batches++;
-        progress.current = items.every((i) => i.title === items[0]!.title) ? items[0]!.title : "Mixed Issues";
-        const picked = new Set(items.map((i) => i.id));
-        progress.runsLeft = countFixRuns(left.filter((i) => !picked.has(i.id)), alone);
-        this.push(job, `Batch ${progress.batches}: ${items.length} issues`);
-        const batchStart = Date.now();
-        job.costBase = job.costUsd ?? 0;
-        const batchBudget = Math.min(remaining, isRefactorItem(items[0]!.id) ? REFACTOR_ITEM_LIMIT_USD : estimateCost("remediate", items.length).limit);
-        const saved = job.budgetUsd;
-        job.budgetUsd = Math.round(batchBudget * 100) / 100; // per-run cap passed to Claude
-        const { data, error, timedOut } = await this.draftFixes(job, items, false);
-        job.budgetUsd = saved;
-        if (job.state !== "running") break;
-        if (timedOut && items.length > 1) {
-          this.push(job, `Batch ${progress.batches} ran past ${timeoutLabel(claudeTimeoutMs())}. Retrying its ${items.length} issues one at a time`);
-          for (const i of items) {
-            alone.add(i.id);
-            tried.delete(`${i.title}|${i.evidence[0]}`);
-          }
-          continue;
-        }
-        progress.attempted += items.length;
-        finishedRuns++;
-        runMs += Date.now() - batchStart;
-        progress.msPerRun = Math.round(runMs / finishedRuns);
+        return;
+      }
+      progress.attempted += items.length;
+      finishedRuns++;
+      progress.msPerRun = Math.round((Date.now() - startedAt) / finishedRuns);
+      await applyInOrder(async () => {
+        if (job.state !== "running") return;
         if (!data) {
-          this.push(job, `Batch ${progress.batches} produced no usable fixes${error ? `: ${error}` : ""}`);
+          this.push(job, `Batch ${batch} produced no usable fixes${error ? `: ${error}` : ""}`);
           markUnaddressed(merged, items.map((i) => i.id), error?.slice(0, 600) || undefined);
           await writeJsonAtomic(remediationPath(root, source), merged, true);
-          if (error?.includes("spending") || error?.includes("safety limit")) break;
-          continue;
+          if (error?.includes("spending") || error?.includes("safety limit")) progress.stopped ??= "reached the spending limit";
+          return;
         }
-        const rec = buildRecord(root, source, data, undefined, undefined, `${runTag}b${progress.batches}`);
+        const rec = buildRecord(root, source, data, undefined, undefined, `${runTag}b${batch}`);
         merged.fixes.push(...rec.fixes);
         merged.skipped.push(...rec.skipped);
         Object.assign(merged.edits, rec.edits);
@@ -1232,20 +1239,49 @@ export class EnrichRunner {
           await scanAndSave(root);
         }
         progress.fixed += applied.length;
-        if (!applied.length && finishedRuns >= EMPTY_RUNS_BEFORE_STOP && progress.fixed === 0) {
-          progress.stopped = "three batches in a row produced nothing to apply";
-          break;
-        }
+        if (!applied.length && finishedRuns >= EMPTY_RUNS_BEFORE_STOP && progress.fixed === 0) progress.stopped ??= "three batches in a row produced nothing to apply";
         const fixedNow = new Set(rec.fixes.filter((f) => !f.invalid).map((f) => f.itemId));
         const retry = new Set(rec.skipped.filter((x) => x.reason === NO_CHANGE_REASON && !fixedNow.has(x.itemId) && !retried.has(x.itemId)).map((x) => x.itemId));
         if (retry.size) {
           merged.skipped = merged.skipped.filter((x) => !(retry.has(x.itemId) && x.reason === NO_CHANGE_REASON));
-          for (const i of items) if (retry.has(i.id)) tried.delete(`${i.title}|${i.evidence[0]}`);
+          for (const i of items) if (retry.has(i.id)) tried.delete(key(i));
           for (const id of retry) retried.add(id);
           await writeJsonAtomic(remediationPath(root, source), merged, true);
         }
         markUnaddressed(merged, items.map((i) => i.id).filter((id) => !retry.has(id)));
+      });
+    };
+    // One pass over every untried open item: up to FIX_ALL_CONCURRENCY batches at once, none sharing a file.
+    const fixPending = async () => {
+      const running = new Map<Promise<void>, { items: RemediationItem[]; budgetUsd: number }>();
+      // Reviews between passes add to the job's cost, so each pass starts from the current total.
+      cost = new ParallelCost(job);
+      while (job.state === "running" && !progress.stopped) {
+        const busy = [...running.values()].flatMap((r) => r.items);
+        const busyIds = new Set(busy.map((i) => i.id));
+        const left = (await pending())
+          .filter((i) => !tried.has(key(i)) && !busyIds.has(i.id))
+          .map((i) => (retried.has(i.id) ? { ...i, evidence: [...i.evidence, NO_CHANGE_NOTE] } : i));
+        const items = running.size >= FIX_ALL_CONCURRENCY ? [] : pickFixBatch(left, busy, alone);
+        const reserved = [...running.values()].reduce((sum, r) => sum + r.budgetUsd, 0);
+        const remaining = job.budgetUsd - cost.settled() - reserved;
+        if (items.length && remaining < MIN_RUN_USD && !running.size) progress.stopped = "reached the spending limit";
+        if (!items.length || remaining < MIN_RUN_USD) {
+          if (!running.size) break;
+          await Promise.race(running.keys());
+          continue;
+        }
+        for (const i of items) tried.add(key(i));
+        const batch = ++progress.batches;
+        progress.current = items.every((i) => i.title === items[0]!.title) ? items[0]!.title : "Mixed Issues";
+        const picked = new Set(items.map((i) => i.id));
+        progress.runsLeft = countFixRuns(left.filter((i) => !picked.has(i.id)), alone);
+        this.push(job, `Batch ${batch}: ${items.length} issues`);
+        const budgetUsd = Math.round(Math.min(remaining, isRefactorItem(items[0]!.id) ? REFACTOR_ITEM_LIMIT_USD : estimateCost("remediate", items.length).limit) * 100) / 100;
+        const task: Promise<void> = runBatch(items, batch, budgetUsd).finally(() => running.delete(task));
+        running.set(task, { items, budgetUsd });
       }
+      await Promise.all(running.keys());
     };
     const covered = await coveredFiles(root);
     // Fix everything, check Lens's changes, fix what the check found, until a check comes back clean.
@@ -1464,6 +1500,8 @@ export const TEST_REPAIR_ID = "tests";
 export const FIX_ALL_LIMIT = 20;
 /** Items per Fix All run when they come from different checks or the review. Small, since fixes have no size limit. */
 const FIX_ALL_BATCH = 5;
+/** Fix All batches drafted at once. Each edits its own copy; applying still happens one batch at a time. */
+const FIX_ALL_CONCURRENCY = 4;
 /** Hits of one Health check per Fix All run. They share one fix, so one run can take more of them. */
 export const SAME_CHECK_BATCH = 25;
 /** The Health check a hit belongs to, or undefined for review findings and audit items. */
@@ -1484,6 +1522,24 @@ export function countFixRuns(items: Array<{ id: string }>, alone: ReadonlySet<st
     runs++;
   }
   return runs;
+}
+
+/** The file an item's evidence points at: "path:line detail" or "path detail". */
+export function itemFile(item: { evidence: string[] }): string {
+  return (item.evidence[0] ?? "").split(" ")[0]!.replace(/:\d+$/, "");
+}
+
+/**
+ * The next batch to start beside the ones running. Items in a running batch's files wait, so two
+ * batches never edit the same file. A refactor or a timed-out item waits until nothing else runs.
+ */
+export function pickFixBatch<T extends { id: string; evidence: string[] }>(left: T[], running: Array<{ id: string; evidence: string[] }>, alone: ReadonlySet<string>): T[] {
+  const solo = left.find((i) => alone.has(i.id));
+  const exclusive = solo ?? (left[0] && isRefactorItem(left[0].id) ? left[0] : undefined);
+  if (exclusive) return running.length ? [] : [exclusive];
+  if (running.some((i) => isRefactorItem(i.id) || alone.has(i.id))) return [];
+  const busyFiles = new Set(running.map(itemFile));
+  return nextFixBatch(left.filter((i) => !busyFiles.has(itemFile(i))));
 }
 
 export function nextFixBatch<T extends { id: string }>(left: T[]): T[] {

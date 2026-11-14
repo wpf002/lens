@@ -72,3 +72,24 @@ describe("refactor budget", () => {
     expect(remediateLimit("untested", 5)).toBeLessThan(8 + FIX_CHECK_RESERVE_USD);
   });
 });
+
+describe("workspace changes from parallel fix runs", () => {
+  it("ignores project changes made after the copy, and conflicting edits", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-ws-par-"));
+    await fs.writeFile(path.join(root, "a.ts"), "a\n");
+    await fs.writeFile(path.join(root, "b.ts"), "b\n");
+    await fs.writeFile(path.join(root, "c.ts"), "c\n");
+    const ws = await makeWorkspace(root);
+    await fs.writeFile(path.join(root, "b.ts"), "b fixed by another run\n");
+    await fs.writeFile(path.join(root, "new.ts"), "added by another run\n");
+    await fs.writeFile(path.join(root, "c.ts"), "c fixed by another run\n");
+    await fs.writeFile(path.join(ws, "a.ts"), "a fixed\n");
+    await fs.writeFile(path.join(ws, "c.ts"), "c fixed here\n");
+    const { data, ignored } = await collectChanges(root, ws, {
+      fixes: [{ itemId: "x", title: "Fix", explanation: "e", files: ["a.ts", "c.ts"] }],
+      skipped: [],
+    });
+    expect(data.fixes[0]!.edits.map((e) => e.path)).toEqual(["a.ts"]);
+    expect(ignored).toEqual(["c.ts"]);
+  });
+});

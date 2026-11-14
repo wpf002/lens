@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { paths, scanAndSave } from "@lens/core";
-import { countFixRuns, fixAllPlan, nextFixBatch, remediationItems, REFACTOR_CHECKS, SAME_CHECK_BATCH, setWontFix } from "../src/enrich.js";
+import { countFixRuns, fixAllPlan, nextFixBatch, pickFixBatch, remediationItems, REFACTOR_CHECKS, SAME_CHECK_BATCH, setWontFix } from "../src/enrich.js";
 import { itemRate, recordFixCost } from "../src/fix-costs.js";
 
 const FIX = path.resolve(__dirname, "../../core/test/fixtures/vuln-app");
@@ -99,6 +99,24 @@ describe("nextFixBatch", () => {
 
   it("runs a refactor alone", () => {
     expect(nextFixBatch([{ id: "oversized~a" }, ...hits("swallowed-errors", 10)])).toEqual([{ id: "oversized~a" }]);
+  });
+});
+
+describe("pickFixBatch", () => {
+  const hit = (id: string, file: string) => ({ id, evidence: [`${file}:3 detail`] });
+
+  it("skips items in files a running batch is editing", () => {
+    const running = [hit("swallowed-errors~a", "src/a.ts")];
+    const left = [hit("swallowed-errors~b", "src/a.ts"), hit("console-logs~c", "src/b.ts")];
+    expect(pickFixBatch(left, running, new Set()).map((i) => i.id)).toEqual(["console-logs~c"]);
+  });
+
+  it("starts a refactor only when nothing else runs, and nothing beside it", () => {
+    const refactor = hit("oversized~r", "src/big.ts");
+    const other = hit("console-logs~c", "src/b.ts");
+    expect(pickFixBatch([refactor, other], [other], new Set())).toEqual([]);
+    expect(pickFixBatch([refactor, other], [], new Set())).toEqual([refactor]);
+    expect(pickFixBatch([other], [refactor], new Set())).toEqual([]);
   });
 });
 

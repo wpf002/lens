@@ -3,6 +3,7 @@
  * project and turns each changed file into a whole-file edit, so refactors of any size
  * go through the same validate → back up → apply → Undo path as small fixes.
  */
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -33,14 +34,27 @@ async function listFiles(root: string): Promise<Set<string>> {
   return out;
 }
 
+/** What each file looked like when the copy was made, so later changes to the project aren't read as the agent's. */
+const BASE_FILE = path.join(".lens", "workspace-base.json");
+const hashOf = (b: Buffer) => createHash("sha1").update(b).digest("hex");
+
 export async function makeWorkspace(root: string): Promise<string> {
   const ws = await fs.mkdtemp(path.join(os.tmpdir(), "lens-fix-"));
+  const base: Record<string, string> = {};
   for (const rel of await listFiles(root)) {
     const dst = path.join(ws, rel);
     await fs.mkdir(path.dirname(dst), { recursive: true });
     await fs.copyFile(path.join(root, rel), dst);
+    base[rel] = hashOf(await fs.readFile(dst));
   }
+  await fs.mkdir(path.join(ws, ".lens"), { recursive: true });
+  await fs.writeFile(path.join(ws, BASE_FILE), JSON.stringify(base));
   return ws;
+}
+
+async function readBase(ws: string): Promise<Map<string, string>> {
+  const text = await fs.readFile(path.join(ws, BASE_FILE), "utf8");
+  return new Map(Object.entries(JSON.parse(text) as Record<string, string>));
 }
 
 export const isBinary = (b: Buffer) => b.subarray(0, 8000).includes(0);
@@ -55,13 +69,19 @@ export const isBinary = (b: Buffer) => b.subarray(0, 8000).includes(0);
 export const NO_CHANGE_REASON = "Claude reported a fix but changed no files.";
 
 export async function collectChanges(root: string, ws: string, report: WorkspaceReport): Promise<{ data: Remediation; ignored: string[] }> {
-  const [before, after] = await Promise.all([listFiles(root), listFiles(ws)]);
+  const [before, after, base] = await Promise.all([listFiles(root), listFiles(ws), readBase(ws)]);
   const changed: Array<{ rel: string; old: string | null; now: string | null }> = [];
   const ignored: string[] = [];
-  for (const rel of new Set([...before, ...after])) {
-    const a = before.has(rel) ? await fs.readFile(path.join(root, rel)) : null;
+  for (const rel of new Set([...base.keys(), ...after])) {
     const b = after.has(rel) ? await fs.readFile(path.join(ws, rel)) : null;
+    // Another fix run may have changed the project since this copy was made. Only the agent's own edits count.
+    if ((b ? hashOf(b) : undefined) === base.get(rel)) continue;
+    const a = before.has(rel) ? await fs.readFile(path.join(root, rel)) : null;
     if ((a && b && a.equals(b)) || (!a && b?.length === 0)) continue;
+    if ((a ? hashOf(a) : undefined) !== base.get(rel)) {
+      ignored.push(rel);
+      continue;
+    }
     if ((a && isBinary(a)) || (b && isBinary(b)) || (a && a.length === 0 && b)) {
       ignored.push(rel);
       continue;
