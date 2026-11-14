@@ -203,7 +203,9 @@ async function mergeLatestBase(root: string, branch: string, base: string): Prom
   try {
     await git(root, ["-c", `user.name=${author.name}`, "-c", `user.email=${author.email}`, "merge", "-q", "--no-edit", "FETCH_HEAD"]);
   } catch (e) {
-    await git(root, ["merge", "--abort"]).catch(() => undefined);
+    await git(root, ["merge", "--abort"]).catch((abortError: unknown) =>
+      console.error(`[github] merge --abort failed on ${branch}: ${abortError instanceof Error ? abortError.message.slice(0, 200) : abortError}`),
+    );
     console.error(`[github] ${branch} conflicts with ${base}: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
     return;
   }
