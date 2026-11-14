@@ -8,7 +8,7 @@ import {
   scanAndSave, loadGraph, loadMeta, saveGraph, saveMeta, loadConfig, saveConfig, paths, writeJsonAtomic, readJson,
   applyPatch, PatchValidationError, validateGraph, KnowledgeGraphSchema, formatZodError,
   buildBatches, architectureContext, tourContext, domainContext, securityContext,
-  diffImpact, isGitRepo, saveDiff, GraphSearch, indexGraph, neighbors, shortestPath, explain, graphStats, findNode,
+  diffImpact, isGitRepo, saveDiff, gitChanges, healthOfChange, scanProject, GraphSearch, indexGraph, neighbors, shortestPath, explain, graphStats, findNode,
   toMermaid, toDot, embedInDashboard, onboardingMarkdown, buildKnowledgeGraph, buildEmbeddings, osvScan, DEFAULT_IGNORES,
   EDGE_KINDS, NODE_KINDS, ProbeRefused, type EdgeKind, type KnowledgeGraph, type NodeKind, type PatchKind, type EmbeddingStore, type Severity,
 } from "@lens/core";
@@ -326,6 +326,31 @@ program
   });
 
 const SEV: Severity[] = ["critical", "high", "medium", "low", "info"];
+/** Exit code when the change added Health problems, so a hook can tell them from a crash. */
+const HEALTH_PROBLEMS_EXIT = 2;
+
+program
+  .command("health")
+  .description("Health problems on the lines changed since a commit (default: uncommitted changes)")
+  .argument("[dir]")
+  .option("--since <ref>", "compare the working tree against this commit")
+  .option("--json", "raw JSON")
+  .action(async (dir, o) => {
+    const root = resolveDir(dir);
+    if (!isGitRepo(root)) return;
+    const changes = gitChanges(root, { base: o.since }).files.filter((f) => f.status !== "D");
+    if (!changes.length) return o.json ? out([]) : undefined;
+    const { graph } = await scanProject(root, { noSecurity: true, offline: true, healthFocus: changes.map((c) => c.path) });
+    const problems = healthOfChange(graph.health ?? { generatedAt: "", score: 100, checks: [] }, changes);
+    if (o.json) out(problems);
+    else
+      for (const c of problems) {
+        out(`${c.title} (${c.severity}). ${c.fix}`);
+        for (const h of c.hits) out(`  ${h.path}${h.line ? `:${h.line}` : ""} ${h.detail}`);
+      }
+    if (problems.length) process.exitCode = HEALTH_PROBLEMS_EXIT;
+  });
+
 program
   .command("security")
   .description("Security findings report")

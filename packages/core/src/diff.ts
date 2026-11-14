@@ -69,7 +69,7 @@ export function gitChanges(root: string, opts: DiffOptions = {}): { base: string
     base = "HEAD (staged)";
   } else args = ["diff", "--unified=0", "--no-color", "-M", "HEAD"];
   const files = parseUnifiedDiff(git(root, args));
-  if (!opts.base && !opts.staged) {
+  if (!opts.staged) {
     // untracked files count as additions
     for (const p of git(root, ["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean)) {
       if (!files.some((f) => f.path === p)) files.push({ path: p, status: "A", hunks: [] });

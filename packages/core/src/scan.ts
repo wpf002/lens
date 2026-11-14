@@ -43,6 +43,8 @@ export interface ScanOptions {
   /** Git ref lookup override, for tests. */
   gitResolve?: GitResolve;
   onProgress?: (msg: string) => void;
+  /** Files Health lists first, so the per-check hit cap never drops their hits. */
+  healthFocus?: string[];
 }
 
 export interface ScanResult {
@@ -580,7 +582,7 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
     security = finalizeSecurity({ graph: { nodes: nodeList, edges }, raw, locate, previous: prevGraph?.security, functions: functionSources(recs, symId) });
     security.checklist = buildChecklist({
       root,
-      files: recs.map((r) => ({ path: r.f.path, src: r.src })),
+      files: focusFirst(recs, opts.healthFocus).map((r) => ({ path: r.f.path, src: r.src })),
       deps: allDeps,
       endpoints: nodeList.filter((n) => n.kind === "endpoint"),
       security,
@@ -592,7 +594,7 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
   /* ---- code health ---- */
   const health = buildHealth({
     root,
-    files: recs.map((r) => ({ path: r.f.path, src: r.src, lang: r.f.lang.id, category: r.f.lang.category, isTest: isTestPath(r.f.path), symbols: r.structure?.symbols ?? [], imports: r.structure?.imports ?? [] })),
+    files: focusFirst(recs, opts.healthFocus).map((r) => ({ path: r.f.path, src: r.src, lang: r.f.lang.id, category: r.f.lang.category, isTest: isTestPath(r.f.path), symbols: r.structure?.symbols ?? [], imports: r.structure?.imports ?? [] })),
     nodes: nodeList,
     edges,
     deps: allDeps,
@@ -648,6 +650,12 @@ function localPackageNames(manifests: Array<{ path: string; src: string }>): Set
     }
   }
   return names;
+}
+
+function focusFirst(recs: FileRec[], focus: string[] | undefined): FileRec[] {
+  if (!focus?.length) return recs;
+  const wanted = new Set(focus);
+  return [...recs.filter((r) => wanted.has(r.f.path)), ...recs.filter((r) => !wanted.has(r.f.path))];
 }
 
 export async function scanAndSave(root: string, opts: ScanOptions = {}): Promise<ScanResult> {

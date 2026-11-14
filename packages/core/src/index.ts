@@ -29,4 +29,5 @@ export { RegistryClient, githubRepo, pickRef, type RegistryFetch, type GitResolv
 export * from "./security/dep-fixes.js";
 export * from "./quality/health.js";
 export * from "./quality/score.js";
+export * from "./quality/changed.js";
 export * from "./security/probe/index.js";
