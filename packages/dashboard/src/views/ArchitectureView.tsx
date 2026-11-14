@@ -38,8 +38,13 @@ function ConfirmRun({ label, estimate, disabled, onRun }: { label: string; estim
       </Button>
     );
   return (
-    <div className="flex shrink-0 items-center gap-2">
-      {estimate && <span className="text-[11px] text-faint">{costRange(estimate)}</span>}
+    <div className="lens-rise flex shrink-0 items-center gap-2" role="group" aria-label={`Confirm ${label}`}>
+      {estimate && (
+        <span className="flex items-baseline gap-1.5 rounded-md border border-line bg-panel-2 px-2 py-1" title={`Stops at $${estimate.limit.toFixed(2)}`}>
+          <span className="text-[11px] text-muted">Est. Cost</span>
+          <span className="font-mono text-[12.5px] font-medium text-fg tabular">{costRange(estimate)}</span>
+        </span>
+      )}
       <Button size="sm" variant="ghost" onClick={() => setAsking(false)}>
         Cancel
       </Button>
@@ -53,7 +58,7 @@ function ConfirmRun({ label, estimate, disabled, onRun }: { label: string; estim
           onRun();
         }}
       >
-        {label}
+        Confirm {label}
       </Button>
     </div>
   );
