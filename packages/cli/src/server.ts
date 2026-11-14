@@ -22,7 +22,7 @@ import { cloneOrUpdate, commitFilesAndPush, createPullRequest, fixesPatch, listR
 import { MAX_TEST_REPAIRS, allowAnotherRepair, gateNeedsWork, recordRepairAttempt, repairItems, repairsLeft, saveRepairItems, type TestGate } from "./ci.js";
 import { grantCheckPermissions } from "./ci-permissions.js";
 import type { AppliedFix } from "./commit-text.js";
-import { FIX_SOURCES, SOURCES, applyFixes, loadRemediation, undoFix, type FixSource, type RemediationSource } from "./remediate.js";
+import { FIX_SOURCES, SOURCES, applyFixes, isPendingFix, loadRemediation, markFixesMerged, undoFix, type FixSource, type RemediationSource } from "./remediate.js";
 import { loadLayoutPlan, reopenLayoutArea, usableMoves } from "./layout-plan.js";
 import { EnrichRunner, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import {
@@ -492,6 +492,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         if (!repoName(proj.root)) return send(res, 400, { error: "this project isn't a cloned repo" });
         if (url.pathname === "/api/project/merge") {
           const pr = await mergePullRequest(proj.root);
+          await markFixesMerged(proj.root, pr.number);
           await scanAndSave(proj.root);
           return send(res, 200, { pr });
         }
@@ -583,7 +584,7 @@ function pickFolder(startIn: string): Promise<string | null> {
 async function appliedFixes(root: string): Promise<AppliedFix[]> {
   const fixes: AppliedFix[] = [];
   for (const src of SOURCES) {
-    for (const f of (await loadRemediation(root, src))?.fixes ?? []) if (f.status === "applied") fixes.push({ title: f.title, files: f.files.map((file) => file.path) });
+    for (const f of (await loadRemediation(root, src))?.fixes ?? []) if (isPendingFix(f)) fixes.push({ title: f.title, files: f.files.map((file) => file.path) });
   }
   return fixes;
 }

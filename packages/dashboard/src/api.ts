@@ -71,6 +71,7 @@ export interface ProposedFix {
   files: Array<{ path: string; diff: string; created: boolean }>;
   invalid?: string;
   status: "proposed" | "applied" | "undone" | "discarded";
+  mergedIn?: number;
 }
 export type RemediationSource = "audit" | "review" | "health" | "layout";
 export interface RemediationRecord {

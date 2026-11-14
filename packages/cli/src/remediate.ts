@@ -19,6 +19,8 @@ export interface ProposedFix {
   /** Why Lens refused to offer it (e.g. the text to replace isn't in the file anymore). */
   invalid?: string;
   status: "proposed" | "applied" | "undone" | "discarded";
+  /** The pull request that merged this applied fix. It stays Fixed but leaves the next pull request. */
+  mergedIn?: number;
 }
 
 export interface RemediationRecord {
@@ -234,11 +236,26 @@ export async function applyFixes(root: string, source: RemediationSource, ids: s
   return { applied, failed };
 }
 
+/** An applied fix that hasn't been merged yet, so it belongs in the next pull request. */
+export const isPendingFix = (fix: Pick<ProposedFix, "status" | "mergedIn">) => fix.status === "applied" && fix.mergedIn === undefined;
+
+/** Record that every pending fix went out in pull request `pr`. */
+export async function markFixesMerged(root: string, pr: number): Promise<void> {
+  for (const source of SOURCES) {
+    const rec = await loadRemediation(root, source);
+    const pending = rec?.fixes.filter(isPendingFix) ?? [];
+    if (!rec || !pending.length) continue;
+    for (const fix of pending) fix.mergedIn = pr;
+    await writeJsonAtomic(remediationPath(root, source), rec, true);
+  }
+}
+
 /** Restore the exact pre-apply bytes of an applied fix. */
 export async function undoFix(root: string, source: RemediationSource, id: string): Promise<void> {
   const rec = await loadRemediation(root, source);
   const fix = rec?.fixes.find((f) => f.id === id);
   if (!rec || !fix || fix.status !== "applied") throw new Error("that fix isn't applied");
+  if (fix.mergedIn !== undefined) throw new Error(`that fix is already merged in #${fix.mergedIn}`);
   const dir = backupDir(root, source, id);
   const manifest = JSON.parse(readFileSync(path.join(dir, "manifest.json"), "utf8")) as BackupEntry[];
   restoreBackup(root, dir, manifest);

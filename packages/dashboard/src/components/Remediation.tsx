@@ -69,12 +69,12 @@ function FixRow({ fix, source }: { fix: ProposedFix; source: Source }) {
           <div className="flex items-center gap-1.5">
             {open ? <IconChevronDown size={12} className="shrink-0 text-faint" /> : <IconChevronRight size={12} className="shrink-0 text-faint" />}
             <span className={cx("text-[12.5px]", fix.invalid ? "text-muted line-through" : "text-fg")}>{fix.title}</span>
-            {fix.status === "applied" && <span className="rounded border border-guarded/40 px-1 font-mono text-[9.5px] text-guarded">Applied</span>}
+            {fix.status === "applied" && <span className="rounded border border-guarded/40 px-1 font-mono text-[9.5px] text-guarded">{fix.mergedIn === undefined ? "Applied" : "Merged"}</span>}
             {fix.status === "undone" && <span className="rounded border border-line px-1 font-mono text-[9.5px] text-faint">Undone</span>}
           </div>
           <p className="mt-0.5 text-[11.5px] text-muted">{fix.invalid ? `Can't apply: ${fix.invalid}` : fix.files.map((f) => `${f.path}${f.created ? " (new)" : ""}`).join(", ")}</p>
         </button>
-        {fix.status === "applied" && (
+        {fix.status === "applied" && fix.mergedIn === undefined && (
           <button type="button" className="text-[11.5px] text-muted hover:text-fg hover:underline" disabled={busy} onClick={() => void undo(source, fix.id)}>
             Undo
           </button>
@@ -231,7 +231,12 @@ export function Remediation({ source }: { source: Source }) {
     ...rec.fixes.filter((f) => f.status === "applied").map((f) => ({ f, src: source })),
     ...(extra?.fixes ?? []).filter((f) => f.status === "applied").map((f) => ({ f, src: "review" as Source })),
   ];
-  const applied = appliedBySource.map((x) => x.f);
+  const pr = pushed?.pr ?? null;
+  // Fixes a merged pull request shipped stay Fixed, but only the latest merge is shown here, and never with new ones.
+  const pending = appliedBySource.filter(({ f }) => f.mergedIn === undefined);
+  const lastMerged = pr?.state === "merged" ? appliedBySource.filter(({ f }) => f.mergedIn === pr.number) : [];
+  const current = pending.length ? pending : lastMerged;
+  const applied = current.map((x) => x.f);
   const changedFiles = [...new Set(applied.flatMap((f) => f.files.map((x) => x.path)))];
   // Valid edits left from an older run that predates auto-apply.
   const ready = rec.fixes.filter((f) => f.status === "proposed" && !f.invalid);
@@ -240,10 +245,9 @@ export function Remediation({ source }: { source: Source }) {
   const todo = rec.skipped.filter((x) => !SAFE.test(x.reason));
   if (!applied.length && !ready.length && (source === "health" || (!notFixed.length && !rec.skipped.length))) return null;
   const undoAll = async () => {
-    for (const { f, src } of appliedBySource) await useStore.getState().undoFix(src, f.id);
+    for (const { f, src } of pending) await useStore.getState().undoFix(src, f.id);
   };
   const cost = (mine?.costUsd ?? 0) + (extra?.costUsd ?? 0);
-  const pr = pushed?.pr ?? null;
   const merged = pr?.state === "merged" && !pushed?.dirty;
   const inPr = pr?.state === "open";
 
@@ -312,7 +316,7 @@ export function Remediation({ source }: { source: Source }) {
       {push.error && <p className="border-b border-line px-3 py-1.5 text-critical">{push.error}</p>}
       {showChanges && (
         <ul className="border-b border-line">
-          {appliedBySource.map(({ f, src }) => (
+          {current.map(({ f, src }) => (
             <FixRow key={`${src}:${f.id}`} fix={f} source={src} />
           ))}
         </ul>
