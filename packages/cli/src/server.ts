@@ -18,7 +18,7 @@ import path from "node:path";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { authorizeUrl, configureGithubApp, disconnectGithub, ensureGithubLoaded, finishOAuth, githubAppMode, githubConnected, githubLogin, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
-import { cloneOrUpdate, commitFilesAndPush, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, type PushInfo } from "./cloud.js";
+import { cloneOrUpdate, commitFilesAndPush, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, uncommittedPaths, type PushInfo } from "./cloud.js";
 import { MAX_TEST_REPAIRS, allowAnotherRepair, gateNeedsWork, recordRepairAttempt, repairItems, repairsLeft, saveRepairItems, type TestGate } from "./ci.js";
 import { grantCheckPermissions } from "./ci-permissions.js";
 import type { AppliedFix } from "./commit-text.js";
@@ -468,6 +468,8 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
       }
       if (opts.cloud && req.method === "GET" && url.pathname === "/api/project/push") {
         const st = repoName(proj.root) ? await pushState(proj.root) : null;
+        // A pull request merged on GitHub, or before Lens recorded merges, still ships its fixes.
+        if (st?.pr?.state === "merged") await markFixesMerged(proj.root, st.pr.number, await uncommittedPaths(proj.root));
         const tests = st?.pr?.state === "open" ? st.pr.tests : undefined;
         if (tests && gateNeedsWork(tests)) void watchTests(proj.root);
         return send(res, 200, { state: withRepairFlag(st) });

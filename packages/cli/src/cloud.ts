@@ -339,6 +339,12 @@ async function mergedTime(root: string, n: number): Promise<string | undefined> 
   return p.merged_at;
 }
 
+/** Project files changed or added since the last commit, Lens's own folder left out. */
+export async function uncommittedPaths(root: string): Promise<Set<string>> {
+  const [changed, added] = await Promise.all([git(root, ["diff", "--name-only", "HEAD"]), git(root, ["ls-files", "--others", "--exclude-standard"])]);
+  return new Set(`${changed}\n${added}`.split("\n").filter((p) => p && !p.startsWith(".lens/")));
+}
+
 /** Where the fixes are: unpushed, pushed, in an open pull request, or merged. */
 export async function pushState(root: string): Promise<PushInfo | null> {
   const branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "");

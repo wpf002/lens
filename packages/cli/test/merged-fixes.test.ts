@@ -38,4 +38,18 @@ describe("fixes after a merge", () => {
     expect(await fs.readFile(path.join(root, "a.ts"), "utf8")).toBe("fixed one\n");
     await fs.rm(root, { recursive: true, force: true });
   });
+
+  it("leaves fixes in uncommitted files pending when a merge is found later", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-merged-"));
+    await fs.writeFile(path.join(root, "a.ts"), "a\n");
+    await fs.writeFile(path.join(root, "b.ts"), "b\n");
+    const [first, second] = await proposeTwoFixes(root);
+    await applyFixes(root, "health", [first, second]);
+    await markFixesMerged(root, 27, new Set(["b.ts"]));
+
+    const fixes = (await loadRemediation(root, "health"))!.fixes;
+    expect(fixes.find((f) => f.id === first)?.mergedIn).toBe(27);
+    expect(fixes.filter(isPendingFix).map((f) => f.id)).toEqual([second]);
+    await fs.rm(root, { recursive: true, force: true });
+  });
 });

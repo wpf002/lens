@@ -560,7 +560,11 @@ export const useStore = create<State>((set, get) => ({
   async refreshPush() {
     if (!get().meta?.canPush) return set({ push: null });
     try {
-      set({ push: await fetchPushState() });
+      const push = await fetchPushState();
+      set({ push });
+      // The server marks fixes from a merged pull request as it answers, after the records above were read.
+      const unmerged = Object.values(get().remediation).some((r) => r?.fixes.some((f) => f.status === "applied" && f.mergedIn === undefined));
+      if (push?.pr?.state === "merged" && unmerged) set({ remediation: (await fetchRemediation()).records });
     } catch {
       set({ push: null });
     }

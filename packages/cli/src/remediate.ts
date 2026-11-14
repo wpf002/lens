@@ -239,11 +239,14 @@ export async function applyFixes(root: string, source: RemediationSource, ids: s
 /** An applied fix that hasn't been merged yet, so it belongs in the next pull request. */
 export const isPendingFix = (fix: Pick<ProposedFix, "status" | "mergedIn">) => fix.status === "applied" && fix.mergedIn === undefined;
 
-/** Record that every pending fix went out in pull request `pr`. */
-export async function markFixesMerged(root: string, pr: number): Promise<void> {
+/**
+ * Record that every pending fix went out in pull request `pr`. Fixes touching a file in
+ * `uncommitted` haven't been committed yet, so they wait for the next pull request.
+ */
+export async function markFixesMerged(root: string, pr: number, uncommitted: ReadonlySet<string> = new Set()): Promise<void> {
   for (const source of SOURCES) {
     const rec = await loadRemediation(root, source);
-    const pending = rec?.fixes.filter(isPendingFix) ?? [];
+    const pending = rec?.fixes.filter((f) => isPendingFix(f) && !f.files.some((x) => uncommitted.has(x.path))) ?? [];
     if (!rec || !pending.length) continue;
     for (const fix of pending) fix.mergedIn = pr;
     await writeJsonAtomic(remediationPath(root, source), rec, true);
