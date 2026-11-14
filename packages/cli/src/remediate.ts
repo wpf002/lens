@@ -265,3 +265,27 @@ export async function undoFix(root: string, source: RemediationSource, id: strin
   fix.status = "undone";
   await writeJsonAtomic(remediationPath(root, source), rec, true);
 }
+
+/** Ids of the fixes applied from `source` so far, so a later run's additions can be told apart. */
+export async function appliedFixIds(root: string, source: RemediationSource): Promise<Set<string>> {
+  return new Set((await loadRemediation(root, source))?.fixes.filter((f) => f.status === "applied").map((f) => f.id) ?? []);
+}
+
+/** Undo the fixes applied since `before`, newest first so a file edited twice restores to its original bytes. */
+export async function undoFixesSince(root: string, source: RemediationSource, before: ReadonlySet<string>): Promise<string[]> {
+  const added = [...(await appliedFixIds(root, source))].filter((id) => !before.has(id)).reverse();
+  for (const id of added) await undoFix(root, source, id);
+  return added;
+}
+
+/** Refuse every fix that edits a file `allowed` rejects, so it's never applied. */
+export function confineFixes(record: Pick<RemediationRecord, "fixes">, allowed: (file: string) => boolean): number {
+  let refused = 0;
+  for (const fix of record.fixes) {
+    const outside = fix.invalid ? [] : fix.files.map((f) => f.path).filter((p) => !allowed(p));
+    if (!outside.length) continue;
+    fix.invalid = `edits files outside this repair: ${outside.slice(0, 5).join(", ")}`;
+    refused++;
+  }
+  return refused;
+}

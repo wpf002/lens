@@ -7,14 +7,14 @@
  * Cost control: every run passes --max-budget-usd, and the actual cost from the
  * final stream-json result is reported back to the dashboard.
  */
-import { loadRepairItems } from "./ci.js";
+import { inRepairScope, loadRepairItems } from "./ci.js";
 import { BATCH_MAX_FILES, coveredFiles, hashFiles, keepReviewed, loadCoverage, mergeReview, pendingReview, planBatches, priorFindingsFor, renderReport, reviewIndex, saveCoverage, type ReviewFile, type ReviewRecord } from "./review-ledger.js";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { fileURLToPath } from "node:url";
-import { applyFixes, buildRecord, loadRemediation, markUnaddressed, remediationPath, type FixSource, type RemediationRecord, type RemediationSource } from "./remediate.js";
+import { applyFixes, buildRecord, confineFixes, loadRemediation, markUnaddressed, remediationPath, type FixSource, type RemediationRecord, type RemediationSource } from "./remediate.js";
 import { collectChanges, makeWorkspace, NO_CHANGE_REASON } from "./workspace.js";
 import { buildPlanRecord, loadLayoutPlan, moveFiles, planContext, saveLayoutPlan, usableMoves } from "./layout-plan.js";
 import { itemRate, loadFixCosts, recordFixCost, type ItemRate } from "./fix-costs.js";
@@ -1110,6 +1110,12 @@ export class EnrichRunner {
     if (!data) throw new Error(error ?? "no fixes were proposed");
     this.push(job, "Checking each edit against the code");
     const record = buildRecord(root, source, data, job.costUsd, checkId, `s${Date.now().toString(36)}`);
+    const testRepair = source === "health" && checkId === TEST_REPAIR_ID;
+    if (testRepair) {
+      const scope = await loadRepairItems(root);
+      const refused = confineFixes(record, (file) => inRepairScope(scope, file));
+      if (refused) this.push(job, `Refused ${refused} fix${refused === 1 ? "" : "es"} outside the pull request's files`);
+    }
     // Keep earlier results (and their Undo edits); this run replaces only its own items.
     const prior = await loadRemediation(root, source);
     const review = source === "review" ? await readJson<ReviewRecord>(reviewPath(root)) : null;
@@ -1138,7 +1144,8 @@ export class EnrichRunner {
     }
     await this.settleItems(root, source, items.map((i) => i.id));
     job.remediation = { source, proposed: valid.length, invalid: record.fixes.filter((f) => f.invalid).length, skipped: record.skipped.length, applied };
-    await this.fixOwnFindings(job, source, await this.reviewOwnChanges(job, changedPaths(record, valid), covered), covered);
+    // A test repair stays inside the pull request's files; reviewing its own edits would widen it.
+    if (!testRepair) await this.fixOwnFindings(job, source, await this.reviewOwnChanges(job, changedPaths(record, valid), covered), covered);
     this.finish(job, "done");
   }
 

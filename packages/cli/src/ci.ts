@@ -49,6 +49,8 @@ export interface RepairItem {
   title: string;
   evidence: string[];
   fix: string;
+  /** The only files the repair may edit: the pull request's files and the ones the failure names. */
+  files: string[];
 }
 
 export const MAX_TEST_REPAIRS = 2;
@@ -58,6 +60,9 @@ const GATE_VERSION = 2;
 const CI_START_GRACE_MS = 10 * 60_000;
 const MAX_TESTS_LISTED = 50;
 const EXCERPT_CHARS = 3_000;
+const MAX_SCOPE_FILES = 200;
+/** A path-like token in a test name or CI log, such as `src/sync.test.ts`. */
+const PATH_TOKEN = /[\w@.-]+(?:\/[\w@.-]+)*\.[A-Za-z]{1,5}\b/g;
 /** A base-commit pass older than this may hide drift (a new package release, an expired cert), so it's re-run before Lens is blamed. */
 const BASE_STALE_MS = 6 * 60 * 60_000;
 /** How long to wait for those re-runs before comparing anyway. */
@@ -253,20 +258,29 @@ export async function allowAnotherRepair(root: string, pr: number): Promise<bool
 
 export const repairsLeft = (gate: TestGate) => gate.attempts < (gate.allowedRepairs ?? MAX_TEST_REPAIRS);
 
-/** What the remediator gets: each broken check with its failing tests, log excerpt, and the PR's files. */
+/** What the remediator gets: each broken check with its failing tests, log excerpt, and the files it may edit. */
 export function repairItems(gate: TestGate, changedFiles: string[]): RepairItem[] {
-  const files = changedFiles.slice(0, 100).join(", ");
-  return gate.broken.map((b, i) => ({
-    id: `tests-${i + 1}`,
-    title: `Lens's changes broke ${b.name}`.slice(0, 200),
-    evidence: [
-      ...(b.tests.length ? [`Failing tests that pass on the base branch: ${b.tests.join(", ")}`] : [`The ${b.name} check passes on the base branch and fails on this pull request.`]),
-      `CI log:\n${b.excerpt}`,
-      `Files this pull request changed: ${files}`,
-      ...(gate.attempts ? [`${gate.attempts} earlier repair attempt${gate.attempts === 1 ? "" : "s"} didn't fix this. Try a different approach.`] : []),
-    ],
-    fix: "Find which change in this pull request broke these tests and fix that code so they pass. Don't delete, skip, or loosen tests unless a test checks behavior the fix intentionally and correctly changed. If the log says a module or package can't be found, check the package.json nearest the failing file: import from a dependency that file can already reach, or declare the missing one there.",
-  }));
+  return gate.broken.map((b, i) => {
+    const files = [...new Set([...changedFiles, ...[...b.tests, b.excerpt].flatMap((text) => text.match(PATH_TOKEN) ?? [])])].slice(0, MAX_SCOPE_FILES);
+    return {
+      id: `tests-${i + 1}`,
+      title: `Lens's changes broke ${b.name}`.slice(0, 200),
+      evidence: [
+        ...(b.tests.length ? [`Failing tests that pass on the base branch: ${b.tests.join(", ")}`] : [`The ${b.name} check passes on the base branch and fails on this pull request.`]),
+        `CI log:\n${b.excerpt}`,
+        `Files you may edit (edits to any other file except a package.json are refused): ${files.join(", ")}`,
+        ...(gate.attempts ? [`${gate.attempts} earlier repair attempt${gate.attempts === 1 ? "" : "s"} didn't fix this. Try a different approach.`] : []),
+      ],
+      fix: "Find which change in this pull request broke these tests and fix that code so they pass. Don't delete, skip, or loosen tests unless a test checks behavior the fix intentionally and correctly changed. If the log says a module or package can't be found, check the package.json nearest the failing file: import from a dependency that file can already reach, or declare the missing one there.",
+      files,
+    };
+  });
+}
+
+/** True when a repair may edit `file`: a package.json, or a file the items list, matched by path suffix since CI logs use absolute paths. */
+export function inRepairScope(items: RepairItem[], file: string): boolean {
+  if (path.posix.basename(file) === "package.json") return true;
+  return items.some((item) => item.files.some((listed) => listed === file || listed.endsWith(`/${file}`)));
 }
 
 export async function saveRepairItems(root: string, items: RepairItem[]): Promise<void> {
