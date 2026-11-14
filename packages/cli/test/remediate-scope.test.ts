@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { paths, scanAndSave } from "@lens/core";
-import { fixAllPlan, remediationItems, REFACTOR_CHECKS, setWontFix } from "../src/enrich.js";
+import { fixAllPlan, nextFixBatch, remediationItems, REFACTOR_CHECKS, SAME_CHECK_BATCH, setWontFix } from "../src/enrich.js";
 import { itemRate, recordFixCost } from "../src/fix-costs.js";
 
 const FIX = path.resolve(__dirname, "../../core/test/fixtures/vuln-app");
@@ -80,5 +80,24 @@ describe("itemRate", () => {
     const rate = itemRate(runs, fallback);
     expect(rate.low).toBeCloseTo(0.2);
     expect(rate.high).toBeCloseTo(0.4);
+  });
+});
+
+describe("nextFixBatch", () => {
+  const hits = (check: string, n: number) => Array.from({ length: n }, (_, k) => ({ id: `${check}~h${k}` }));
+
+  it("sends up to SAME_CHECK_BATCH hits of one check together", () => {
+    const batch = nextFixBatch([...hits("swallowed-errors", 40), ...hits("console-logs", 3)]);
+    expect(batch).toHaveLength(SAME_CHECK_BATCH);
+    expect(batch.every((i) => i.id.startsWith("swallowed-errors~"))).toBe(true);
+  });
+
+  it("mixes small checks and review findings five at a time", () => {
+    const batch = nextFixBatch([{ id: "review-1" }, ...hits("console-logs", 2), ...hits("swallowed-errors", 30)]);
+    expect(batch.map((i) => i.id)).toEqual(["review-1", "console-logs~h0", "console-logs~h1", "swallowed-errors~h0", "swallowed-errors~h1"]);
+  });
+
+  it("runs a refactor alone", () => {
+    expect(nextFixBatch([{ id: "oversized~a" }, ...hits("swallowed-errors", 10)])).toEqual([{ id: "oversized~a" }]);
   });
 });

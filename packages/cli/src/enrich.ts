@@ -980,8 +980,7 @@ export class EnrichRunner {
         const left = (await pending())
           .filter((i) => !tried.has(`${i.title}|${i.evidence[0]}`))
           .map((i) => (retried.has(i.id) ? { ...i, evidence: [...i.evidence, NO_CHANGE_NOTE] } : i));
-        // A refactor runs alone so Claude has the whole budget and time for it.
-        const items = left[0] && isRefactorItem(left[0].id) ? [left[0]] : left.filter((i) => !isRefactorItem(i.id)).slice(0, FIX_ALL_BATCH);
+        const items = nextFixBatch(left);
         if (!items.length) break;
         const remaining = job.budgetUsd - (job.costUsd ?? 0);
         if (remaining < 0.3) {
@@ -1257,8 +1256,25 @@ export const HEALTH_BATCH = 15;
 export const TEST_REPAIR_ID = "tests";
 /** "Fix Issues" on the Health page: one run over the highest-priority items. */
 export const FIX_ALL_LIMIT = 20;
-/** Items per Fix All run. Small, since fixes have no size limit. */
+/** Items per Fix All run when they come from different checks or the review. Small, since fixes have no size limit. */
 const FIX_ALL_BATCH = 5;
+/** Hits of one Health check per Fix All run. They share one fix, so one run can take more of them. */
+export const SAME_CHECK_BATCH = 25;
+/** The Health check a hit belongs to, or undefined for review findings and audit items. */
+const healthCheckOf = (id: string) => (id.includes("~") ? id.split("~")[0] : undefined);
+
+/**
+ * The next Fix All run's items. A refactor runs alone so Claude has the whole budget and time for it.
+ * Hits of the same check go together, since each Claude run pays to load the project before it fixes anything.
+ */
+export function nextFixBatch<T extends { id: string }>(left: T[]): T[] {
+  if (left[0] && isRefactorItem(left[0].id)) return [left[0]];
+  const fixes = left.filter((i) => !isRefactorItem(i.id));
+  const check = fixes[0] && healthCheckOf(fixes[0].id);
+  const sameCheck = check ? fixes.filter((i) => healthCheckOf(i.id) === check).slice(0, SAME_CHECK_BATCH) : [];
+  if (sameCheck.length >= FIX_ALL_BATCH) return sameCheck;
+  return fixes.slice(0, FIX_ALL_BATCH);
+}
 const SEV_RANK = { high: 0, medium: 1, low: 2 } as const;
 
 export async function remediationItems(root: string, source: RemediationSource, checkId?: string, limit = FIX_ALL_LIMIT): Promise<RemediationItem[]> {
