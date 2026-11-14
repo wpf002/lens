@@ -325,7 +325,8 @@ export const fixBrokenTests = () =>
   });
 export const setWontFix = (id: string, on: boolean) =>
   request<{ wontFix: string[] }>("/api/items/wontfix", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, on }) }).then((r) => r.wontFix);
-export const fetchPushState = () => request<{ state: PushState }>("/api/project/push").then((r) => r.state);
+/** Pull request state, and the pull request change the server is making right now, if any. */
+export const fetchPushState = () => request<{ state: PushState; busy: string | null }>("/api/project/push");
 
 /** Hosted server: commit applied fixes to the fixes branch and push it. */
 export function pushFixesBranch(): Promise<{ branch: string; compareUrl: string | null; files: number }> {

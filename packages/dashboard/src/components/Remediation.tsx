@@ -126,10 +126,13 @@ export function Remediation({ source }: { source: Source }) {
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     } catch (e) {
-      setPush({ busy: null, error: e instanceof Error ? e.message : String(e) });
+      setPushError(e instanceof Error ? e.message : String(e));
     }
   };
-  const [push, setPush] = useState<{ busy: string | null; error?: string }>({ busy: null });
+  const [pushError, setPushError] = useState<string | null>(null);
+  // Shared by every Fixes panel, so one pull request change at a time across the app.
+  const prBusy = useStore((s) => s.prStep ?? (s.prBusy ? "Working…" : null));
+  const setPrStep = useStore((s) => s.setPrStep);
   const pushed = useStore((s) => s.push);
   const refreshPush = useStore((s) => s.refreshPush);
   // GitHub doesn't push check results to us; poll while tests run or Lens repairs what they caught.
@@ -141,18 +144,21 @@ export function Remediation({ source }: { source: Source }) {
     return () => clearInterval(t);
   }, [checksRunning, refreshPush]);
   const step = async (label: string, fn: () => Promise<PullRequest>, reload = false) => {
-    setPush({ busy: label });
+    if (useStore.getState().prStep) return;
+    setPrStep(label);
+    setPushError(null);
     try {
       const pr = await fn();
       // Show the result right away; the refetch below only adds detail.
       useStore.setState((st) => ({ push: { branch: st.push?.branch ?? null, dirty: false, pr } }));
       if (reload) await useStore.getState().reloadProject();
       else await refreshPush();
-      setPush({ busy: null });
     } catch (e) {
-      setPush({ busy: null, error: e instanceof Error ? e.message : String(e) });
+      setPushError(e instanceof Error ? e.message : String(e));
       // Polling stops once tests pass, so a newer commit on the PR goes unseen until a refused merge; show its state.
       await refreshPush();
+    } finally {
+      setPrStep(null);
     }
   };
   // The Health panel also covers single-item runs on review findings.
@@ -257,7 +263,7 @@ export function Remediation({ source }: { source: Source }) {
         <span className="eyebrow !text-fg">{source === "health" && checkTitle ? `Fixes · ${checkTitle}` : "Fixes"}</span>
         {cost ? <span className="text-[11px] text-faint">${cost.toFixed(2)}</span> : null}
         {ready.length > 0 && (
-          <Button size="sm" variant="accent" className="ml-auto" disabled={op.busy} onClick={() => void apply(source, ready.map((f) => f.id))}>
+          <Button size="sm" variant="accent" className="ml-auto" disabled={op.busy || !!prBusy} onClick={() => void apply(source, ready.map((f) => f.id))}>
             {op.busy ? "Applying…" : `Apply ${ready.length} Ready`}
           </Button>
         )}
@@ -279,22 +285,22 @@ export function Remediation({ source }: { source: Source }) {
                 </a>
                 <TestsStatus pr={pr} />
                 {pushed?.dirty ? (
-                  <Button size="sm" variant="accent" disabled={aiBusy || !!push.busy || op.busy} onClick={() => void step("Updating…", createPullRequest)}>
-                    {push.busy ?? "Update Pull Request"}
+                  <Button size="sm" variant="accent" disabled={aiBusy || !!prBusy || op.busy} onClick={() => void step("Updating…", createPullRequest)}>
+                    {prBusy ?? "Update Pull Request"}
                   </Button>
                 ) : needsFixTests(pr) ? (
-                  <Button size="sm" variant="accent" disabled={aiBusy || !!push.busy || op.busy} onClick={() => void step("Starting…", fixBrokenTests)}>
-                    {push.busy ?? "Fix Tests"}
+                  <Button size="sm" variant="accent" disabled={aiBusy || !!prBusy || op.busy} onClick={() => void step("Starting…", fixBrokenTests)}>
+                    {prBusy ?? "Fix Tests"}
                   </Button>
                 ) : (
-                  <Button size="sm" variant="accent" disabled={aiBusy || !!push.busy || op.busy || !canMerge(pr)} onClick={() => void step("Merging…", mergePullRequest, true)}>
-                    {push.busy ?? "Merge"}
+                  <Button size="sm" variant="accent" disabled={aiBusy || !!prBusy || op.busy || !canMerge(pr)} onClick={() => void step("Merging…", mergePullRequest, true)}>
+                    {prBusy ?? "Merge"}
                   </Button>
                 )}
               </>
             ) : (
               <>
-                <button type="button" className="text-muted hover:text-fg hover:underline disabled:opacity-50" disabled={op.busy} onClick={() => void undoAll()}>
+                <button type="button" className="text-muted hover:text-fg hover:underline disabled:opacity-50" disabled={op.busy || !!prBusy} onClick={() => void undoAll()}>
                   Undo
                 </button>
                 {cloud && !canPush && (
@@ -303,8 +309,8 @@ export function Remediation({ source }: { source: Source }) {
                   </Button>
                 )}
                 {canPush && (
-                  <Button size="sm" variant="accent" disabled={aiBusy || !!push.busy || op.busy} onClick={() => void step("Creating…", createPullRequest)}>
-                    {push.busy ?? "Create Pull Request"}
+                  <Button size="sm" variant="accent" disabled={aiBusy || !!prBusy || op.busy} onClick={() => void step("Creating…", createPullRequest)}>
+                    {prBusy ?? "Create Pull Request"}
                   </Button>
                 )}
               </>
@@ -313,7 +319,7 @@ export function Remediation({ source }: { source: Source }) {
         </div>
       )}
       {op.error && <p className="border-b border-line px-3 py-1.5 text-critical">{op.error}</p>}
-      {push.error && <p className="border-b border-line px-3 py-1.5 text-critical">{push.error}</p>}
+      {pushError && <p className="border-b border-line px-3 py-1.5 text-critical">{pushError}</p>}
       {showChanges && (
         <ul className="border-b border-line">
           {current.map(({ f, src }) => (

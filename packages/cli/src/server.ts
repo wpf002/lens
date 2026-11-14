@@ -18,6 +18,7 @@ import path from "node:path";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { authorizeUrl, configureGithubApp, disconnectGithub, ensureGithubLoaded, finishOAuth, githubAppMode, githubConnected, githubLogin, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
+import { PrBusy, PrLock } from "./pr-lock.js";
 import { cloneOrUpdate, commitFilesAndPush, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, uncommittedPaths, type PushInfo } from "./cloud.js";
 import { MAX_TEST_REPAIRS, allowAnotherRepair, gateNeedsWork, recordRepairAttempt, repairItems, repairsLeft, saveRepairItems, type TestGate } from "./ci.js";
 import { grantCheckPermissions } from "./ci-permissions.js";
@@ -123,6 +124,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
   // After Lens opens or updates a pull request, wait for its CI. Tests Lens broke get a repair
   // run, and the repair is pushed to the same pull request, up to MAX_TEST_REPAIRS times.
   let watchingTests: string | null = null;
+  const prLock = new PrLock();
   const permissionTries = new Set<string>();
   /** A check refused a GITHUB_TOKEN permission: grant it in the workflow and push. Once per head commit. */
   const grantRefusedPermissions = async (root: string, gate: TestGate): Promise<boolean> => {
@@ -139,7 +141,8 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
     }
     if (!files.size) return false;
     console.log(`[tests] PR #${gate.pr}: granting workflow permissions to ${granted.join("; ")}`);
-    await commitFilesAndPush(root, [...files], `Grant CI jobs the GitHub token permissions they need\n\n${granted.join("\n")}`);
+    await prLock.whenFree(JOB_POLL_MS);
+    await prLock.hold("the workflow permission push", () => commitFilesAndPush(root, [...files], `Grant CI jobs the GitHub token permissions they need\n\n${granted.join("\n")}`));
     return true;
   };
   const repairingTests = () => enrich.running && enrich.job?.checkId === TEST_REPAIR_ID;
@@ -170,10 +173,18 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         await saveRepairItems(root, items);
         await recordRepairAttempt(root, gate.pr);
         console.log(`[tests] PR #${gate.pr} broke ${items.length} check(s); repair ${gate.attempts + 1} of ${gate.allowedRepairs ?? MAX_TEST_REPAIRS}`);
-        const job = enrich.start("remediate", root, remediateLimit(TEST_REPAIR_ID, items.length), { source: "health", checkId: TEST_REPAIR_ID });
-        while (job.state === "running") await sleep(JOB_POLL_MS);
-        if (job.state !== "done" || !job.remediation?.applied) return console.error(`[tests] repair made no changes${job.error ? `: ${job.error}` : ""}`);
-        await pushPending(root, await appliedFixes(root));
+        await prLock.whenFree(JOB_POLL_MS);
+        const repaired = await prLock.hold("the test repair", async () => {
+          const job = enrich.start("remediate", root, remediateLimit(TEST_REPAIR_ID, items.length), { source: "health", checkId: TEST_REPAIR_ID });
+          while (job.state === "running") await sleep(JOB_POLL_MS);
+          if (job.state !== "done" || !job.remediation?.applied) {
+            console.error(`[tests] repair made no changes${job.error ? `: ${job.error}` : ""}`);
+            return false;
+          }
+          await pushPending(root, await appliedFixes(root));
+          return true;
+        });
+        if (!repaired) return;
       }
     } catch (e) {
       console.error(`[tests] ${e instanceof Error ? e.message : e}`);
@@ -340,6 +351,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
       if (req.method === "POST" && enrichMatch) {
         const task = enrichMatch[1] as EnrichTask;
         if (proj.graphFile) return send(res, 409, { error: "AI runs need a scanned project, not --graph" });
+        if (prLock.label) return send(res, 409, { error: `wait for ${prLock.label} to finish` });
         const body = await readBody(req, 2_000); // the server sets the limit; clients can't raise it
         const opts = JSON.parse(body || "{}") as { source?: unknown; checkId?: unknown; note?: unknown; fixNew?: unknown; areaId?: unknown };
         const note = typeof opts.note === "string" && opts.note.trim() ? opts.note.trim().slice(0, 600) : undefined;
@@ -419,6 +431,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
       }
       if (req.method === "POST" && url.pathname === "/api/remediation/apply") {
         if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });
+        if (prLock.label) return send(res, 409, { error: `wait for ${prLock.label} to finish` });
         const { ids, source } = JSON.parse((await readBody(req, 10_000)) || "{}") as { ids?: unknown; source?: unknown };
         if (!Array.isArray(ids) || !ids.length || ids.length > 30 || !ids.every((x) => typeof x === "string")) return send(res, 400, { error: "ids must be a non-empty list" });
         if (!SOURCES.includes(source as RemediationSource)) return send(res, 400, { error: "source must be audit, review, health, or layout" });
@@ -429,6 +442,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
       if (req.method === "POST" && url.pathname === "/api/remediation/undo") {
         const { id, source } = JSON.parse((await readBody(req, 1_000)) || "{}") as { id?: unknown; source?: unknown };
         if (typeof id !== "string" || !SOURCES.includes(source as RemediationSource)) return send(res, 400, { error: "id and source required" });
+        if (prLock.label) return send(res, 409, { error: `wait for ${prLock.label} to finish` });
         await undoFix(proj.root, source as RemediationSource, id);
         if (source === "layout") await reopenLayoutArea(proj.root, id);
         await scanAndSave(proj.root);
@@ -472,7 +486,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         if (st?.pr?.state === "merged") await markFixesMerged(proj.root, st.pr.number, await uncommittedPaths(proj.root));
         const tests = st?.pr?.state === "open" ? st.pr.tests : undefined;
         if (tests && gateNeedsWork(tests)) void watchTests(proj.root);
-        return send(res, 200, { state: withRepairFlag(st) });
+        return send(res, 200, { state: withRepairFlag(st), busy: prLock.label });
       }
       if (opts.cloud && req.method === "POST" && url.pathname === "/api/project/pr/fix-tests") {
         if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });
@@ -480,25 +494,28 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         const pr = st?.pr?.state === "open" ? st.pr : null;
         if (!pr || !(await allowAnotherRepair(proj.root, pr.number))) return send(res, 400, { error: "No broken tests to fix." });
         void watchTests(proj.root);
-        return send(res, 200, { state: withRepairFlag(await pushState(proj.root)) });
+        return send(res, 200, { state: withRepairFlag(await pushState(proj.root)), busy: prLock.label });
       }
       if (opts.cloud && req.method === "POST" && url.pathname === "/api/project/push") {
         if (!githubConnected()) return send(res, 400, { error: "Connect GitHub to push, or use Download Patch." });
         if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });
         if (!repoName(proj.root)) return send(res, 400, { error: "this project isn't a cloned repo" });
-        return send(res, 200, await pushFixes(proj.root, await appliedFixes(proj.root)));
+        return send(res, 200, await prLock.hold("the push", async () => pushFixes(proj.root, await appliedFixes(proj.root))));
       }
       if (opts.cloud && req.method === "POST" && (url.pathname === "/api/project/pr" || url.pathname === "/api/project/merge")) {
         if (!githubConnected()) return send(res, 400, { error: "Connect GitHub first." });
         if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });
         if (!repoName(proj.root)) return send(res, 400, { error: "this project isn't a cloned repo" });
         if (url.pathname === "/api/project/merge") {
-          const pr = await mergePullRequest(proj.root);
-          await markFixesMerged(proj.root, pr.number);
-          await scanAndSave(proj.root);
+          const pr = await prLock.hold("the merge", async () => {
+            const merged = await mergePullRequest(proj.root);
+            await markFixesMerged(proj.root, merged.number);
+            await scanAndSave(proj.root);
+            return merged;
+          });
           return send(res, 200, { pr });
         }
-        const pr = await createPullRequest(proj.root, await appliedFixes(proj.root));
+        const pr = await prLock.hold("the pull request", async () => createPullRequest(proj.root, await appliedFixes(proj.root)));
         void watchTests(proj.root);
         return send(res, 200, { pr });
       }
@@ -531,6 +548,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
       return send(res, 404, { error: "not found" });
     } catch (e) {
       if (e instanceof HttpFail) return send(res, e.status, { error: e.message });
+      if (e instanceof PrBusy) return send(res, 409, { error: e.message });
       return send(res, 500, { error: (e as Error).message.slice(0, 200) });
     }
   });

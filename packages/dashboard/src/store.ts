@@ -155,6 +155,11 @@ export interface State {
   toggleWontFix(id: string, on: boolean): Promise<void>;
   /** Hosted: where applied fixes are (branch, pull request, merged). */
   push: PushState;
+  /** The pull request change the server is making, such as a test repair. */
+  prBusy: string | null;
+  /** The pull request step any panel in this tab started and is waiting on. */
+  prStep: string | null;
+  setPrStep(label: string | null): void;
   refreshPush(): Promise<void>;
   /** Re-fetch graph, remediation and pull request state after the repo changed. */
   reloadProject(): Promise<void>;
@@ -255,6 +260,9 @@ export const useStore = create<State>((set, get) => ({
   remediationEstimates: {},
   wontFix: [],
   push: null,
+  prBusy: null,
+  prStep: null,
+  setPrStep: (label) => set({ prStep: label }),
   fixable: { batch: 15, items: 0 },
   remediateConfirm: null,
   fixOp: { busy: false, error: null },
@@ -560,8 +568,8 @@ export const useStore = create<State>((set, get) => ({
   async refreshPush() {
     if (!get().meta?.canPush) return set({ push: null });
     try {
-      const push = await fetchPushState();
-      set({ push });
+      const { state: push, busy } = await fetchPushState();
+      set({ push, prBusy: busy });
       // The server marks fixes from a merged pull request as it answers, after the records above were read.
       const unmerged = Object.values(get().remediation).some((r) => r?.fixes.some((f) => f.status === "applied" && f.mergedIn === undefined));
       if (push?.pr?.state === "merged" && unmerged) set({ remediation: (await fetchRemediation()).records });
@@ -652,7 +660,7 @@ export const useStore = create<State>((set, get) => ({
 async function switchedTo(root: string): Promise<void> {
   rememberProject(root);
   clearFileCache();
-  useStore.setState({ ...PROJECT_RESET, modal: null, projectOp: { busy: null, error: null }, enrichJob: { state: "idle" }, audit: null, review: null, remediation: {}, wontFix: [], push: null, remediateConfirm: null });
+  useStore.setState({ ...PROJECT_RESET, modal: null, projectOp: { busy: null, error: null }, enrichJob: { state: "idle" }, audit: null, review: null, remediation: {}, wontFix: [], push: null, prBusy: null, prStep: null, remediateConfirm: null });
   await useStore.getState().init();
 }
 
