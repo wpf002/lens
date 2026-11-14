@@ -679,6 +679,7 @@ export class EnrichRunner {
       this.push(job, "No new or changed files to review");
       return [];
     }
+    if (!scoped) await saveReview(root, { ...(await loadReview(root)), runStartedAt: new Date().toISOString() });
     const dir = paths(root).intermediate;
     await fs.mkdir(dir, { recursive: true });
     for (const f of await fs.readdir(dir)) if (/^(context-health|review)-\d+\.json$/.test(f)) await fs.rm(path.join(dir, f), { force: true });

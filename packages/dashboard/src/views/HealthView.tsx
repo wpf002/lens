@@ -14,11 +14,10 @@ import { Button, EmptyState, SeverityBadge, Spinner, cx, renderInlineCode } from
 import { useStore } from "../store";
 import { SEVERITY_COLOR } from "../utils/colors";
 import { costRange } from "../utils/format";
+import { compareIssues, isNewFinding, type IssueOrder } from "../utils/health";
 import { useModel } from "./hooks";
 
-const SEV_ORDER = { high: 0, medium: 1, low: 2 } as const;
-
-type Row = { key: string; severity: keyof typeof SEV_ORDER; closed: boolean; asks: boolean } & (
+type Row = IssueOrder & { key: string; closed: boolean } & (
   | { kind: "finding"; f: ReviewRecord["findings"][number]; i: number; st: ItemStatus }
   | { kind: "check"; c: HealthCheck }
 );
@@ -404,22 +403,22 @@ export function HealthView() {
   };
   const hitStatus = (id: string): ItemStatus =>
     wontFix.has(id) ? { kind: "wontfix" } : fixed.has(id) ? { kind: "fixed", label: fixedLabel } : safe.has(id) ? { kind: "safe", reason: safe.get(id)! } : { kind: "open", reason: manual.get(id) };
-  const findings = (review?.findings ?? []).map((f, i) => ({ f, i, st: statusOf(f, i) })).sort((a, b) => SEV_ORDER[a.f.severity] - SEV_ORDER[b.f.severity]);
+  const findings = (review?.findings ?? []).map((f, i) => ({ f, i, st: statusOf(f, i) }));
   const canReview = mode === "server" && !!meta?.canEnrich;
-  // One list: review findings and automatic checks, Needs You first, then by severity.
+  // One list: review findings and automatic checks, by severity, new findings first within each.
   const rows: Row[] = [
-    ...findings.map(({ f, i, st }): Row => ({ kind: "finding", key: `f${i}`, severity: f.severity, closed: st.kind !== "open", asks: needsYou(st), f, i, st })),
+    ...findings.map(({ f, i, st }): Row => ({ kind: "finding", key: `f${i}`, severity: f.severity, closed: st.kind !== "open", asks: needsYou(st), fresh: !!review && isNewFinding(f.foundAt, review), f, i, st })),
     ...checks.map((c): Row => {
       const { left, asks } = checkCounts(c, hitStatus);
-      return { kind: "check", key: `c${c.id}`, severity: c.severity, closed: left <= 0, asks: asks > 0, c };
+      return { kind: "check", key: `c${c.id}`, severity: c.severity, closed: left <= 0, asks: asks > 0, fresh: false, c };
     }),
-  ].sort((a, b) => Number(b.asks) - Number(a.asks) || SEV_ORDER[a.severity] - SEV_ORDER[b.severity]);
+  ].sort(compareIssues);
   const openRows = rows.filter((r) => !r.closed);
   const closedRows = rows.filter((r) => r.closed);
   const asking = openRows.filter((r) => r.asks).length;
   const renderRow = (r: Row) =>
     r.kind === "finding" ? (
-      <FindingRow key={r.key} f={r.f} i={r.i} st={r.st} canFix={canReview} isNew={!!r.f.foundAt && r.f.foundAt === review?.generatedAt} />
+      <FindingRow key={r.key} f={r.f} i={r.i} st={r.st} canFix={canReview} isNew={r.fresh} />
     ) : (
       <CheckRow key={r.key} c={r.c} statusOf={hitStatus} canFix={canReview} />
     );

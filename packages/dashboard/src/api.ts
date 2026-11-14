@@ -87,6 +87,8 @@ export type CostEstimate = { low: number; high: number; limit: number };
 
 export interface ReviewRecord {
   generatedAt: string;
+  /** When the latest full review run began. */
+  runStartedAt?: string;
   costUsd?: number;
   summary?: string;
   report: string;

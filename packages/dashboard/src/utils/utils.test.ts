@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { formatDuration } from "./format";
+import { compareIssues, isNewFinding } from "./health";
 import ELK from "elkjs/lib/elk.bundled.js";
 import type { ImpactReport, KnowledgeGraph } from "@lens/core/browser";
 import { buildLayers, buildStructure, edgeAccumulator } from "./aggregate";
@@ -362,5 +363,26 @@ describe("formatDuration", () => {
     expect(formatDuration(10_000)).toBe("1 min");
     expect(formatDuration(45 * 60_000)).toBe("45 min");
     expect(formatDuration(125 * 60_000)).toBe("2h 05m");
+  });
+});
+
+describe("health issue order", () => {
+  it("keeps findings from every batch of the latest run marked New", () => {
+    const review = { runStartedAt: "2026-11-14T13:00:00.000Z", generatedAt: "2026-11-14T13:58:00.000Z" };
+    expect(isNewFinding("2026-11-14T13:10:00.000Z", review)).toBe(true);
+    expect(isNewFinding("2026-11-14T13:58:00.000Z", review)).toBe(true);
+    expect(isNewFinding("2026-11-13T16:35:00.000Z", review)).toBe(false);
+    expect(isNewFinding(undefined, review)).toBe(false);
+  });
+
+  it("sorts by severity, then new findings, then rows that need the owner", () => {
+    const rows = [
+      { id: "low-asks", severity: "low" as const, fresh: false, asks: true },
+      { id: "medium-old", severity: "medium" as const, fresh: false, asks: false },
+      { id: "high", severity: "high" as const, fresh: false, asks: false },
+      { id: "medium-asks", severity: "medium" as const, fresh: false, asks: true },
+      { id: "medium-new", severity: "medium" as const, fresh: true, asks: false },
+    ];
+    expect(rows.sort(compareIssues).map((r) => r.id)).toEqual(["high", "medium-new", "medium-asks", "medium-old", "low-asks"]);
   });
 });

@@ -26,8 +26,8 @@ function ViewTabs({ vertical }: { vertical?: boolean }) {
       {VIEW_GROUPS.map((group) => {
         const shown = group.views.filter((v) => views.includes(v));
         return (
-          <div key={group.label} className="flex flex-col gap-1">
-            {vertical && <div className="eyebrow px-3">{group.label}</div>}
+          <div key={group.label} className={cx("flex", vertical ? "flex-col gap-1" : "items-center gap-1.5")}>
+            <div className={cx("eyebrow", vertical ? "px-3" : "hidden xl:block")}>{group.label}</div>
             <div role="tablist" aria-label={group.label} className={cx("flex", vertical ? "flex-col gap-0.5" : "h-8 items-center gap-0.5 rounded-md border border-line bg-panel-2 p-0.5")}>
             {shown.map((v) => {
               const active = view === v;

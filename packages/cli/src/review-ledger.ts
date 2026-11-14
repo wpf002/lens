@@ -25,6 +25,8 @@ export type StoredFinding = Omit<AgentFinding, "priorId"> & {
 /** Stored at .lens/review.json; survives rescans. */
 export interface ReviewRecord {
   generatedAt: string;
+  /** When the latest full review run began. Findings found since then show as New. */
+  runStartedAt?: string;
   costUsd?: number;
   summary?: string;
   report: string;
