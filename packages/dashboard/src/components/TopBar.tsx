@@ -26,9 +26,10 @@ function ViewTabs({ vertical }: { vertical?: boolean }) {
       {VIEW_GROUPS.map((group) => {
         const shown = group.views.filter((v) => views.includes(v));
         return (
-          <div key={group.label} className={cx("flex", vertical ? "flex-col gap-1" : "items-center gap-1.5")}>
-            <div className={cx("eyebrow", vertical ? "px-3" : "hidden xl:block")}>{group.label}</div>
-            <div role="tablist" aria-label={group.label} className={cx("flex", vertical ? "flex-col gap-0.5" : "h-8 items-center gap-0.5 rounded-md border border-line bg-panel-2 p-0.5")}>
+          <div key={group.label} role="tablist" aria-label={group.label} className={cx("flex", vertical ? "flex-col gap-0.5" : "h-8 items-center gap-0.5 rounded-md border border-line bg-panel-2 p-0.5")}>
+            <span aria-hidden className={vertical ? "eyebrow mb-1 px-3" : "hidden border-r border-line pl-2 pr-2.5 text-[11.5px] font-medium leading-5 text-muted 2xl:block"}>
+              {group.label}
+            </span>
             {shown.map((v) => {
               const active = view === v;
               return (
@@ -55,7 +56,6 @@ function ViewTabs({ vertical }: { vertical?: boolean }) {
                 </button>
               );
             })}
-            </div>
           </div>
         );
       })}
