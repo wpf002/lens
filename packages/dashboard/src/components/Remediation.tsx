@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPullRequest, fixBrokenTests, fixesPatch, mergePullRequest, type ProposedFix, type RemediationSource, type PullRequest, type TestGate } from "../api";
 import { useStore } from "../store";
-import { costRange } from "../utils/format";
+import { costRange, formatDuration } from "../utils/format";
 import { remediateLabel } from "../utils/security";
 import { IconChevronDown, IconChevronRight } from "./icons";
 import { Mascot } from "./Mascot";
@@ -176,8 +176,16 @@ export function Remediation({ source }: { source: Source }) {
               </>
             ) : job.progress?.some((p) => p.startsWith("Auditing")) ? "Auditing" : job.progress?.some((p) => p.startsWith("Reviewing")) ? "Reviewing" : "Fixing"}
           </span>
-          <span className="min-w-0 flex-1 truncate text-[11.5px] text-faint">{(job.progress ?? []).at(-1)}</span>
-          <Elapsed since={job.step?.startedAt ?? job.startedAt} typicalMs={job.step?.typicalMs} />
+          <span className="min-w-0 flex-1 truncate text-[11.5px] text-faint" title={(job.progress ?? []).at(-1)}>
+            {fa?.current ? `Batch ${fa.batches}${fa.runsLeft !== undefined ? ` of ~${fa.batches + fa.runsLeft}` : ""} · ${fa.current}` : (job.progress ?? []).at(-1)}
+          </span>
+          {fa?.msPerRun && fa.runsLeft !== undefined ? (
+            <span className="shrink-0 whitespace-nowrap font-mono text-[12px] font-medium tabular" title="Average batch time so far, times the batches left">
+              ~{formatDuration(fa.msPerRun * (fa.runsLeft + 1))} Left
+            </span>
+          ) : (
+            <Elapsed since={job.step?.startedAt ?? job.startedAt} typicalMs={job.step?.typicalMs} />
+          )}
           <Button size="sm" variant="ghost" onClick={() => void cancel()}>
             Cancel
           </Button>

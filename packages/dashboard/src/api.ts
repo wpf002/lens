@@ -58,7 +58,7 @@ export interface EnrichJob {
   remediation?: { source: RemediationSource; proposed: number; invalid: number; skipped: number };
   source?: RemediationSource;
   checkId?: string;
-  fixAll?: { attempted: number; total: number; fixed: number; batches: number; stopped?: string };
+  fixAll?: { attempted: number; total: number; fixed: number; batches: number; stopped?: string; current?: string; runsLeft?: number; msPerRun?: number };
   step?: { kind: "audit" | "review"; startedAt: number; typicalMs?: number };
 }
 

@@ -12,6 +12,7 @@ import { coveredFiles, hashFiles, loadCoverage, mergeReview, pendingReview, plan
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
+import { z } from "zod";
 import { fileURLToPath } from "node:url";
 import { applyFixes, buildRecord, loadRemediation, markUnaddressed, remediationPath, type RemediationRecord, type RemediationSource } from "./remediate.js";
 import { collectChanges, makeWorkspace, NO_CHANGE_REASON } from "./workspace.js";
@@ -30,6 +31,20 @@ export interface AuditRecord {
   summary?: string;
   report: string;
   items: AuditVerdicts["items"];
+}
+
+export interface FixAllProgress {
+  attempted: number;
+  total: number;
+  fixed: number;
+  batches: number;
+  stopped?: string;
+  /** What the running batch fixes: a check's title, or "Mixed Issues". */
+  current?: string;
+  /** Claude runs still to go after the running one, at the current batch sizes. */
+  runsLeft?: number;
+  /** Average time per finished batch, for the time-left figure. */
+  msPerRun?: number;
 }
 
 export interface EnrichJob {
@@ -51,7 +66,7 @@ export interface EnrichJob {
   /** Cost of earlier Claude runs in this job (Fix runs several batches). */
   costBase?: number;
   /** Fix-everything progress. */
-  fixAll?: { attempted: number; total: number; fixed: number; batches: number; stopped?: string };
+  fixAll?: FixAllProgress;
   /** Which report a remediate run works from (and, for "health", which check). */
   source?: RemediationSource;
   checkId?: string;
@@ -134,6 +149,8 @@ interface ClaudeRunOptions {
   budgetUsd?: number;
   /** Receives this process's running cost; without it the cost is added to `job.costBase`. */
   onCost?: (usd: number) => void;
+  /** False when the caller handles a timed-out run itself, so one slow batch doesn't end the job. */
+  timeoutEndsJob?: boolean;
 }
 export const REVIEW_REPORT = "CODE_REVIEW.md";
 export const reviewPath = (root: string) => path.join(paths(root).dir, "review.json");
@@ -188,7 +205,14 @@ async function recordDuration(root: string, kind: "audit" | "review", ms: number
   await writeJsonAtomic(runTimesPath(root), all, true);
 }
 export const MAX_BUDGET_USD = 20;
-const TIMEOUT_MS = 45 * 60_000;
+const DEFAULT_TIMEOUT_MS = 45 * 60_000;
+const TimeoutSchema = z.coerce.number().int().positive();
+/** LENS_CLAUDE_TIMEOUT_MS shortens the per-run limit so tests can hit it. */
+function claudeTimeoutMs(): number {
+  const raw = process.env.LENS_CLAUDE_TIMEOUT_MS;
+  return raw === undefined ? DEFAULT_TIMEOUT_MS : TimeoutSchema.parse(raw);
+}
+const timeoutLabel = (ms: number) => (ms >= 60_000 ? `${Math.round(ms / 60_000)} minutes` : `${Math.round(ms / 1000)} seconds`);
 /** Checks whose fixes are refactors: each item gets its own Claude run and a larger cap. */
 export const REFACTOR_CHECKS = new Set(["oversized", "hotspots", "import-cycles", "layer-violations", "fragmented"]);
 export const REFACTOR_ITEM_LIMIT_USD = 8;
@@ -321,7 +345,7 @@ export class EnrichRunner {
   }
 
   /** Spawn Claude Code, stream its tool calls into the job's progress, resolve on exit. */
-  private async runClaude(job: EnrichJob, prompt: string, tools: string[], extraArgs: string[] = [], cwd = job.root, run: ClaudeRunOptions = {}): Promise<{ code: number | null; stderr: string; resultError?: string; resultText: string }> {
+  private async runClaude(job: EnrichJob, prompt: string, tools: string[], extraArgs: string[] = [], cwd = job.root, run: ClaudeRunOptions = {}): Promise<{ code: number | null; stderr: string; resultError?: string; resultText: string; timedOut: boolean }> {
     const args = [
       "-p", prompt,
       "--output-format", "stream-json", "--verbose",
@@ -333,10 +357,13 @@ export class EnrichRunner {
     this.push(job, "Starting Claude Code");
     const child = spawn(claudeBin(), args, { cwd, stdio: ["ignore", "pipe", "pipe"], env: childEnv() });
     this.children.add(child);
+    let timedOut = false;
+    const timeoutMs = claudeTimeoutMs();
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill("SIGTERM");
-      this.finish(job, "error", `timed out after ${TIMEOUT_MS / 60_000} minutes`);
-    }, TIMEOUT_MS);
+      if (run.timeoutEndsJob !== false) this.finish(job, "error", `timed out after ${timeoutLabel(timeoutMs)}`);
+    }, timeoutMs);
 
     let buf = "";
     let stderr = "";
@@ -382,7 +409,8 @@ export class EnrichRunner {
     });
     clearTimeout(timer);
     this.children.delete(child);
-    return { code, stderr, resultError, resultText };
+    if (timedOut) resultError = `ran past ${timeoutLabel(timeoutMs)}`;
+    return { code, stderr, resultError, resultText, timedOut };
   }
 
   private async runDomain(job: EnrichJob) {
@@ -844,7 +872,7 @@ export class EnrichRunner {
    * Let Claude edit a copy of the project, then diff the copy into whole-file edits.
    * The project itself is untouched until applyFixes, which backs files up for Undo.
    */
-  private async draftFixes(job: EnrichJob, items: Array<{ id: string }>, single: boolean): Promise<{ data: Remediation | null; error?: string }> {
+  private async draftFixes(job: EnrichJob, items: Array<{ id: string }>, single: boolean): Promise<{ data: Remediation | null; error?: string; timedOut?: boolean }> {
     const instructions = agentInstructions("remediator");
     if (!existsSync(instructions)) throw new Error(`missing ${instructions}`);
     this.push(job, "Copying the project");
@@ -862,9 +890,10 @@ export class EnrichRunner {
         ...(single ? ["The owner picked this one item to fix. If it has an ownerNote, that is the owner's decision on how to fix it. Follow it."] : []),
       ].join("\n");
       const costBefore = job.costUsd ?? 0;
-      const { code, stderr, resultError, resultText } = await this.runClaude(job, prompt, ["Read", "Grep", "Glob", "Edit", "Write"], MODEL_ARGS, ws);
+      const { code, stderr, resultError, resultText, timedOut } = await this.runClaude(job, prompt, ["Read", "Grep", "Glob", "Edit", "Write"], MODEL_ARGS, ws, { timeoutEndsJob: false });
       if (items.length) await recordFixCost(job.root, items.every((i) => isRefactorItem(i.id)) ? "refactor" : "batch", { items: items.length, usd: Math.max(0, (job.costUsd ?? 0) - costBefore) });
       if (job.state !== "running") return { data: null };
+      if (timedOut) return { data: null, error: resultError, timedOut };
       let raw = await readJson<unknown>(outPath);
       if (!raw) {
         try {
@@ -955,7 +984,12 @@ export class EnrichRunner {
       job.review = undefined;
     }
     const total = only ? (await pending()).length : await fixableCount(root, source);
-    const progress = { attempted: 0, total, fixed: 0, batches: 0 } as NonNullable<EnrichJob["fixAll"]>;
+    const progress: FixAllProgress = { attempted: 0, total, fixed: 0, batches: 0 };
+    // Items from a batch that ran out of time, retried one per run.
+    const alone = new Set<string>();
+    let runMs = 0;
+    // Runs that finished, so a timed-out batch doesn't count toward the average or the no-progress stop.
+    let finishedRuns = 0;
     job.fixAll = progress;
     const tried = new Set<string>();
     // Items whose fix changed no files get one more attempt, told so.
@@ -980,7 +1014,8 @@ export class EnrichRunner {
         const left = (await pending())
           .filter((i) => !tried.has(`${i.title}|${i.evidence[0]}`))
           .map((i) => (retried.has(i.id) ? { ...i, evidence: [...i.evidence, NO_CHANGE_NOTE] } : i));
-        const items = nextFixBatch(left);
+        const solo = left.find((i) => alone.has(i.id));
+        const items = solo ? [solo] : nextFixBatch(left);
         if (!items.length) break;
         const remaining = job.budgetUsd - (job.costUsd ?? 0);
         if (remaining < 0.3) {
@@ -989,15 +1024,30 @@ export class EnrichRunner {
         }
         for (const i of items) tried.add(`${i.title}|${i.evidence[0]}`);
         progress.batches++;
+        progress.current = items.every((i) => i.title === items[0]!.title) ? items[0]!.title : "Mixed Issues";
+        const picked = new Set(items.map((i) => i.id));
+        progress.runsLeft = countFixRuns(left.filter((i) => !picked.has(i.id)), alone);
         this.push(job, `Batch ${progress.batches}: ${items.length} issues`);
+        const batchStart = Date.now();
         job.costBase = job.costUsd ?? 0;
         const batchBudget = Math.min(remaining, isRefactorItem(items[0]!.id) ? REFACTOR_ITEM_LIMIT_USD : estimateCost("remediate", items.length).limit);
         const saved = job.budgetUsd;
         job.budgetUsd = Math.round(batchBudget * 100) / 100; // per-run cap passed to Claude
-        const { data, error } = await this.draftFixes(job, items, false);
+        const { data, error, timedOut } = await this.draftFixes(job, items, false);
         job.budgetUsd = saved;
         if (job.state !== "running") break;
+        if (timedOut && items.length > 1) {
+          this.push(job, `Batch ${progress.batches} ran past ${timeoutLabel(claudeTimeoutMs())}. Retrying its ${items.length} issues one at a time`);
+          for (const i of items) {
+            alone.add(i.id);
+            tried.delete(`${i.title}|${i.evidence[0]}`);
+          }
+          continue;
+        }
         progress.attempted += items.length;
+        finishedRuns++;
+        runMs += Date.now() - batchStart;
+        progress.msPerRun = Math.round(runMs / finishedRuns);
         if (!data) {
           this.push(job, `Batch ${progress.batches} produced no usable fixes${error ? `: ${error}` : ""}`);
           markUnaddressed(merged, items.map((i) => i.id), error?.slice(0, 600) || undefined);
@@ -1026,7 +1076,7 @@ export class EnrichRunner {
           await scanAndSave(root);
         }
         progress.fixed += applied.length;
-        if (!applied.length && progress.batches >= 3 && progress.fixed === 0) {
+        if (!applied.length && finishedRuns >= 3 && progress.fixed === 0) {
           progress.stopped = "three batches in a row produced nothing to apply";
           break;
         }
@@ -1267,6 +1317,19 @@ const healthCheckOf = (id: string) => (id.includes("~") ? id.split("~")[0] : und
  * The next Fix All run's items. A refactor runs alone so Claude has the whole budget and time for it.
  * Hits of the same check go together, since each Claude run pays to load the project before it fixes anything.
  */
+/** Claude runs needed for these items: one per item already marked to run alone, then batches as nextFixBatch picks them. */
+export function countFixRuns(items: Array<{ id: string }>, alone: ReadonlySet<string> = new Set()): number {
+  let rest = items.filter((i) => !alone.has(i.id));
+  let runs = items.length - rest.length;
+  while (rest.length) {
+    const batch = new Set(nextFixBatch(rest));
+    if (!batch.size) break;
+    rest = rest.filter((i) => !batch.has(i));
+    runs++;
+  }
+  return runs;
+}
+
 export function nextFixBatch<T extends { id: string }>(left: T[]): T[] {
   if (left[0] && isRefactorItem(left[0].id)) return [left[0]];
   const fixes = left.filter((i) => !isRefactorItem(i.id));

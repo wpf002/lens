@@ -68,3 +68,10 @@ export function costRange(e?: { low: number; high: number }): string {
   const hi = Math.max(lo + 1, Math.ceil(e.high));
   return `~$${lo}–${hi}`;
 }
+
+const MINUTE_MS = 60_000;
+/** "45 min" under an hour, "2h 10m" above. */
+export function formatDuration(ms: number): string {
+  const min = Math.max(1, Math.round(ms / MINUTE_MS));
+  return min < 60 ? `${min} min` : `${Math.floor(min / 60)}h ${String(min % 60).padStart(2, "0")}m`;
+}

@@ -510,6 +510,53 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
     }
   });
 
+  it("Fix All retries a batch that runs past the time limit one issue at a time instead of ending the run", async () => {
+    const fake = path.join(os.tmpdir(), `fake-slow-${process.pid}.mjs`);
+    const runs = path.join(os.tmpdir(), `fake-slow-runs-${process.pid}.jsonl`);
+    await fs.rm(runs, { force: true });
+    await fs.writeFile(fake, `#!/usr/bin/env node
+import fs from "node:fs";
+const prompt = process.argv[process.argv.indexOf("-p") + 1];
+const get = (k) => new RegExp(k + ": (.+)").exec(prompt)?.[1].trim();
+if (get("Findings path")) fs.writeFileSync(get("Findings path"), JSON.stringify({ findings: [] }));
+else {
+  const items = JSON.parse(fs.readFileSync(get("Items"), "utf8")).items;
+  fs.appendFileSync(${JSON.stringify(runs)}, JSON.stringify(items.map((i) => i.id)) + "\\n");
+  if (items.length > 1) await new Promise((r) => setTimeout(r, 60_000));
+  const ws = get("Project copy \\\\(edit files here\\\\)");
+  const fixes = [];
+  if (!fs.existsSync(ws + "/SLOW_FIX.md")) {
+    fs.writeFileSync(ws + "/SLOW_FIX.md", "# Fixed\\n");
+    fixes.push({ itemId: items[0].id, title: "Add note", explanation: "Adds a note.", files: ["SLOW_FIX.md"] });
+  }
+  const skipped = items.filter((i) => !fixes.some((f) => f.itemId === i.id)).map((i) => ({ itemId: i.id, reason: "Not something to change here." }));
+  fs.writeFileSync(get("Report path"), JSON.stringify({ fixes, skipped }));
+}
+console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, total_cost_usd: 0.01 }));
+`);
+    await fs.chmod(fake, 0o755);
+    process.env.LENS_CLAUDE_BIN = fake;
+    process.env.LENS_CLAUDE_TIMEOUT_MS = "500";
+    try {
+      expect((await post(`${base}/api/enrich/remediate`, { source: "health" }, auth())).status).toBe(202);
+      let job: { state: string; error?: string } = { state: "running" };
+      for (let i = 0; i < 600 && job.state === "running"; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        job = JSON.parse((await get(`${base}/api/enrich/status`, auth())).body);
+      }
+      expect(job.error).toBeUndefined();
+      expect(job.state).toBe("done");
+      const sent: string[][] = (await fs.readFile(runs, "utf8")).trim().split("\n").map((l) => JSON.parse(l));
+      const slow = sent.find((ids) => ids.length > 1);
+      expect(slow).toBeDefined();
+      const alone = new Set(sent.filter((ids) => ids.length === 1).map((ids) => ids[0]));
+      expect(slow!.every((id) => alone.has(id))).toBe(true);
+    } finally {
+      delete process.env.LENS_CLAUDE_BIN;
+      delete process.env.LENS_CLAUDE_TIMEOUT_MS;
+    }
+  }, 40_000);
+
   it("Remediate gives every item it sent a reason when Claude drops it", async () => {
     const fake = path.join(os.tmpdir(), `fake-drop-${process.pid}.mjs`);
     await fs.writeFile(fake, `#!/usr/bin/env node

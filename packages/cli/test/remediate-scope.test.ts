@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { paths, scanAndSave } from "@lens/core";
-import { fixAllPlan, nextFixBatch, remediationItems, REFACTOR_CHECKS, SAME_CHECK_BATCH, setWontFix } from "../src/enrich.js";
+import { countFixRuns, fixAllPlan, nextFixBatch, remediationItems, REFACTOR_CHECKS, SAME_CHECK_BATCH, setWontFix } from "../src/enrich.js";
 import { itemRate, recordFixCost } from "../src/fix-costs.js";
 
 const FIX = path.resolve(__dirname, "../../core/test/fixtures/vuln-app");
@@ -99,5 +99,18 @@ describe("nextFixBatch", () => {
 
   it("runs a refactor alone", () => {
     expect(nextFixBatch([{ id: "oversized~a" }, ...hits("swallowed-errors", 10)])).toEqual([{ id: "oversized~a" }]);
+  });
+});
+
+describe("countFixRuns", () => {
+  const hits = (check: string, n: number) => Array.from({ length: n }, (_, k) => ({ id: `${check}~h${k}` }));
+
+  it("counts one run per batch nextFixBatch would pick", () => {
+    expect(countFixRuns([...hits("swallowed-errors", 30), ...hits("console-logs", 3), { id: "oversized~a" }])).toBe(4);
+  });
+
+  it("counts each item marked to run alone as its own run", () => {
+    const items = hits("swallowed-errors", 6);
+    expect(countFixRuns(items, new Set(items.slice(0, 2).map((i) => i.id)))).toBe(3);
   });
 });

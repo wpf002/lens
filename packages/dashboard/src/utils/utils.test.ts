@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { formatDuration } from "./format";
 import ELK from "elkjs/lib/elk.bundled.js";
 import type { ImpactReport, KnowledgeGraph } from "@lens/core/browser";
 import { buildLayers, buildStructure, edgeAccumulator } from "./aggregate";
@@ -348,5 +349,13 @@ describe("checklist groups", () => {
     expect(text).toContain("Never print secret values.");
     expect(text).toContain("1. Spend caps\n   Goal: Set a monthly limit.\n   - No cap found");
     expect(checkPrompt("fix", [{ title: "X", evidence: [], fix: "Do Y" }])).toContain("Goal: Do Y");
+  });
+});
+
+describe("formatDuration", () => {
+  it("shows minutes under an hour and hours with padded minutes above", () => {
+    expect(formatDuration(10_000)).toBe("1 min");
+    expect(formatDuration(45 * 60_000)).toBe("45 min");
+    expect(formatDuration(125 * 60_000)).toBe("2h 05m");
   });
 });
