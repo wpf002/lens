@@ -307,6 +307,103 @@ function friendlyError(msg: string): string {
   return /authenticat|oauth|log ?in|401|invalid api key/i.test(msg) ? LOGIN_HELP : msg;
 }
 
+/** Spend tracking for review batches that run in parallel under one limit. */
+class BatchBudget {
+  /** Cost per batch: finished batches keep their final cost, running ones their latest report. */
+  private readonly cost = new Map<number, number>();
+  /** Spend caps of running batches, so parallel batches can't overrun the limit together. */
+  private readonly reserved = new Map<number, number>();
+  constructor(private readonly limitUsd: number) {}
+
+  record(batch: number, usd: number): void {
+    this.cost.set(batch, usd);
+  }
+
+  release(batch: number): void {
+    this.reserved.delete(batch);
+  }
+
+  spent(): number {
+    return [...this.cost.values()].reduce((a, b) => a + b, 0);
+  }
+
+  available(): number {
+    return this.limitUsd - this.spent() - [...this.reserved.entries()].reduce((a, [n, cap]) => a + cap - (this.cost.get(n) ?? 0), 0);
+  }
+
+  /** Runs batches REVIEW_CONCURRENCY at a time. Returns true when it stopped for lack of budget. */
+  async run(count: number, running: () => boolean, reviewBatch: (n: number, cap: number) => Promise<void>): Promise<boolean> {
+    let next = 0;
+    let outOfBudget = false;
+    const worker = async () => {
+      while (next < count && running()) {
+        const room = this.available();
+        if (room < MIN_RUN_USD) {
+          outOfBudget = true;
+          return;
+        }
+        const n = next++;
+        const cap = Math.round(Math.min(room, REVIEW_BATCH_LIMIT_USD) * 100) / 100;
+        this.reserved.set(n, cap);
+        await reviewBatch(n, cap);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(REVIEW_CONCURRENCY, count) }, worker));
+    return outOfBudget;
+  }
+}
+
+function serialQueue(): (task: () => Promise<void>) => Promise<void> {
+  let chain: Promise<void> = Promise.resolve();
+  return (task) => {
+    const run = chain.then(task);
+    chain = run;
+    return run;
+  };
+}
+
+async function reviewTargets(root: string, scope: { paths: string[] } | undefined) {
+  const g = await loadGraph(root);
+  if (!g) throw new Error("no graph for this project; scan it first");
+  const files = reviewFiles(g);
+  const hashes = await hashFiles(root, files.map((f) => f.path));
+  const coverage = await loadCoverage(root);
+  const inScope = new Set(scope?.paths ?? []);
+  const targets = scope ? files.filter((f) => inScope.has(f.path)) : pendingReview(files, hashes, coverage);
+  return { g, files, hashes, coverage, targets };
+}
+
+async function clearReviewIntermediates(root: string): Promise<string> {
+  const dir = paths(root).intermediate;
+  await fs.mkdir(dir, { recursive: true });
+  for (const f of await fs.readdir(dir)) if (/^(context-health|review)-\d+\.json$/.test(f)) await fs.rm(path.join(dir, f), { force: true });
+  return dir;
+}
+
+type ReviewGraph = NonNullable<Awaited<ReturnType<typeof loadGraph>>>;
+
+async function writeBatchContext(ctxPath: string, root: string, g: ReviewGraph, batch: ReturnType<typeof reviewFiles>, closed: Awaited<ReturnType<typeof reviewClosed>>, scoped: boolean): Promise<void> {
+  const batchPaths = new Set(batch.map((f) => f.path));
+  const ledger = await loadReview(root);
+  const health = (g.health?.checks ?? []).map((c) => ({ id: c.id, title: c.title, hits: c.hits.filter((h) => h.path && batchPaths.has(h.path)).slice(0, 10) })).filter((c) => c.hits.length);
+  await writeJsonAtomic(ctxPath, { project: g.project, mode: scoped ? "changes" : "full", files: batch, priorFindings: priorFindingsFor(ledger.findings, batchPaths, closed), health, ...(scoped ? { diff: gitDiff(root, [...batchPaths]) } : {}) }, true);
+}
+
+function reviewerPrompt(instructions: string, root: string, ctxPath: string, outPath: string): string {
+  return [
+    `Follow the agent instructions in ${instructions} (read that file first).`,
+    `Project root: ${root}`,
+    `Context: ${ctxPath}`,
+    `Findings path: ${outPath}`,
+    "Read-only: write the findings file and nothing else.",
+    "If the write is refused, put the findings inside a ```json fence in your final message instead.",
+  ].join("\n");
+}
+
+function batchFailure(code: number | null, stderr: string, error: Parameters<typeof formatZodError>[0]): string {
+  return code ? `Claude Code exited with code ${code}: ${stderr.trim().split("\n").pop() ?? ""}` : `review findings failed validation:\n${formatZodError(error)}`;
+}
+
 export class EnrichRunner {
   job: EnrichJob | null = null;
   private children = new Set<ChildProcess>();
@@ -665,13 +762,7 @@ export class EnrichRunner {
     const scoped = !!opts.scope;
     this.push(job, "Rescanning");
     await scanAndSave(root);
-    const g = await loadGraph(root);
-    if (!g) throw new Error("no graph for this project; scan it first");
-    const files = reviewFiles(g);
-    const hashes = await hashFiles(root, files.map((f) => f.path));
-    const coverage = await loadCoverage(root);
-    const inScope = new Set(opts.scope?.paths ?? []);
-    const targets = scoped ? files.filter((f) => inScope.has(f.path)) : pendingReview(files, hashes, coverage);
+    const { g, files, hashes, coverage, targets } = await reviewTargets(root, opts.scope);
     const batches = planBatches(targets);
     const progress = { findings: 0, report: REVIEW_REPORT, batchesDone: 0, batchesTotal: batches.length } as NonNullable<EnrichJob["review"]>;
     if (!scoped) job.review = progress;
@@ -682,9 +773,7 @@ export class EnrichRunner {
       return [];
     }
     if (!scoped) await saveReview(root, { ...(await loadReview(root)), runStartedAt: new Date().toISOString() });
-    const dir = paths(root).intermediate;
-    await fs.mkdir(dir, { recursive: true });
-    for (const f of await fs.readdir(dir)) if (/^(context-health|review)-\d+\.json$/.test(f)) await fs.rm(path.join(dir, f), { force: true });
+    const dir = await clearReviewIntermediates(root);
     const instructions = agentInstructions("code-reviewer");
     if (!existsSync(instructions)) throw new Error(`missing ${instructions}`);
     const existing = new Set(files.map((f) => f.path));
@@ -692,15 +781,9 @@ export class EnrichRunner {
     const added: number[] = [];
     let lastError: string | undefined;
 
-    // Cost per batch: finished batches keep their final cost, running ones their latest report.
-    const batchCost = new Map<number, number>();
-    // Spend caps of running batches, so parallel batches can't overrun the review's limit together.
-    const reservedCap = new Map<number, number>();
-    const spent = () => [...batchCost.values()].reduce((a, b) => a + b, 0);
-    const available = () => opts.limitUsd - spent() - [...reservedCap.entries()].reduce((a, [n, cap]) => a + cap - (batchCost.get(n) ?? 0), 0);
+    const budget = new BatchBudget(opts.limitUsd);
     // Ledger and coverage writes run one at a time; batches finish in any order.
-    let saveChain: Promise<void> = Promise.resolve();
-    let next = 0;
+    const serially = serialQueue();
 
     const reviewBatch = async (n: number, cap: number) => {
       const batch = batches[n]!;
@@ -709,35 +792,26 @@ export class EnrichRunner {
       this.push(job, batches.length > 1 ? `Batch ${n + 1} of ${batches.length}: ${batch.length} files` : `Reviewing ${batch.length} files`);
       const batchPaths = new Set(batch.map((f) => f.path));
       const closed = await reviewClosed(root);
-      const ledger = await loadReview(root);
-      const health = (g.health?.checks ?? []).map((c) => ({ id: c.id, title: c.title, hits: c.hits.filter((h) => h.path && batchPaths.has(h.path)).slice(0, 10) })).filter((c) => c.hits.length);
-      await writeJsonAtomic(ctxPath, { project: g.project, mode: scoped ? "changes" : "full", files: batch, priorFindings: priorFindingsFor(ledger.findings, batchPaths, closed), health, ...(scoped ? { diff: gitDiff(root, [...batchPaths]) } : {}) }, true);
-      const prompt = [
-        `Follow the agent instructions in ${instructions} (read that file first).`,
-        `Project root: ${root}`,
-        `Context: ${ctxPath}`,
-        `Findings path: ${outPath}`,
-        "Read-only: write the findings file and nothing else.",
-        "If the write is refused, put the findings inside a ```json fence in your final message instead.",
-      ].join("\n");
+      await writeBatchContext(ctxPath, root, g, batch, closed, scoped);
+      const prompt = reviewerPrompt(instructions, root, ctxPath, outPath);
       const onCost = (usd: number) => {
-        batchCost.set(n, usd);
-        job.costUsd = startCost + spent();
+        budget.record(n, usd);
+        job.costUsd = startCost + budget.spent();
       };
       const tools = ["Read", "Grep", "Glob", `Edit(./.lens/intermediate/review-${n}.json)`];
       const { code, stderr, resultError, resultText } = await this.runClaude(job, prompt, tools, MODEL_ARGS, root, { budgetUsd: cap, onCost });
-      reservedCap.delete(n);
+      budget.release(n);
       if (job.state !== "running") return;
 
       const parsed = ReviewFindingsSchema.safeParse((await readJson<unknown>(outPath)) ?? fencedJson(resultText));
       await fs.rm(ctxPath, { force: true });
       await fs.rm(outPath, { force: true });
       if (!parsed.success) {
-        lastError = resultError ?? (code ? `Claude Code exited with code ${code}: ${stderr.trim().split("\n").pop() ?? ""}` : `review findings failed validation:\n${formatZodError(parsed.error)}`);
+        lastError = resultError ?? batchFailure(code, stderr, parsed.error);
         this.push(job, `Batch ${n + 1} failed: ${lastError.split("\n")[0]}`);
         return;
       }
-      const save = saveChain.then(async () => {
+      await serially(async () => {
         const now = new Date().toISOString();
         const current = await loadReview(root);
         const merged = mergeReview(current.findings, parsed.data, { ...closed, reviewed: batchPaths, existing, now, byFix: scoped });
@@ -752,24 +826,10 @@ export class EnrichRunner {
         progress.findings += merged.added.length;
         progress.batchesDone = (progress.batchesDone ?? 0) + 1;
       });
-      saveChain = save;
-      await save;
     };
 
-    const worker = async () => {
-      while (next < batches.length && job.state === "running") {
-        const room = available();
-        if (room < MIN_RUN_USD) {
-          progress.stoppedEarly = "reached the spending limit; the next review continues from here";
-          return;
-        }
-        const n = next++;
-        const cap = Math.round(Math.min(room, REVIEW_BATCH_LIMIT_USD) * 100) / 100;
-        reservedCap.set(n, cap);
-        await reviewBatch(n, cap);
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(REVIEW_CONCURRENCY, batches.length) }, worker));
+    const outOfBudget = await budget.run(batches.length, () => job.state === "running", reviewBatch);
+    if (outOfBudget) progress.stoppedEarly = "reached the spending limit; the next review continues from here";
     if (job.state !== "running") return null;
     if (!progress.batchesDone && lastError) throw new Error(lastError);
     if (!scoped) {
