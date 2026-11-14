@@ -4,12 +4,13 @@
  * Lens compares failing tests on the PR against the base commit, so only failures its
  * changes introduced count as broken.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { paths, readJson, writeJsonAtomic } from "@lens/core";
 import { githubApi, githubText } from "./github.js";
 
-export type TestState = "running" | "passed" | "broken" | "none";
+/** "missing": the repo has pull request workflows, but none reported a check on this commit. */
+export type TestState = "running" | "passed" | "broken" | "none" | "missing";
 export interface BrokenCheck {
   name: string;
   /** Tests failing on the PR that pass on the base commit. Empty when the whole check is new breakage. */
@@ -61,6 +62,8 @@ const EXCERPT_CHARS = 3_000;
 const BASE_STALE_MS = 6 * 60 * 60_000;
 /** How long to wait for those re-runs before comparing anyway. */
 const BASE_RERUN_WAIT_MS = 30 * 60_000;
+const WORKFLOW_FILE = /\.ya?ml$/;
+const PULL_REQUEST_TRIGGER = /\bpull_request(_target)?\b/;
 const FAILED_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
 
 const gatePath = (root: string) => path.join(paths(root).dir, "test-gate.json");
@@ -173,6 +176,21 @@ async function runResult(repo: string, run: CheckRun): Promise<RunResult> {
   return { name: run.name, failed, tests: failedTests(log), excerpt: errorExcerpt(log), ...(permissions.length ? { permissions } : {}) };
 }
 
+/** Whether any workflow in the project copy runs on pull requests. */
+export function runsOnPullRequests(root: string): boolean {
+  const dir = path.join(root, ".github", "workflows");
+  if (!existsSync(dir)) return false;
+  return readdirSync(dir)
+    .filter((name) => WORKFLOW_FILE.test(name))
+    .some((name) => PULL_REQUEST_TRIGGER.test(readFileSync(path.join(dir, name), "utf8")));
+}
+
+/** Gate state for a commit with no check runs. GitHub skips pull request workflows while a PR has conflicts. */
+export function noChecksState(hasPullRequestWorkflows: boolean, pushedRecently: boolean): TestState {
+  if (!hasPullRequestWorkflows) return "none";
+  return pushedRecently ? "running" : "missing";
+}
+
 export interface GateInput {
   repo: string;
   pr: number;
@@ -191,9 +209,10 @@ export async function testGate(root: string, input: GateInput, now = Date.now())
   const runs = await checkRuns(input.repo, input.headSha);
   const base: TestGate = { pr: input.pr, sha: input.headSha, state: "running", broken: [], preexisting: 0, attempts, ...allowed, version: GATE_VERSION };
   if (!runs.length) {
-    const hasCi = existsSync(path.join(root, ".github", "workflows"));
     const fresh = input.pushedAt !== undefined && now - input.pushedAt < CI_START_GRACE_MS;
-    return hasCi && fresh ? base : save(root, { ...base, state: "none" });
+    const state = noChecksState(runsOnPullRequests(root), fresh);
+    // A missing run can still start (a re-run, or GitHub catching up), so only "none" is cached.
+    return state === "none" ? save(root, { ...base, state }) : { ...base, state };
   }
   if (runs.some((r) => r.status !== "completed")) return base;
   const head = await Promise.all(runs.map((r) => runResult(input.repo, r)));

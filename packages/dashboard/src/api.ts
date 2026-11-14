@@ -303,7 +303,7 @@ export function listCloudRepos(): Promise<{ repos: string[] }> {
 }
 
 export type TestGate = {
-  state: "running" | "passed" | "broken" | "none";
+  state: "running" | "passed" | "broken" | "none" | "missing";
   broken: Array<{ name: string; tests: string[]; permissions?: string[] }>;
   preexisting: number;
   attempts: number;

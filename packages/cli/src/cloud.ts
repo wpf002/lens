@@ -414,6 +414,7 @@ export function mergeBlock({ tests, conflicts }: Pick<PullRequest, "tests" | "co
   if (conflicts) return "These fixes conflict with the base branch. Undo the conflicting fixes and run Fix again.";
   if (!tests) return "Couldn't read the test results from GitHub. Try again.";
   if (tests.state === "running") return "Tests are still running.";
+  if (tests.state === "missing") return "GitHub didn't run this repo's checks on these fixes. Re-run CI on the pull request, then try again.";
   if (tests.state === "broken") return `These fixes break ${brokenCount(tests)} test${brokenCount(tests) === 1 ? "" : "s"}. Undo them or wait for Lens to repair them.`;
   return null;
 }

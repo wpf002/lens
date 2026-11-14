@@ -466,6 +466,7 @@ function TestsStatus({ pr }: { pr: PullRequest }) {
   const [label, tone] =
     t.state === "running" ? ["Testing…", "text-muted"]
     : t.state === "none" ? ["No CI", "text-muted"]
+    : t.state === "missing" ? ["Checks Didn't Run", "text-critical"]
     : t.state === "passed" ? ["Tests Passed", "text-guarded"]
     : t.repairing ? [`Fixing ${broken} Broken Test${plural}…`, "text-critical"]
     : [`${broken} Test${plural} Broken`, "text-critical"];
@@ -473,6 +474,7 @@ function TestsStatus({ pr }: { pr: PullRequest }) {
     ...t.broken.map((b) => `${b.name}: ${b.tests.length ? b.tests.join(", ") : "failing"}`),
     ...(t.preexisting ? [`${t.preexisting} check${t.preexisting === 1 ? "" : "s"} also failing on the base branch`] : []),
     ...(t.state === "none" ? ["This repo has no GitHub checks, so its typecheck and tests haven't run on these fixes."] : []),
+    ...(t.state === "missing" ? ["This repo's workflows didn't run on these fixes. Re-run CI on the pull request before merging."] : []),
   ].join("\n");
   return (
     // Plain text: it renders where Create Pull Request was, so a link here caught repeat clicks and opened a tab.

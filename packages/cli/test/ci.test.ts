@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { paths, writeJsonAtomic } from "@lens/core";
-import { MAX_TEST_REPAIRS, allowAnotherRepair, compareRuns, errorExcerpt, failedTests, gateNeedsWork, repairItems, staleBaseRuns, type TestGate } from "../src/ci.js";
+import { MAX_TEST_REPAIRS, allowAnotherRepair, compareRuns, errorExcerpt, failedTests, gateNeedsWork, noChecksState, repairItems, runsOnPullRequests, staleBaseRuns, type TestGate } from "../src/ci.js";
 import { mergeBlock } from "../src/cloud.js";
 
 const PYTEST_LOG = [
@@ -71,6 +71,20 @@ describe("test gate", () => {
     expect(mergeBlock({ tests: { ...gate, state: "none", broken: [] } })).toBeNull();
     expect(mergeBlock({})).not.toBeNull();
     expect(mergeBlock({ tests: { ...gate, state: "passed", broken: [] }, conflicts: true })).toMatch(/conflict/);
+    expect(mergeBlock({ tests: { ...gate, state: "missing", broken: [] } })).toMatch(/didn't run/);
+  });
+
+  it("holds Merge when a repo's pull request workflows never reported checks", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-workflows-"));
+    const workflows = path.join(root, ".github", "workflows");
+    await fs.mkdir(workflows, { recursive: true });
+    await fs.writeFile(path.join(workflows, "uptime.yml"), "on:\n  schedule:\n    - cron: '*/5 * * * *'\n");
+    expect(runsOnPullRequests(root)).toBe(false);
+    expect(noChecksState(runsOnPullRequests(root), false)).toBe("none");
+    await fs.writeFile(path.join(workflows, "ci.yml"), "on:\n  push:\n    branches: [main]\n  pull_request:\n");
+    expect(runsOnPullRequests(root)).toBe(true);
+    expect(noChecksState(true, true)).toBe("running");
+    expect(noChecksState(true, false)).toBe("missing");
   });
 
   it("hands the remediator the failing tests, log, and changed files", () => {
