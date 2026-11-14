@@ -26,6 +26,7 @@ import type { AppliedFix } from "./commit-text.js";
 import { FIX_SOURCES, SOURCES, appliedFixIds, applyFixes, isPendingFix, loadRemediation, markFixesMerged, undoFix, undoFixesSince, type FixSource, type RemediationSource } from "./remediate.js";
 import { loadLayoutPlan, reopenLayoutArea, usableMoves } from "./layout-plan.js";
 import { EnrichRunner, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
+import { TestsBroken } from "./local-tests.js";
 import {
   buildBatches, diffImpact, isGitRepo, loadGraph, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
   type EmbeddingStore, type KnowledgeGraph,
@@ -178,18 +179,24 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
           const before = await appliedFixIds(root, "health");
           const job = enrich.start("remediate", root, remediateLimit(TEST_REPAIR_ID, items.length), { source: "health", checkId: TEST_REPAIR_ID });
           while (job.state === "running") await sleep(JOB_POLL_MS);
-          if (job.state !== "done") {
-            // A stopped repair's edits are untested, so they must not ride along on the next push.
+          // A repair whose edits are stopped or still break tests must not ride along on the next push.
+          const rollBack = async (why: string) => {
             const undone = await undoFixesSince(root, "health", before);
             if (undone.length) await scanAndSave(root);
-            console.error(`[tests] repair ${job.state}, undid ${undone.length} fix(es)${job.error ? `: ${job.error}` : ""}`);
+            console.error(`[tests] repair ${why}, undid ${undone.length} fix(es)`);
             return false;
-          }
+          };
+          if (job.state !== "done") return rollBack(`${job.state}${job.error ? ` (${job.error})` : ""}`);
           if (!job.remediation?.applied) {
             console.error(`[tests] repair made no changes${job.error ? `: ${job.error}` : ""}`);
             return false;
           }
-          await pushPending(root, await appliedFixes(root));
+          try {
+            await pushPending(root, await appliedFixes(root));
+          } catch (e) {
+            if (e instanceof TestsBroken) return rollBack(`still breaks tests: ${e.message}`);
+            throw e;
+          }
           return true;
         });
         if (!repaired) return;

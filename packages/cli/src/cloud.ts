@@ -10,6 +10,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import { githubApi, githubAuthToken, githubConnected, githubIdentity, githubToken, type GitIdentity } from "./github.js";
 import { branchNameFor, commitMessage, fixesTouching, pullRequestText, type AppliedFix } from "./commit-text.js";
 import { brokenCount, testGate, type TestGate } from "./ci.js";
+import { TestsBroken, checkLocalTests } from "./local-tests.js";
 
 export interface RepoRef {
   owner: string;
@@ -150,6 +151,9 @@ const stagedPaths = async (root: string) => (await git(root, ["diff", "--cached"
 export async function pushFixes(root: string, fixes: AppliedFix[] = []): Promise<{ branch: string; compareUrl: string | null; files: number }> {
   const status = await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"]);
   if (!status) throw new Error("No changes to push.");
+  const tests = await checkLocalTests(root);
+  if (tests.state === "broken") throw new TestsBroken(tests);
+  if (tests.state === "skipped") console.log(`[tests] not run before push: ${tests.reason}`);
   await git(root, ["add", "-A"]);
   await git(root, ["reset", "-q", "--", ".lens"]).catch(() => undefined);
   const changed = await stagedPaths(root);
