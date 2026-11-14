@@ -8,7 +8,7 @@ import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { createHmac, randomBytes } from "node:crypto";
 import { githubApi, githubAuthToken, githubConnected, githubIdentity, githubToken, type GitIdentity } from "./github.js";
-import { branchNameFor, commitMessage, fixesTouching, pullRequestText, type AppliedFix } from "./commit-text.js";
+import { branchNameFor, commitMessage, fixesTouching, pullRequestText, unshippedFixes, type AppliedFix } from "./commit-text.js";
 import { brokenCount, testGate, type TestGate } from "./ci.js";
 import { TestsBroken, checkLocalTests } from "./local-tests.js";
 
@@ -141,6 +141,12 @@ async function commit(root: string, message: string): Promise<void> {
   await git(root, ["-c", `user.name=${author.name}`, "-c", `user.email=${author.email}`, "commit", "-q", "-m", message]);
 }
 
+/** Commit messages on the fixes branch since `base`, oldest first. */
+async function branchMessages(root: string, base: string): Promise<string[]> {
+  const log = await git(root, ["log", "--reverse", "--format=%B%x1e", `${base}..HEAD`]);
+  return log.split("\x1e").map((m) => m.trim()).filter(Boolean);
+}
+
 const stagedPaths = async (root: string) => (await git(root, ["diff", "--cached", "--name-only"])).split("\n").filter(Boolean);
 
 /**
@@ -158,9 +164,11 @@ export async function pushFixes(root: string, fixes: AppliedFix[] = []): Promise
   await git(root, ["reset", "-q", "--", ".lens"]).catch(() => undefined);
   const changed = await stagedPaths(root);
   const files = changed.length;
-  const touching = fixesTouching(fixes, changed);
   let branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
-  if (!(await isFixesBranch(root, branch))) {
+  const onFixesBranch = await isFixesBranch(root, branch);
+  const history = onFixesBranch ? await branchMessages(root, await baseBranch(root)) : [];
+  const touching = unshippedFixes(fixesTouching(fixes, changed), history);
+  if (!onFixesBranch) {
     const next = await freeBranchName(root, branchNameFor(touching, changed));
     await git(root, ["config", "lens.base", branch]);
     await git(root, ["config", "--unset", "lens.merged"]).catch(() => undefined);
@@ -414,7 +422,8 @@ export async function createPullRequest(root: string, fixes: AppliedFix[]): Prom
   if (existing?.state === "open") return existing;
   const base = await baseBranch(root);
   const changed = (await git(root, ["diff", "--name-only", `${base}...HEAD`]).catch(() => "")).split("\n").filter(Boolean);
-  const { title, body } = pullRequestText(changed.length ? fixesTouching(fixes, changed) : fixes, changed);
+  const applied = fixes.filter((f) => !f.undone);
+  const { title, body } = pullRequestText(changed.length ? fixesTouching(applied, changed) : applied, changed);
   const p = (await githubApi(`/repos/${r.owner}/${r.name}/pulls`, "POST", { title, head: branch, base, body: body.slice(0, PR_BODY_MAX) })) as { number: number; html_url: string };
   return { number: p.number, url: p.html_url, state: "open" };
 }

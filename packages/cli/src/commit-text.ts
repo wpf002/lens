@@ -7,11 +7,16 @@ import path from "node:path";
 export interface AppliedFix {
   title: string;
   files: string[];
+  /** Undone after it was applied, so a push that ships the undo names it as one. */
+  undone?: boolean;
 }
 
 const SUBJECT_MAX = 72;
 const TOPIC_WORDS = 4;
 const TOPIC_MAX = 40;
+const UNDO_PREFIX = "Undo ";
+const MORE_SUFFIX = / and \d+ more (fix|fixes|change|changes)$/;
+const TRUNCATED = "…";
 
 const ATTRIBUTION_LINE = /^\s*(co-authored-by:|signed-off-by:\s*(claude|lens)|🤖|generated (with|by)\b)/i;
 const ATTRIBUTION_PHRASE = /,?\s*\b((found|flagged|fixed|suggested|proposed|written|made|done|applied|reported|detected|created)\s+)?(by|via|from|with|using)\s+(Lens|Claude( Code)?|an? AI( agent| assistant| model)?|the AI)\b/gi;
@@ -40,8 +45,41 @@ function truncate(s: string, max: number): string {
   return `${cut.slice(0, cut.lastIndexOf(" ") > max / 2 ? cut.lastIndexOf(" ") : cut.length)}…`;
 }
 
+function label(title: string): string {
+  return capitalize(cleanText(title).replace(/\.$/, ""));
+}
+
 function titles(fixes: AppliedFix[]): string[] {
-  return [...new Set(fixes.map((f) => capitalize(cleanText(f.title).replace(/\.$/, ""))).filter(Boolean))];
+  const line = (f: AppliedFix) => {
+    const text = label(f.title);
+    return text && f.undone ? `${UNDO_PREFIX}${text[0]!.toLowerCase()}${text.slice(1)}` : text;
+  };
+  return [...new Set(fixes.map(line).filter(Boolean))];
+}
+
+/** A one-fix subject longer than the limit was cut with an ellipsis, so it matches by prefix. */
+function sameFix(shipped: string, title: string): boolean {
+  return shipped === title || (shipped.endsWith(TRUNCATED) && title.startsWith(shipped.slice(0, -TRUNCATED.length)));
+}
+
+/** Titles the branch's commit messages (oldest first) shipped and didn't later undo. */
+function shippedTitles(messages: string[]): string[] {
+  let shipped: string[] = [];
+  for (const message of messages) {
+    const lines = message.trim().split("\n");
+    const bullets = lines.filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
+    for (const item of bullets.length ? bullets : [lines[0]!.replace(MORE_SUFFIX, "")]) {
+      if (!item.startsWith(UNDO_PREFIX)) shipped.push(item);
+      else shipped = shipped.filter((s) => !sameFix(s, capitalize(item.slice(UNDO_PREFIX.length))));
+    }
+  }
+  return shipped;
+}
+
+/** The fixes a commit adds or undoes: applied ones the branch hasn't shipped, undone ones it has. */
+export function unshippedFixes(fixes: AppliedFix[], branchMessages: string[]): AppliedFix[] {
+  const shipped = shippedTitles(branchMessages);
+  return fixes.filter((f) => shipped.some((s) => sameFix(s, label(f.title))) === !!f.undone);
 }
 
 /** Fixes whose files are among the changed paths. */
@@ -55,7 +93,8 @@ export function subjectFor(fixes: AppliedFix[], changed: string[]): string {
   const list = titles(fixes);
   if (list.length === 1) return truncate(list[0]!, SUBJECT_MAX);
   if (list.length > 1) {
-    const rest = ` and ${list.length - 1} more fix${list.length === 2 ? "" : "es"}`;
+    const noun = fixes.some((f) => f.undone) ? "change" : "fix";
+    const rest = ` and ${list.length - 1} more ${noun}${list.length === 2 ? "" : noun === "fix" ? "es" : "s"}`;
     return `${truncate(list[0]!, SUBJECT_MAX - rest.length)}${rest}`;
   }
   const names = [...new Set(changed.map((p) => path.basename(p)))];

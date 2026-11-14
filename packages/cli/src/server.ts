@@ -192,7 +192,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
             return false;
           }
           try {
-            await pushPending(root, await appliedFixes(root));
+            await pushPending(root, await recordedFixes(root));
           } catch (e) {
             if (e instanceof TestsBroken) return rollBack(`still breaks tests: ${e.message}`);
             throw e;
@@ -515,7 +515,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         if (!githubConnected()) return send(res, 400, { error: "Connect GitHub to push, or use Download Patch." });
         if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });
         if (!repoName(proj.root)) return send(res, 400, { error: "this project isn't a cloned repo" });
-        return send(res, 200, await prLock.hold("the push", async () => pushFixes(proj.root, await appliedFixes(proj.root))));
+        return send(res, 200, await prLock.hold("the push", async () => pushFixes(proj.root, await recordedFixes(proj.root))));
       }
       if (opts.cloud && req.method === "POST" && (url.pathname === "/api/project/pr" || url.pathname === "/api/project/merge")) {
         if (!githubConnected()) return send(res, 400, { error: "Connect GitHub first." });
@@ -530,7 +530,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
           });
           return send(res, 200, { pr });
         }
-        const pr = await prLock.hold("the pull request", async () => createPullRequest(proj.root, await appliedFixes(proj.root)));
+        const pr = await prLock.hold("the pull request", async () => createPullRequest(proj.root, await recordedFixes(proj.root)));
         void watchTests(proj.root);
         return send(res, 200, { pr });
       }
@@ -615,11 +615,14 @@ function pickFolder(startIn: string): Promise<string | null> {
 }
 
 /** Per-task cost estimates for the project being served, and the files waiting for review. */
-/** Applied fixes across every source, for commit messages and pull request text. */
-async function appliedFixes(root: string): Promise<AppliedFix[]> {
+/** Unmerged applied and undone fixes across every source, for commit messages and pull request text. */
+async function recordedFixes(root: string): Promise<AppliedFix[]> {
   const fixes: AppliedFix[] = [];
   for (const src of SOURCES) {
-    for (const f of (await loadRemediation(root, src))?.fixes ?? []) if (isPendingFix(f)) fixes.push({ title: f.title, files: f.files.map((file) => file.path) });
+    for (const f of (await loadRemediation(root, src))?.fixes ?? []) {
+      const undone = f.status === "undone" && f.mergedIn === undefined;
+      if (isPendingFix(f) || undone) fixes.push({ title: f.title, files: f.files.map((file) => file.path), ...(undone && { undone }) });
+    }
   }
   return fixes;
 }

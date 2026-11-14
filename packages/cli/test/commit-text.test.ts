@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { branchNameFor, cleanText, commitMessage, pullRequestText, subjectFor } from "../src/commit-text.js";
+import { branchNameFor, cleanText, commitMessage, pullRequestText, subjectFor, unshippedFixes } from "../src/commit-text.js";
 
 const NOV_6 = new Date("2026-11-06T12:00:00Z");
 
@@ -29,6 +29,19 @@ describe("commit text", () => {
 
   it("lists every fix when there's more than one", () => {
     expect(commitMessage(two, [])).toBe("Escape user input in the search query and 1 more fix\n\n- Escape user input in the search query\n- Close the file handle");
+  });
+
+  it("names a push that undoes fixes after the undone fixes, not the older fixes in the same files (PR #28 f40db5c)", () => {
+    const history = ["Stop dead thumbnails from starving the straggler pass", "Count YouTube failures and 1 more fix\n\n- Count YouTube failures\n- Log each sync outcome once"];
+    const fixes = [
+      { title: "Stop dead thumbnails from starving the straggler pass", files: ["sync.ts"] },
+      { title: "Count YouTube failures", files: ["sync.ts"], undone: true },
+      { title: "Log each sync outcome once", files: ["sync.ts"], undone: true },
+    ];
+    const undo = unshippedFixes(fixes, history);
+    expect(commitMessage(undo, ["sync.ts"])).toBe("Undo count YouTube failures and 1 more change\n\n- Undo count YouTube failures\n- Undo log each sync outcome once");
+    expect(unshippedFixes(fixes, [...history, commitMessage(undo, ["sync.ts"])])).toEqual([]);
+    expect(unshippedFixes([{ title: "Count YouTube failures", files: ["sync.ts"] }], [...history, commitMessage(undo, ["sync.ts"])])).toHaveLength(1);
   });
 
   it("falls back to the changed file names", () => {
