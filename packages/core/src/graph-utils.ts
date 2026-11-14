@@ -178,3 +178,33 @@ export function checkHitIds(c: { id: string; hits: Array<{ path: string; detail:
 export function reviewKey(f: { title: string; path: string }): string {
   return `rv-${fnv(`${f.title}|${f.path}`)}`;
 }
+
+export interface PathMove {
+  from: string;
+  to: string;
+}
+
+/**
+ * Rewrite file paths and the "<kind>:<path>[:<symbol>]" ids built from them, so a rescan after
+ * files move matches the old nodes and keeps their summaries, layers and flow links.
+ */
+export function renamePaths(g: KnowledgeGraph, moves: PathMove[]): KnowledgeGraph {
+  const byFrom = new Map(moves.map((m) => [m.from, m.to]));
+  const movePath = (p: string) => byFrom.get(p) ?? p;
+  const moveId = (id: string) => {
+    const kindEnd = id.indexOf(":");
+    if (kindEnd < 0) return id;
+    const rest = id.slice(kindEnd + 1);
+    for (const [from, to] of byFrom) {
+      if (rest === from || rest.startsWith(`${from}:`)) return `${id.slice(0, kindEnd + 1)}${to}${rest.slice(from.length)}`;
+    }
+    return id;
+  };
+  return {
+    ...g,
+    nodes: g.nodes.map((n) => ({ ...n, id: moveId(n.id), ...(n.path ? { path: movePath(n.path) } : {}) })),
+    edges: g.edges.map((e) => ({ ...e, source: moveId(e.source), target: moveId(e.target), ...(e.evidence ? { evidence: { ...e.evidence, path: movePath(e.evidence.path) } } : {}) })),
+    layers: g.layers.map((l) => ({ ...l, nodeIds: l.nodeIds.map(moveId) })),
+    tour: g.tour.map((t) => ({ ...t, nodeIds: t.nodeIds.map(moveId) })),
+  };
+}

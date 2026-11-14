@@ -19,7 +19,7 @@ import { collectChanges, makeWorkspace, NO_CHANGE_REASON } from "./workspace.js"
 import { buildPlanRecord, loadLayoutPlan, moveFiles, planContext, saveLayoutPlan, usableMoves } from "./layout-plan.js";
 import { itemRate, loadFixCosts, recordFixCost, type ItemRate } from "./fix-costs.js";
 import { actionPinFix } from "./action-pins.js";
-import { AuditVerdictsSchema, LayoutPlanSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type Finding, type KnowledgeGraph } from "@lens/core";
+import { AuditVerdictsSchema, LayoutPlanSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, renameScannedPaths, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type Finding, type KnowledgeGraph } from "@lens/core";
 
 export type EnrichTask = "domain" | "audit" | "summaries" | "review" | "remediate" | "architecture";
 
@@ -999,6 +999,7 @@ export class EnrichRunner {
     area.status = "applied";
     await saveLayoutPlan(root, plan);
     this.push(job, "Rescanning");
+    await renameScannedPaths(root, area.moves);
     await scanAndSave(root);
     job.remediation = { source: "layout", proposed: 1, invalid: 0, skipped: 0, applied: 1 };
     this.finish(job, "done");

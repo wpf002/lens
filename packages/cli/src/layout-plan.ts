@@ -5,7 +5,7 @@
  */
 import { promises as fs, existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { isFileKind, paths, readJson, writeJsonAtomic, type KnowledgeGraph, type LayoutPlan } from "@lens/core";
+import { isFileKind, paths, readJson, renameScannedPaths, writeJsonAtomic, type KnowledgeGraph, type LayoutPlan } from "@lens/core";
 import { loadRemediation, safeTarget } from "./remediate.js";
 import { isBinary } from "./workspace.js";
 
@@ -124,4 +124,5 @@ export async function reopenLayoutArea(root: string, fixId: string): Promise<voi
   if (!plan || !area) return;
   area.status = "planned";
   await saveLayoutPlan(root, plan);
+  await renameScannedPaths(root, area.moves.map((m) => ({ from: m.to, to: m.from })));
 }

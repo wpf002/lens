@@ -1,5 +1,5 @@
 import { useStore } from "../store";
-import { VIEW_LABEL, VIEW_ORDER, type ViewId } from "../types";
+import { VIEW_GROUPS, VIEW_LABEL, VIEW_ORDER, type ViewId } from "../types";
 import { useMemo } from "react";
 import { activeFilterCount } from "../utils/filters";
 import { appliedFixItemIds, urgentOpenCount } from "../utils/security";
@@ -22,31 +22,41 @@ function ViewTabs({ vertical }: { vertical?: boolean }) {
   const auditFixes = useStore((s) => s.remediation.audit);
   const hot = useMemo(() => urgentOpenCount(model.graph.security?.findings ?? [], appliedFixItemIds(auditFixes)), [model, auditFixes]);
   return (
-    <div role="tablist" aria-label="Views" className={cx("flex", vertical ? "flex-col gap-0.5" : "h-8 items-center gap-0.5 rounded-md border border-line bg-panel-2 p-0.5")}>
-      {views.map((v) => {
-        const active = view === v;
+    <div className={cx("flex", vertical ? "flex-col gap-3" : "items-center gap-2")}>
+      {VIEW_GROUPS.map((group) => {
+        const shown = group.views.filter((v) => views.includes(v));
         return (
-          <button
-            key={v}
-            role="tab"
-            type="button"
-            aria-selected={active}
-            onClick={() => setView(v)}
-            title={`${VIEW_LABEL[v]} (${VIEW_ORDER.indexOf(v) + 1})`}
-            className={cx(
-              "relative inline-flex items-center gap-1.5 rounded text-[12.5px] transition-colors",
-              vertical ? "h-9 w-full px-3 text-left" : "h-7 px-2.5",
-              active ? "bg-raised text-fg shadow-[inset_0_0_0_1px_var(--border-strong)]" : "text-muted hover:text-fg",
-            )}
-          >
-            {VIEW_LABEL[v]}
-            {v === "security" && hot > 0 && (
-              <span className="rounded-full px-1.5 font-mono text-[10px] leading-[15px]" style={{ color: "var(--sev-critical)", background: "color-mix(in srgb, var(--sev-critical) 16%, transparent)" }}>
-                {hot}
-              </span>
-            )}
-            {vertical && <span className="ml-auto font-mono text-[10.5px] text-faint">{VIEW_ORDER.indexOf(v) + 1}</span>}
-          </button>
+          <div key={group.label} className="flex flex-col gap-1">
+            {vertical && <div className="eyebrow px-3">{group.label}</div>}
+            <div role="tablist" aria-label={group.label} className={cx("flex", vertical ? "flex-col gap-0.5" : "h-8 items-center gap-0.5 rounded-md border border-line bg-panel-2 p-0.5")}>
+            {shown.map((v) => {
+              const active = view === v;
+              return (
+                <button
+                  key={v}
+                  role="tab"
+                  type="button"
+                  aria-selected={active}
+                  onClick={() => setView(v)}
+                  title={`${VIEW_LABEL[v]} (${VIEW_ORDER.indexOf(v) + 1})`}
+                  className={cx(
+                    "relative inline-flex items-center gap-1.5 rounded text-[12.5px] transition-colors",
+                    vertical ? "h-9 w-full px-3 text-left" : "h-7 px-2.5",
+                    active ? "bg-raised text-fg shadow-[inset_0_0_0_1px_var(--border-strong)]" : "text-muted hover:text-fg",
+                  )}
+                >
+                  {VIEW_LABEL[v]}
+                  {v === "security" && hot > 0 && (
+                    <span className="rounded-full px-1.5 font-mono text-[10px] leading-[15px]" style={{ color: "var(--sev-critical)", background: "color-mix(in srgb, var(--sev-critical) 16%, transparent)" }}>
+                      {hot}
+                    </span>
+                  )}
+                  {vertical && <span className="ml-auto font-mono text-[10.5px] text-faint">{VIEW_ORDER.indexOf(v) + 1}</span>}
+                </button>
+              );
+            })}
+            </div>
+          </div>
         );
       })}
     </div>

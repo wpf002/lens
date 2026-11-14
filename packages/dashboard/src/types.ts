@@ -3,7 +3,12 @@ import type { Auth } from "./utils/colors";
 
 export type ViewId = "structure" | "layers" | "domain" | "security" | "health" | "architecture" | "knowledge";
 
-export const VIEW_ORDER: ViewId[] = ["structure", "layers", "domain", "security", "health", "architecture", "knowledge"];
+/** Views that describe how the project is organized, then views that find and fix problems. */
+export const VIEW_GROUPS: Array<{ label: string; views: ViewId[] }> = [
+  { label: "Explore", views: ["structure", "layers", "domain", "knowledge"] },
+  { label: "Fix", views: ["security", "health", "architecture"] },
+];
+export const VIEW_ORDER: ViewId[] = VIEW_GROUPS.flatMap((g) => g.views);
 export const VIEW_LABEL: Record<ViewId, string> = {
   structure: "Structure",
   layers: "Layers",

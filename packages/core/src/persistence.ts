@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import type { KnowledgeGraph, ImpactReport } from "./types.js";
+import { renamePaths, type PathMove } from "./graph-utils.js";
 import { ArchitectureConfigSchema, formatZodError, type ArchitectureConfig } from "./schema.js";
 
 export const DATA_DIR = ".lens";
@@ -89,6 +90,15 @@ export const loadConfig = async (root: string) => (await readJson<LensConfig>(pa
 export const saveConfig = (root: string, c: LensConfig) => writeJsonAtomic(paths(root).config, c, true);
 export const loadFingerprints = async (root: string) => (await readJson<Record<string, string>>(paths(root).fingerprints)) ?? {};
 export const saveFingerprints = (root: string, f: Record<string, string>) => writeJsonAtomic(paths(root).fingerprints, f);
+
+/** Carry the saved graph and fingerprints over to moved paths before the next rescan. */
+export async function renameScannedPaths(root: string, moves: PathMove[]): Promise<void> {
+  const graph = await loadGraph(root);
+  if (graph) await saveGraph(root, renamePaths(graph, moves));
+  const fingerprints = await loadFingerprints(root);
+  const byFrom = new Map(moves.map((m) => [m.from, m.to]));
+  await saveFingerprints(root, Object.fromEntries(Object.entries(fingerprints).map(([p, hash]) => [byFrom.get(p) ?? p, hash])));
+}
 /** Owner layer rules. Missing file means defaults; a malformed one fails the scan with the reason. */
 export async function loadArchitectureConfig(root: string): Promise<ArchitectureConfig | undefined> {
   const file = paths(root).architecture;
