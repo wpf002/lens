@@ -65,11 +65,12 @@ describe("test gate", () => {
 
   it("blocks Merge while tests run or when Lens broke some", () => {
     const gate: TestGate = { pr: 1, sha: "a", state: "broken", broken: [{ name: "backend", tests: ["a", "b"], excerpt: "" }], preexisting: 0, attempts: 0 };
-    expect(mergeBlock(gate)).toMatch(/break 2 tests/);
-    expect(mergeBlock({ ...gate, state: "running" })).toMatch(/still running/);
-    expect(mergeBlock({ ...gate, state: "passed", broken: [] })).toBeNull();
-    expect(mergeBlock({ ...gate, state: "none", broken: [] })).toBeNull();
-    expect(mergeBlock(undefined)).not.toBeNull();
+    expect(mergeBlock({ tests: gate })).toMatch(/break 2 tests/);
+    expect(mergeBlock({ tests: { ...gate, state: "running" } })).toMatch(/still running/);
+    expect(mergeBlock({ tests: { ...gate, state: "passed", broken: [] } })).toBeNull();
+    expect(mergeBlock({ tests: { ...gate, state: "none", broken: [] } })).toBeNull();
+    expect(mergeBlock({})).not.toBeNull();
+    expect(mergeBlock({ tests: { ...gate, state: "passed", broken: [] }, conflicts: true })).toMatch(/conflict/);
   });
 
   it("hands the remediator the failing tests, log, and changed files", () => {

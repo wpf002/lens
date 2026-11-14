@@ -446,7 +446,7 @@ function ItemList({ info, items }: { info: ItemInfo; items: Array<{ itemId: stri
 }
 
 /** Merge waits for CI and is refused while Lens's changes break tests that pass on the base branch. */
-const canMerge = (pr: PullRequest) => pr.tests?.state === "passed" || pr.tests?.state === "none";
+const canMerge = (pr: PullRequest) => !pr.conflicts && (pr.tests?.state === "passed" || pr.tests?.state === "none");
 const repairsLeft = (t: TestGate) => t.attempts < (t.allowedRepairs ?? MAX_TEST_REPAIRS);
 /** Lens's automatic repairs ran out with tests still broken; the user can start another. */
 const needsFixTests = (pr: PullRequest) => pr.tests?.state === "broken" && !pr.tests.repairing && !repairsLeft(pr.tests) && !pr.tests.broken.some((b) => !!b.permissions?.length);
@@ -454,18 +454,25 @@ const needsFixTests = (pr: PullRequest) => pr.tests?.state === "broken" && !pr.t
 /** Test results for an open fixes PR, counting only failures Lens's changes caused. */
 function TestsStatus({ pr }: { pr: PullRequest }) {
   const t = pr.tests;
+  if (pr.conflicts)
+    return (
+      <span className="text-critical" title="GitHub can't merge these fixes into the base branch. Undo the conflicting fixes and run Fix again.">
+        Merge Conflicts
+      </span>
+    );
   if (!t) return null;
   const broken = t.broken.reduce((n, b) => n + Math.max(1, b.tests.length), 0);
   const plural = broken === 1 ? "" : "s";
   const [label, tone] =
     t.state === "running" ? ["Testing…", "text-muted"]
-    : t.state === "none" ? ["No Tests", "text-muted"]
+    : t.state === "none" ? ["No CI", "text-muted"]
     : t.state === "passed" ? ["Tests Passed", "text-guarded"]
     : t.repairing ? [`Fixing ${broken} Broken Test${plural}…`, "text-critical"]
     : [`${broken} Test${plural} Broken`, "text-critical"];
   const detail = [
     ...t.broken.map((b) => `${b.name}: ${b.tests.length ? b.tests.join(", ") : "failing"}`),
     ...(t.preexisting ? [`${t.preexisting} check${t.preexisting === 1 ? "" : "s"} also failing on the base branch`] : []),
+    ...(t.state === "none" ? ["This repo has no GitHub checks, so its typecheck and tests haven't run on these fixes."] : []),
   ].join("\n");
   return (
     // Plain text: it renders where Create Pull Request was, so a link here caught repeat clicks and opened a tab.

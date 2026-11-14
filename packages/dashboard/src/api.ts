@@ -310,7 +310,7 @@ export type TestGate = {
   allowedRepairs?: number;
   repairing?: boolean;
 };
-export type PullRequest = { number: number; url: string; state: "open" | "merged" | "closed"; mergedAt?: string; tests?: TestGate };
+export type PullRequest = { number: number; url: string; state: "open" | "merged" | "closed"; mergedAt?: string; tests?: TestGate; conflicts?: boolean };
 export type PushState = { branch: string | null; dirty: boolean; pr: PullRequest | null } | null;
 export const createPullRequest = () => request<{ pr: PullRequest }>("/api/project/pr", { method: "POST" }).then((r) => r.pr);
 export const mergePullRequest = () => request<{ pr: PullRequest }>("/api/project/merge", { method: "POST" }).then((r) => r.pr);

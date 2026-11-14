@@ -133,6 +133,8 @@ export async function authorIdentity(root: string): Promise<GitIdentity> {
   throw new Error("No commit author for this repo. Connect GitHub or set git user.name and user.email.");
 }
 
+const baseBranch = async (root: string) => (await git(root, ["config", "--get", "lens.base"]).catch(() => "")) || "main";
+
 async function commit(root: string, message: string): Promise<void> {
   const author = await authorIdentity(root);
   await git(root, ["-c", `user.name=${author.name}`, "-c", `user.email=${author.email}`, "commit", "-q", "-m", message]);
@@ -162,11 +164,12 @@ export async function pushFixes(root: string, fixes: AppliedFix[] = []): Promise
     await git(root, ["config", BRANCH_KEY, next]);
     branch = next;
   }
-  const base = (await git(root, ["config", "--get", "lens.base"]).catch(() => "")) || "main";
+  const base = await baseBranch(root);
   await commit(root, commitMessage(touching, changed));
   const pushed = await pushBranch(root, branch);
   branch = pushed.branch;
   const dropped = pushed.dropped;
+  await mergeLatestBase(root, branch, base);
   const origin = await git(root, ["remote", "get-url", "origin"]).catch(() => "");
   const r = parseRepo(origin);
   return { branch, compareUrl: r ? `https://github.com/${r.owner}/${r.name}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}?expand=1` : null, files: files - dropped };
@@ -178,7 +181,33 @@ export async function commitFilesAndPush(root: string, files: string[], message:
   if (!(await isFixesBranch(root, branch))) throw new Error("No fixes branch to push to.");
   await git(root, ["add", "--", ...files]);
   await commit(root, message);
-  await pushBranch(root, branch);
+  const pushed = await pushBranch(root, branch);
+  await mergeLatestBase(root, pushed.branch, await baseBranch(root));
+}
+
+/**
+ * Merge the latest base into a pushed fixes branch and push the merge, so its pull request
+ * doesn't fall behind into conflicts. Runs after the fixes push so a workflow rejection only
+ * ever sees the fixes commit. The fixes are already pushed, so a failed fetch or a conflict
+ * is logged rather than thrown; on a conflict the merge is aborted and the pull request shows it.
+ */
+async function mergeLatestBase(root: string, branch: string, base: string): Promise<void> {
+  try {
+    await git(root, ["fetch", "-q", "--no-tags", "origin", base]);
+  } catch (e) {
+    console.error(`[github] couldn't fetch ${base} to update ${branch}: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+    return;
+  }
+  const author = await authorIdentity(root);
+  const before = await git(root, ["rev-parse", "HEAD"]);
+  try {
+    await git(root, ["-c", `user.name=${author.name}`, "-c", `user.email=${author.email}`, "merge", "-q", "--no-edit", "FETCH_HEAD"]);
+  } catch (e) {
+    await git(root, ["merge", "--abort"]).catch(() => undefined);
+    console.error(`[github] ${branch} conflicts with ${base}: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+    return;
+  }
+  if ((await git(root, ["rev-parse", "HEAD"])) !== before) await pushWithRetry(root, branch);
 }
 
 const WORKFLOWS = ".github/workflows";
@@ -256,6 +285,8 @@ export interface PullRequest {
   mergedAt?: string;
   /** Test results on the PR's head commit compared with the base; only for open PRs. */
   tests?: TestGate;
+  /** GitHub can't merge it into the base without a conflict resolution; only for open PRs. */
+  conflicts?: boolean;
 }
 export interface PushInfo {
   /** The branch holding the fixes, or null once merged. */
@@ -276,7 +307,14 @@ async function findPr(root: string, r: RepoRef, branch: string): Promise<PullReq
   if (!p) return null;
   const state = p.merged_at ? "merged" : p.state === "open" ? "open" : "closed";
   const tests = state === "open" ? await gateFor(root, r, p).catch((e: unknown) => (console.error(`[tests] ${e instanceof Error ? e.message : e}`), undefined)) : undefined;
-  return { number: p.number, url: p.html_url, state, ...(p.merged_at ? { mergedAt: p.merged_at } : {}), ...(tests ? { tests } : {}) };
+  const conflicts = state === "open" && (await hasConflicts(r, p.number).catch((e: unknown) => (console.error(`[github] ${e instanceof Error ? e.message : e}`), false)));
+  return { number: p.number, url: p.html_url, state, ...(p.merged_at ? { mergedAt: p.merged_at } : {}), ...(tests ? { tests } : {}), ...(conflicts ? { conflicts } : {}) };
+}
+
+/** The pulls list leaves out mergeability; only the single-PR endpoint has it. */
+async function hasConflicts(r: RepoRef, n: number): Promise<boolean> {
+  const p = (await githubApi(`/repos/${r.owner}/${r.name}/pulls/${n}`)) as { mergeable: boolean | null; mergeable_state?: string };
+  return p.mergeable === false && p.mergeable_state === "dirty";
 }
 
 async function gateFor(root: string, r: RepoRef, p: { number: number; head: { sha: string }; base: { sha: string } }): Promise<TestGate> {
@@ -325,12 +363,15 @@ export async function pushPending(root: string, fixes: AppliedFix[] = []): Promi
     st = await pushState(root);
   }
   if (!st?.branch || st.dirty) await pushFixes(root, fixes);
-  else await pushBranch(root, st.branch);
+  else {
+    const pushed = await pushBranch(root, st.branch);
+    await mergeLatestBase(root, pushed.branch, await baseBranch(root));
+  }
 }
 
 /** Move uncommitted fixes off a finished fixes branch onto the latest base branch. */
 export async function restartFromBase(root: string, old: string): Promise<void> {
-  const base = (await git(root, ["config", "--get", "lens.base"]).catch(() => "")) || "main";
+  const base = await baseBranch(root);
   const dirty = !!(await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"]));
   // A patch download leaves new files marked intent-to-add, and git stash refuses those ("not uptodate. Cannot merge").
   await git(root, ["reset", "-q"]);
@@ -359,7 +400,7 @@ export async function createPullRequest(root: string, fixes: AppliedFix[]): Prom
   const r = await repoOf(root);
   const existing = await findPr(root, r, branch);
   if (existing?.state === "open") return existing;
-  const base = (await git(root, ["config", "--get", "lens.base"]).catch(() => "")) || "main";
+  const base = await baseBranch(root);
   const changed = (await git(root, ["diff", "--name-only", `${base}...HEAD`]).catch(() => "")).split("\n").filter(Boolean);
   const { title, body } = pullRequestText(changed.length ? fixesTouching(fixes, changed) : fixes, changed);
   const p = (await githubApi(`/repos/${r.owner}/${r.name}/pulls`, "POST", { title, head: branch, base, body: body.slice(0, PR_BODY_MAX) })) as { number: number; html_url: string };
@@ -367,7 +408,8 @@ export async function createPullRequest(root: string, fixes: AppliedFix[]): Prom
 }
 
 /** Why Merge is refused, or null. Only failures Lens's changes introduced block it. */
-export function mergeBlock(tests: TestGate | undefined): string | null {
+export function mergeBlock({ tests, conflicts }: Pick<PullRequest, "tests" | "conflicts">): string | null {
+  if (conflicts) return "These fixes conflict with the base branch. Undo the conflicting fixes and run Fix again.";
   if (!tests) return "Couldn't read the test results from GitHub. Try again.";
   if (tests.state === "running") return "Tests are still running.";
   if (tests.state === "broken") return `These fixes break ${brokenCount(tests)} test${brokenCount(tests) === 1 ? "" : "s"}. Undo them or wait for Lens to repair them.`;
@@ -382,11 +424,11 @@ export async function mergePullRequest(root: string): Promise<PullRequest> {
   const r = await repoOf(root);
   const pr = await findPr(root, r, branch);
   if (!pr || pr.state !== "open") throw new Error("There's no open pull request for these fixes.");
-  const blocked = mergeBlock(pr.tests);
+  const blocked = mergeBlock(pr);
   if (blocked) throw new Error(blocked);
   await githubApi(`/repos/${r.owner}/${r.name}/pulls/${pr.number}/merge`, "PUT", { merge_method: "squash" });
   await githubApi(`/repos/${r.owner}/${r.name}/git/refs/heads/${branch.split("/").map(encodeURIComponent).join("/")}`, "DELETE").catch(() => undefined);
-  const base = (await git(root, ["config", "--get", "lens.base"]).catch(() => "")) || "main";
+  const base = await baseBranch(root);
   await git(root, ["checkout", base]);
   await git(root, ["pull", "--ff-only", "--no-tags", "origin", base]);
   await git(root, ["branch", "-D", branch]).catch(() => undefined);

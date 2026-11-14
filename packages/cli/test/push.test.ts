@@ -95,6 +95,55 @@ describe("pushFixes", () => {
     await fs.rm(tmp, { recursive: true, force: true });
   });
 
+  async function fixesBranchBehindMain(mainEdit: { file: string; content: string }) {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "lens-push-"));
+    const remote = path.join(tmp, "remote.git");
+    const root = path.join(tmp, "work");
+    const other = path.join(tmp, "other");
+    run(tmp, "init", "-q", "--bare", "-b", "main", remote);
+    run(tmp, "init", "-q", "-b", "main", root);
+    await fs.writeFile(path.join(root, "a.js"), "1\n");
+    run(root, "add", "-A");
+    run(root, "commit", "-qm", "init");
+    run(root, "remote", "add", "origin", remote);
+    run(root, "push", "-q", "-u", "origin", "main");
+    run(root, "checkout", "-qb", "lens/fixes-1");
+    await fs.writeFile(path.join(root, "a.js"), "2\n");
+    run(root, "commit", "-qam", "Lens fixes");
+    run(root, "push", "-q", "-u", "origin", "lens/fixes-1");
+    run(tmp, "clone", "-q", "-b", "main", remote, other);
+    await fs.writeFile(path.join(other, mainEdit.file), mainEdit.content);
+    run(other, "add", "-A");
+    run(other, "commit", "-qm", "main moved on");
+    run(other, "push", "-q", "origin", "main");
+    return { tmp, remote, root };
+  }
+
+  it("merges the latest base into the fixes branch on the next push, so its pull request stays mergeable", async () => {
+    const { tmp, remote, root } = await fixesBranchBehindMain({ file: "b.js", content: "main\n" });
+    await fs.writeFile(path.join(root, "c.js"), "3\n");
+
+    const { branch } = await pushFixes(root);
+
+    expect(branch).toBe("lens/fixes-1");
+    expect(run(remote, "show", `${branch}:b.js`)).toBe("main");
+    expect(run(remote, "show", `${branch}:c.js`)).toBe("3");
+    expect(run(remote, "merge-base", "--is-ancestor", "main", branch)).toBe("");
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
+  it("leaves no half-finished merge when the base conflicts with the fixes", async () => {
+    const { tmp, remote, root } = await fixesBranchBehindMain({ file: "a.js", content: "main\n" });
+    await fs.writeFile(path.join(root, "c.js"), "3\n");
+
+    const { branch } = await pushFixes(root);
+
+    expect(run(remote, "show", `${branch}:c.js`)).toBe("3");
+    expect(run(remote, "show", `${branch}:a.js`)).toBe("2");
+    expect(run(root, "status", "--porcelain")).toBe("");
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
   it("moves fixes to the base branch after a patch download marked new files intent-to-add, with .lens gitignored", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "lens-push-"));
     const remote = path.join(tmp, "remote.git");
