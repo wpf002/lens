@@ -153,7 +153,7 @@ export async function pushFixes(root: string, fixes: AppliedFix[] = []): Promise
   if (!status) throw new Error("No changes to push.");
   const tests = await checkLocalTests(root);
   if (tests.state === "broken") throw new TestsBroken(tests);
-  if (tests.state === "skipped") console.log(`[tests] not run before push: ${tests.reason}`);
+  if (tests.state === "skipped") console.error(`[tests] not run before push: ${tests.reason}`);
   await git(root, ["add", "-A"]);
   await git(root, ["reset", "-q", "--", ".lens"]).catch(() => undefined);
   const changed = await stagedPaths(root);
