@@ -205,14 +205,16 @@ async function recordDuration(root: string, kind: "audit" | "review", ms: number
   await writeJsonAtomic(runTimesPath(root), all, true);
 }
 export const MAX_BUDGET_USD = 20;
-const DEFAULT_TIMEOUT_MS = 45 * 60_000;
+const MINUTE_MS = 60_000;
+const SECOND_MS = 1000;
+const DEFAULT_TIMEOUT_MS = 45 * MINUTE_MS;
 const TimeoutSchema = z.coerce.number().int().positive();
 /** LENS_CLAUDE_TIMEOUT_MS shortens the per-run limit so tests can hit it. */
 function claudeTimeoutMs(): number {
   const raw = process.env.LENS_CLAUDE_TIMEOUT_MS;
   return raw === undefined ? DEFAULT_TIMEOUT_MS : TimeoutSchema.parse(raw);
 }
-const timeoutLabel = (ms: number) => (ms >= 60_000 ? `${Math.round(ms / 60_000)} minutes` : `${Math.round(ms / 1000)} seconds`);
+const timeoutLabel = (ms: number) => (ms >= MINUTE_MS ? `${Math.round(ms / MINUTE_MS)} minutes` : `${Math.round(ms / SECOND_MS)} seconds`);
 /** Checks whose fixes are refactors: each item gets its own Claude run and a larger cap. */
 export const REFACTOR_CHECKS = new Set(["oversized", "hotspots", "import-cycles", "layer-violations", "fragmented"]);
 export const REFACTOR_ITEM_LIMIT_USD = 8;
@@ -990,6 +992,7 @@ export class EnrichRunner {
     let runMs = 0;
     // Runs that finished, so a timed-out batch doesn't count toward the average or the no-progress stop.
     let finishedRuns = 0;
+    const EMPTY_RUNS_BEFORE_STOP = 3;
     job.fixAll = progress;
     const tried = new Set<string>();
     // Items whose fix changed no files get one more attempt, told so.
@@ -1076,7 +1079,7 @@ export class EnrichRunner {
           await scanAndSave(root);
         }
         progress.fixed += applied.length;
-        if (!applied.length && finishedRuns >= 3 && progress.fixed === 0) {
+        if (!applied.length && finishedRuns >= EMPTY_RUNS_BEFORE_STOP && progress.fixed === 0) {
           progress.stopped = "three batches in a row produced nothing to apply";
           break;
         }
