@@ -22,7 +22,8 @@ import { cloneOrUpdate, commitFilesAndPush, createPullRequest, fixesPatch, listR
 import { MAX_TEST_REPAIRS, allowAnotherRepair, gateNeedsWork, recordRepairAttempt, repairItems, repairsLeft, saveRepairItems, type TestGate } from "./ci.js";
 import { grantCheckPermissions } from "./ci-permissions.js";
 import type { AppliedFix } from "./commit-text.js";
-import { SOURCES, applyFixes, loadRemediation, undoFix, type RemediationSource } from "./remediate.js";
+import { FIX_SOURCES, SOURCES, applyFixes, loadRemediation, undoFix, type FixSource, type RemediationSource } from "./remediate.js";
+import { loadLayoutPlan, reopenLayoutArea, usableMoves } from "./layout-plan.js";
 import { EnrichRunner, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import {
   buildBatches, diffImpact, isGitRepo, loadGraph, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
@@ -327,24 +328,37 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         if (typeof q !== "string" || !q.trim() || q.length > 500) return send(res, 400, { error: "q must be a non-empty string" });
         return send(res, 200, { results: await embeddings.query(q, 40) });
       }
-      const enrichMatch = /^\/api\/enrich\/(domain|audit|summaries|review|remediate)$/.exec(url.pathname);
+      if (req.method === "GET" && url.pathname === "/api/architecture") {
+        if (proj.graphFile) return send(res, 200, { plan: null, layout: null });
+        const { graph } = await getGraph();
+        const plan = await loadLayoutPlan(proj.root);
+        const files = graph.nodes.filter((n) => isFileKind(n) && n.path).length;
+        const areaEstimates = Object.fromEntries((plan?.areas ?? []).map((a) => [a.id, estimateCost("remediate", usableMoves(proj.root, a.moves).length)]));
+        return send(res, 200, { plan, layout: graph.layout ?? null, estimates: { plan: estimateCost("architecture", files), areas: areaEstimates } });
+      }
+      const enrichMatch = /^\/api\/enrich\/(domain|audit|summaries|review|remediate|architecture)$/.exec(url.pathname);
       if (req.method === "POST" && enrichMatch) {
         const task = enrichMatch[1] as EnrichTask;
         if (proj.graphFile) return send(res, 409, { error: "AI runs need a scanned project, not --graph" });
         const body = await readBody(req, 2_000); // the server sets the limit; clients can't raise it
-        const opts = JSON.parse(body || "{}") as { source?: unknown; checkId?: unknown; note?: unknown; fixNew?: unknown };
+        const opts = JSON.parse(body || "{}") as { source?: unknown; checkId?: unknown; note?: unknown; fixNew?: unknown; areaId?: unknown };
         const note = typeof opts.note === "string" && opts.note.trim() ? opts.note.trim().slice(0, 600) : undefined;
-        const source: RemediationSource = SOURCES.includes(opts.source as RemediationSource) ? (opts.source as RemediationSource) : "audit";
+        const source: FixSource = FIX_SOURCES.includes(opts.source as FixSource) ? (opts.source as FixSource) : "audit";
+        const areaId = task === "architecture" && typeof opts.areaId === "string" ? opts.areaId : undefined;
+        const area = areaId ? (await loadLayoutPlan(proj.root))?.areas.find((a) => a.id === areaId) : undefined;
+        if (areaId && !area) return send(res, 400, { error: "that area is not in the layout plan" });
         const checkId = typeof opts.checkId === "string" ? opts.checkId : undefined;
         const budget =
-          task === "remediate" && source !== "review" && !checkId
+          area
+            ? estimateCost("remediate", usableMoves(proj.root, area.moves).length).limit
+            : task === "remediate" && source !== "review" && !checkId
             ? (await fixAllPlan(proj.root, source)).estimate.limit
             : task === "remediate"
               ? remediateLimit(checkId, (await remediationItems(proj.root, source, checkId)).length) : (await estimatesFor(proj.root, (await getGraph()).graph, true)).enrichEstimates[task as Exclude<EnrichTask, "remediate">].limit;
         if (enrich.running) return send(res, 409, { error: "an AI run is already in progress" });
         const authProblem = await checkClaudeAuth();
         if (authProblem) return send(res, 412, { error: authProblem });
-        return send(res, 202, enrich.start(task, proj.root, budget, { source, checkId, note, fixNew: task === "review" && opts.fixNew === true }));
+        return send(res, 202, enrich.start(task, proj.root, budget, { source, checkId, note, fixNew: task === "review" && opts.fixNew === true, areaId }));
       }
       if (req.method === "GET" && url.pathname === "/api/audit") {
         if (proj.graphFile) return send(res, 200, { audit: null });
@@ -407,7 +421,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });
         const { ids, source } = JSON.parse((await readBody(req, 10_000)) || "{}") as { ids?: unknown; source?: unknown };
         if (!Array.isArray(ids) || !ids.length || ids.length > 30 || !ids.every((x) => typeof x === "string")) return send(res, 400, { error: "ids must be a non-empty list" });
-        if (!SOURCES.includes(source as RemediationSource)) return send(res, 400, { error: "source must be audit, review, or health" });
+        if (!SOURCES.includes(source as RemediationSource)) return send(res, 400, { error: "source must be audit, review, health, or layout" });
         const result = await applyFixes(proj.root, source as RemediationSource, ids as string[]);
         if (result.applied.length) await scanAndSave(proj.root);
         return send(res, 200, result);
@@ -416,6 +430,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         const { id, source } = JSON.parse((await readBody(req, 1_000)) || "{}") as { id?: unknown; source?: unknown };
         if (typeof id !== "string" || !SOURCES.includes(source as RemediationSource)) return send(res, 400, { error: "id and source required" });
         await undoFix(proj.root, source as RemediationSource, id);
+        if (source === "layout") await reopenLayoutArea(proj.root, id);
         await scanAndSave(proj.root);
         return send(res, 200, { ok: true });
       }
@@ -582,6 +597,7 @@ async function estimatesFor(root: string, g: KnowledgeGraph, hasSource: boolean)
     audit: estimateCost("audit", files),
     review: review.estimate,
     summaries: estimateCost("summaries", Math.max(1, pending)),
+    architecture: estimateCost("architecture", files),
   };
   return { enrichEstimates, reviewPending: { files: review.files, batches: review.batches } };
 }

@@ -18,6 +18,7 @@ import { useKeyboard } from "./useKeyboard";
 import { DomainView } from "./views/DomainView";
 import { KnowledgeView } from "./views/KnowledgeView";
 import { LayersView } from "./views/LayersView";
+import { ArchitectureView } from "./views/ArchitectureView";
 import { HealthView } from "./views/HealthView";
 import { SecurityView } from "./views/SecurityView";
 import { StructureView } from "./views/StructureView";
@@ -50,8 +51,9 @@ function Shell() {
           {view === "domain" && <DomainView />}
           {view === "security" && <SecurityView />}
           {view === "health" && <HealthView />}
+          {view === "architecture" && <ArchitectureView />}
           {view === "knowledge" && <KnowledgeView />}
-          {view !== "security" && view !== "health" && <FocusBar />}
+          {view !== "security" && view !== "health" && view !== "architecture" && <FocusBar />}
           <CodeDrawer />
         </main>
         <Sidebar narrow={narrow} />

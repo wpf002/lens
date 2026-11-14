@@ -97,6 +97,21 @@ export const FindingSchema = z.object({
   triageNote: z.string().optional(),
 });
 
+const HealthReportSchema = z.object({
+  generatedAt: z.string(),
+  score: z.number(),
+  checks: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    category: z.string(),
+    severity: z.enum(["high", "medium", "low"]),
+    count: z.number(),
+    hits: z.array(z.object({ path: z.string(), line: z.number().optional(), detail: z.string() })),
+    fix: z.string(),
+    source: z.enum(["scanner", "ai"]).optional(),
+  })),
+});
+
 export const KnowledgeGraphSchema = z.object({
   schema: z.literal("lens/1"),
   kind: z.enum(["codebase", "knowledge"]),
@@ -142,20 +157,8 @@ export const KnowledgeGraphSchema = z.object({
       source: z.enum(["scanner", "repo", "ai", "manual"]),
     })).optional(),
   }).optional(),
-  health: z.object({
-    generatedAt: z.string(),
-    score: z.number(),
-    checks: z.array(z.object({
-      id: z.string(),
-      title: z.string(),
-      category: z.string(),
-      severity: z.enum(["high", "medium", "low"]),
-      count: z.number(),
-      hits: z.array(z.object({ path: z.string(), line: z.number().optional(), detail: z.string() })),
-      fix: z.string(),
-      source: z.enum(["scanner", "ai"]).optional(),
-    })),
-  }).optional(),
+  health: HealthReportSchema.optional(),
+  layout: HealthReportSchema.optional(),
   stats: z.object({
     files: z.number(),
     nodes: z.number(),
@@ -274,6 +277,20 @@ export const WorkspaceReportSchema = z.object({
 });
 export type WorkspaceReport = z.infer<typeof WorkspaceReportSchema>;
 
+const repoPath = z.string().trim().min(1).max(300);
+
+/** The architect agent's target layout: groups of file moves, one pull request each. */
+export const LayoutPlanSchema = z.object({
+  summary: clip(600),
+  areas: z.array(z.object({
+    id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/),
+    title: clip(80),
+    reason: clip(400),
+    moves: z.array(z.object({ from: repoPath, to: repoPath })).min(1).max(400),
+  })).min(1).max(15),
+});
+export type LayoutPlan = z.infer<typeof LayoutPlanSchema>;
+
 export const TriagePatchSchema = z.object({
   findings: z.array(z.object({
     id: z.string(),
@@ -312,6 +329,8 @@ export const ArchitectureConfigSchema = z.object({
   allow: z.array(layerPair).max(50).optional(),
   /** Globs for files the rules skip, as source or target. */
   ignore: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
+  /** Most files one folder may hold directly before Architecture flags it. */
+  maxFolderFiles: z.number().int().min(5).max(500).optional(),
 }).strict();
 export type ArchitectureConfig = z.infer<typeof ArchitectureConfigSchema>;
 

@@ -1,4 +1,4 @@
-import type { ImpactReport, KnowledgeGraph, ProjectMeta } from "@lens/core/browser";
+import type { HealthReport, ImpactReport, KnowledgeGraph, ProjectMeta } from "@lens/core/browser";
 import { sessionGet, sessionSet } from "./utils/storage";
 
 declare global {
@@ -43,7 +43,7 @@ export interface AuditRecord {
 }
 
 export interface EnrichJob {
-  task?: "domain" | "audit" | "summaries" | "review" | "remediate";
+  task?: "domain" | "audit" | "summaries" | "review" | "remediate" | "architecture";
   state: "idle" | "running" | "done" | "error" | "cancelled";
   startedAt?: number;
   finishedAt?: number;
@@ -60,6 +60,7 @@ export interface EnrichJob {
   checkId?: string;
   fixAll?: { attempted: number; total: number; fixed: number; batches: number; stopped?: string; current?: string; runsLeft?: number; msPerRun?: number };
   step?: { kind: "audit" | "review"; startedAt: number; typicalMs?: number };
+  architecture?: { areas: number; moves: number; areaId?: string };
 }
 
 export interface ProposedFix {
@@ -71,7 +72,7 @@ export interface ProposedFix {
   invalid?: string;
   status: "proposed" | "applied" | "undone" | "discarded";
 }
-export type RemediationSource = "audit" | "review" | "health";
+export type RemediationSource = "audit" | "review" | "health" | "layout";
 export interface RemediationRecord {
   generatedAt: string;
   source: RemediationSource;
@@ -242,9 +243,24 @@ export function openProjectPath(path: string): Promise<OpenResult> {
   });
 }
 
-export function startAIJob(task: NonNullable<EnrichJob["task"]>, opts: { source?: RemediationSource; checkId?: string; note?: string; fixNew?: boolean } = {}): Promise<EnrichJob> {
+export function startAIJob(task: NonNullable<EnrichJob["task"]>, opts: AIJobOptions = {}): Promise<EnrichJob> {
   return request(`/api/enrich/${task}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts) });
 }
+export type AIJobOptions = { source?: RemediationSource; checkId?: string; note?: string; fixNew?: boolean; areaId?: string };
+export interface LayoutArea {
+  id: string;
+  title: string;
+  reason: string;
+  moves: Array<{ from: string; to: string }>;
+  status: "planned" | "applied";
+  dropped: number;
+}
+export interface ArchitectureState {
+  plan: { generatedAt: string; costUsd?: number; summary: string; areas: LayoutArea[] } | null;
+  layout: HealthReport | null;
+  estimates?: { plan: CostEstimate; areas: Record<string, CostEstimate> };
+}
+export const fetchArchitecture = () => request<ArchitectureState>("/api/architecture");
 export type FixAllPlans = Record<"audit" | "health", { items: number; first: "audit" | "review" | null }>;
 export const fetchRemediation = () =>
   request<{ records: Record<RemediationSource, RemediationRecord | null>; estimates: Record<RemediationSource, CostEstimate>; fixAll: FixAllPlans; healthBatch: number; healthItems: number; wontFix?: string[] }>("/api/remediation");

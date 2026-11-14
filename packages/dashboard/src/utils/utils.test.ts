@@ -292,6 +292,11 @@ describe("misc utils", () => {
     expect(g.edges).toEqual([]);
     expect(g.nodes[0]!.tags).toEqual([]);
   });
+  it("keeps the layout report and drops a malformed one", () => {
+    const layout = { generatedAt: "", score: 61, checks: [{ id: "crowded-folder", title: "Crowded Folders", category: "structure", severity: "medium", count: 1, hits: [], fix: "", source: "scanner" }] };
+    expect(validateGraph({ schema: "lens/1", nodes: [], edges: [], layout }).graph.layout?.score).toBe(61);
+    expect(validateGraph({ schema: "lens/1", nodes: [], edges: [], layout: { checks: "nope" } }).graph.layout).toBeUndefined();
+  });
 });
 
 describe("inputPath", () => {

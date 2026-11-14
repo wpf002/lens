@@ -8,6 +8,7 @@ import { checkSupplyChain, isDependencyManifest } from "./security/supply-chain.
 import { scanGitHistory } from "./security/git-history.js";
 import type { RegistryFetch, GitResolve } from "./security/registry.js";
 import { buildHealth } from "./quality/health.js";
+import { buildLayout } from "./quality/layout.js";
 import { promises as fs } from "node:fs";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -600,6 +601,7 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
     deps: allDeps,
     architecture,
   });
+  const layout = buildLayout({ files: recs.map((r) => ({ path: r.f.path, category: r.f.lang.category })), maxFolderFiles: architecture?.maxFolderFiles });
 
   /* ---- project ---- */
   const project = describeProject(root, recs, frameworks);
@@ -614,6 +616,7 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
     tour,
     security,
     health,
+    layout,
     stats: {
       files: recs.length,
       nodes: nodeList.length,

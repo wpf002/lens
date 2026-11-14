@@ -11,7 +11,7 @@ export function HelpModal() {
     [["/"], "Focus search"],
     [[isMac ? "⌘" : "Ctrl", "K"], "Focus search"],
     [["↑", "↓", "↵"], "Move through results / open"],
-    [["1", "–", "6"], VIEW_ORDER.map((v) => VIEW_LABEL[v]).join(" · ")],
+    [["1", "–", String(VIEW_ORDER.length)], VIEW_ORDER.map((v) => VIEW_LABEL[v]).join(" · ")],
     [["f"], "Fit graph to screen"],
     [["←", "→"], "Previous / next tour step (while touring)"],
     [["Esc"], "Close dialogs, clear highlight, deselect"],

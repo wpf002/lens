@@ -34,7 +34,7 @@ export function useKeyboard(): void {
         s.setModal(s.modal === "help" ? null : "help");
       } else if (e.key === "f" || e.key === "F") {
         s.requestFit();
-      } else if (/^[1-5]$/.test(e.key)) {
+      } else if (/^[1-9]$/.test(e.key)) {
         const v = VIEW_ORDER[Number(e.key) - 1];
         if (v) s.setView(v);
       } else if (s.tour.active && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {

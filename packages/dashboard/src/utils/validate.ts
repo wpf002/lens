@@ -39,6 +39,7 @@ export function validateGraph(raw: unknown): { graph: KnowledgeGraph; warnings: 
     tour: Array.isArray(g.tour) ? [...g.tour].map((t) => ({ ...t, nodeIds: Array.isArray(t.nodeIds) ? t.nodeIds : [] })).sort((a, b) => a.order - b.order) : [],
     security: g.security && typeof g.security === "object" ? { ...g.security, findings: g.security.findings ?? [], exposure: g.security.exposure ?? [], entryPoints: g.security.entryPoints ?? [] } : undefined,
     health: g.health && typeof g.health === "object" && Array.isArray(g.health.checks) ? g.health : undefined,
+    layout: g.layout && typeof g.layout === "object" && Array.isArray(g.layout.checks) ? g.layout : undefined,
     stats: g.stats ?? { files: 0, nodes: normNodes.length, edges: edges.length, loc: 0, byKind: {}, enrichedNodes: 0 },
   };
   return { graph, warnings };

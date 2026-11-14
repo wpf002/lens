@@ -36,8 +36,11 @@ export interface RemediationRecord {
   edits: Record<string, Remediation["fixes"][number]["edits"]>;
 }
 
-export type RemediationSource = "audit" | "review" | "health";
-export const SOURCES: RemediationSource[] = ["audit", "review", "health"];
+/** "layout" holds Architecture moves; it has no report of items, so Fix runs never use it. */
+export type RemediationSource = "audit" | "review" | "health" | "layout";
+export const SOURCES: RemediationSource[] = ["audit", "review", "health", "layout"];
+export type FixSource = Exclude<RemediationSource, "layout">;
+export const FIX_SOURCES: FixSource[] = ["audit", "review", "health"];
 
 /** One proposal file per report, so a run on one can't erase Undo for another. */
 export const remediationPath = (root: string, source: RemediationSource) => path.join(paths(root).dir, `remediation-${source}.json`);

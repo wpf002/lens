@@ -28,6 +28,7 @@ export * from "./security/manifests.js";
 export { RegistryClient, githubRepo, pickRef, type RegistryFetch, type GitResolve, type SkipReason } from "./security/registry.js";
 export * from "./security/dep-fixes.js";
 export * from "./quality/health.js";
+export * from "./quality/layout.js";
 export * from "./quality/score.js";
 export * from "./quality/changed.js";
 export * from "./security/probe/index.js";

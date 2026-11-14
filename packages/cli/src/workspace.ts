@@ -43,7 +43,7 @@ export async function makeWorkspace(root: string): Promise<string> {
   return ws;
 }
 
-const isBinary = (b: Buffer) => b.subarray(0, 8000).includes(0);
+export const isBinary = (b: Buffer) => b.subarray(0, 8000).includes(0);
 
 /**
  * Turn the agent's edits in `ws` into a Remediation. Each changed file goes to the first

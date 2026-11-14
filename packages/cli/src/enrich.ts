@@ -14,13 +14,14 @@ import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { fileURLToPath } from "node:url";
-import { applyFixes, buildRecord, loadRemediation, markUnaddressed, remediationPath, type RemediationRecord, type RemediationSource } from "./remediate.js";
+import { applyFixes, buildRecord, loadRemediation, markUnaddressed, remediationPath, type FixSource, type RemediationRecord, type RemediationSource } from "./remediate.js";
 import { collectChanges, makeWorkspace, NO_CHANGE_REASON } from "./workspace.js";
+import { buildPlanRecord, loadLayoutPlan, moveFiles, planContext, saveLayoutPlan, usableMoves } from "./layout-plan.js";
 import { itemRate, loadFixCosts, recordFixCost, type ItemRate } from "./fix-costs.js";
 import { actionPinFix } from "./action-pins.js";
-import { AuditVerdictsSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type Finding, type KnowledgeGraph } from "@lens/core";
+import { AuditVerdictsSchema, LayoutPlanSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type Finding, type KnowledgeGraph } from "@lens/core";
 
-export type EnrichTask = "domain" | "audit" | "summaries" | "review" | "remediate";
+export type EnrichTask = "domain" | "audit" | "summaries" | "review" | "remediate" | "architecture";
 
 export type { ReviewRecord } from "./review-ledger.js";
 
@@ -70,6 +71,8 @@ export interface EnrichJob {
   /** Which report a remediate run works from (and, for "health", which check). */
   source?: RemediationSource;
   checkId?: string;
+  /** Architecture: the plan's size, or the area being moved. */
+  architecture?: { areas: number; moves: number; areaId?: string };
   /** The audit or review currently running, with its usual duration from past runs. */
   step?: { kind: "audit" | "review"; startedAt: number; typicalMs?: number };
 }
@@ -310,12 +313,12 @@ export class EnrichRunner {
     return this.job?.state === "running";
   }
 
-  start(task: EnrichTask, root: string, budgetUsd: number, opts: { source?: RemediationSource; checkId?: string; note?: string; fixNew?: boolean } = {}): EnrichJob {
+  start(task: EnrichTask, root: string, budgetUsd: number, opts: { source?: FixSource; checkId?: string; note?: string; fixNew?: boolean; areaId?: string } = {}): EnrichJob {
     if (this.running) throw new Error("an AI run is already in progress");
     const job: EnrichJob = { task, root, state: "running", startedAt: Date.now(), budgetUsd, progress: ["Preparing context"], ...(task === "remediate" ? { source: opts.source ?? "audit", checkId: opts.checkId } : {}) };
     this.job = job;
     console.log(`[ai] start ${task}${job.source ? `/${job.source}` : ""} in ${path.basename(root)}, limit $${budgetUsd}`);
-    (task === "audit" ? this.runAudit(job) : task === "summaries" ? this.runSummaries(job) : task === "review" ? this.runReview(job, !!opts.fixNew) : task === "remediate" ? this.runRemediate(job, opts.source ?? "audit", opts.checkId, opts.note) : this.runDomain(job)).catch((e: unknown) => {
+    (task === "audit" ? this.runAudit(job) : task === "summaries" ? this.runSummaries(job) : task === "review" ? this.runReview(job, !!opts.fixNew) : task === "remediate" ? this.runRemediate(job, opts.source ?? "audit", opts.checkId, opts.note) : task === "architecture" ? (opts.areaId ? this.moveArea(job, opts.areaId) : this.planLayout(job)) : this.runDomain(job)).catch((e: unknown) => {
       // The message alone doesn't say which step failed (a WASM trap reads "memory access out of bounds").
       if (e instanceof Error && e.stack) console.error(`[ai] ${task} failed: ${e.stack}`);
       this.finish(job, "error", e instanceof Error ? e.message : String(e));
@@ -896,14 +899,7 @@ export class EnrichRunner {
       if (items.length) await recordFixCost(job.root, items.every((i) => isRefactorItem(i.id)) ? "refactor" : "batch", { items: items.length, usd: Math.max(0, (job.costUsd ?? 0) - costBefore) });
       if (job.state !== "running") return { data: null };
       if (timedOut) return { data: null, error: resultError, timedOut };
-      let raw = await readJson<unknown>(outPath);
-      if (!raw) {
-        try {
-          raw = JSON.parse(new RegExp("```json\\s*\\n([\\s\\S]*?)\\n```").exec(resultText)?.[1] ?? "null");
-        } catch {
-          raw = null;
-        }
-      }
+      const raw = (await readJson<unknown>(outPath)) ?? fencedJson(resultText);
       if (!raw) return { data: null, error: resultError ?? (code ? `Claude Code exited with code ${code}: ${stderr.trim().split("\n").pop() ?? ""}` : "Claude didn't report what it changed") };
       const parsed = WorkspaceReportSchema.safeParse(raw);
       if (!parsed.success) return { data: null, error: `the fix report failed validation:\n${formatZodError(parsed.error)}` };
@@ -916,8 +912,100 @@ export class EnrichRunner {
     }
   }
 
+  /** Ask the architect agent for a target layout, read-only, and store it as areas of file moves. */
+  private async planLayout(job: EnrichJob) {
+    const { root } = job;
+    const g = await loadGraph(root);
+    if (!g?.layout) throw new Error("no layout report for this project; rescan it first");
+    const instructions = agentInstructions("architect");
+    if (!existsSync(instructions)) throw new Error(`missing ${instructions}`);
+    const dir = paths(root).intermediate;
+    await fs.mkdir(dir, { recursive: true });
+    const ctxPath = path.join(dir, "context-layout.json");
+    const outPath = path.join(dir, "layout-plan.json");
+    await writeJsonAtomic(ctxPath, planContext(g), true);
+    await fs.rm(outPath, { force: true });
+    const prompt = [
+      `Follow the agent instructions in ${instructions} (read that file first).`,
+      `Project root: ${root}`,
+      `Context: ${ctxPath}`,
+      `Plan path: ${outPath}`,
+      "Read-only: write the plan file and nothing else.",
+    ].join("\n");
+    const tools = ["Read", "Grep", "Glob", "Edit(./.lens/intermediate/layout-plan.json)"];
+    const { code, stderr, resultError, resultText } = await this.runClaude(job, prompt, tools, MODEL_ARGS);
+    if (job.state !== "running") return;
+    const raw = (await readJson<unknown>(outPath)) ?? fencedJson(resultText);
+    if (!raw) throw new Error(resultError ?? (code ? `Claude Code exited with code ${code}: ${stderr.trim().split("\n").pop() ?? ""}` : "the architect did not write a plan"));
+    const parsed = LayoutPlanSchema.safeParse(raw);
+    if (!parsed.success) throw new Error(`the layout plan failed validation:\n${formatZodError(parsed.error)}`);
+    const record = buildPlanRecord(root, parsed.data, job.costUsd);
+    if (!record.areas.length) throw new Error("the plan had no moves Lens can make");
+    await saveLayoutPlan(root, record);
+    await fs.rm(outPath, { force: true });
+    job.architecture = { areas: record.areas.length, moves: record.areas.reduce((n, a) => n + a.moves.length, 0) };
+    this.finish(job, "done");
+  }
+
+  /**
+   * Move one area's files in a copy of the project, let the layout-mover agent fix every reference,
+   * then apply the diff as one "layout" fix with a backup for Undo.
+   */
+  private async moveArea(job: EnrichJob, areaId: string) {
+    const { root } = job;
+    const plan = await loadLayoutPlan(root);
+    const area = plan?.areas.find((a) => a.id === areaId);
+    if (!plan || !area) throw new Error("that area is not in the layout plan");
+    if (area.status === "applied") throw new Error("that area is already moved");
+    const moves = usableMoves(root, area.moves);
+    if (!moves.length) throw new Error("none of this area's moves can be made now; plan again");
+    job.architecture = { areas: 1, moves: moves.length, areaId };
+    const instructions = agentInstructions("layout-mover");
+    if (!existsSync(instructions)) throw new Error(`missing ${instructions}`);
+    this.push(job, "Copying the project");
+    const ws = await makeWorkspace(root);
+    let data: Remediation;
+    try {
+      this.push(job, `Moving ${moves.length} file${moves.length === 1 ? "" : "s"}`);
+      await moveFiles(ws, moves);
+      const movesPath = path.join(ws, ".lens", "moves.json");
+      await writeJsonAtomic(movesPath, { area: { title: area.title, reason: area.reason }, moves }, true);
+      const prompt = [
+        `Follow the agent instructions in ${instructions} (read that file first).`,
+        `Project copy (edit files here): ${ws}`,
+        `Moves: ${movesPath}`,
+      ].join("\n");
+      const { code, stderr, resultError } = await this.runClaude(job, prompt, ["Read", "Grep", "Glob", "Edit", "Write"], MODEL_ARGS, ws);
+      if (job.state !== "running") return;
+      // A run that stopped partway leaves some imports pointing at old paths, so nothing from it is applied.
+      if (resultError || code) throw new Error(resultError ?? `Claude Code exited with code ${code}: ${stderr.trim().split("\n").pop() ?? ""}`);
+      this.push(job, "Checking the changes");
+      const report = { summary: area.title, fixes: [{ itemId: `layout-${area.id}`, title: area.title, explanation: area.reason, files: [] }], skipped: [] };
+      ({ data } = await collectChanges(root, ws, report));
+    } finally {
+      await fs.rm(ws, { recursive: true, force: true });
+    }
+    const record = buildRecord(root, "layout", data, job.costUsd, undefined, `${area.id}-${Date.now().toString(36)}`);
+    const prior = await loadRemediation(root, "layout");
+    const merged = prior
+      ? { ...record, costUsd: (prior.costUsd ?? 0) + (job.costUsd ?? 0), fixes: [...prior.fixes, ...record.fixes], skipped: [...prior.skipped, ...record.skipped], edits: { ...prior.edits, ...record.edits } }
+      : record;
+    await writeJsonAtomic(remediationPath(root, "layout"), merged, true);
+    const fix = record.fixes[0];
+    if (!fix || fix.invalid) throw new Error(fix?.invalid ? `the moves could not be applied: ${fix.invalid}` : "the moves changed no files");
+    this.push(job, "Applying the moves");
+    const { applied, failed } = await applyFixes(root, "layout", [fix.id]);
+    if (!applied.length) throw new Error(`the moves could not be applied: ${failed[0]?.error ?? "unknown error"}`);
+    area.status = "applied";
+    await saveLayoutPlan(root, plan);
+    this.push(job, "Rescanning");
+    await scanAndSave(root);
+    job.remediation = { source: "layout", proposed: 1, invalid: 0, skipped: 0, applied: 1 };
+    this.finish(job, "done");
+  }
+
   /** Fix items in a copy of the project, then apply every valid change with a backup for Undo. */
-  private async runRemediate(job: EnrichJob, source: RemediationSource, checkId?: string, note?: string) {
+  private async runRemediate(job: EnrichJob, source: FixSource, checkId?: string, note?: string) {
     if (!checkId && source !== "review") return this.runFixAll(job, source);
     if (source === "health" && checkId && REFACTOR_CHECKS.has(checkId)) return this.runFixAll(job, source, (id) => id.startsWith(`${checkId}~`));
     const { root } = job;

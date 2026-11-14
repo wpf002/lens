@@ -8,7 +8,7 @@ export const DEFAULT_IGNORES = [
   ".git/", "node_modules/", "bower_components/", "vendor/", ".venv/", "venv/", "env/", "__pycache__/",
   ".mypy_cache/", ".pytest_cache/", ".ruff_cache/", ".tox/", "dist/", "build/", "out/", ".next/", ".nuxt/",
   ".svelte-kit/", ".turbo/", ".vercel/", ".cache/", "coverage/", "target/", "bin/obj/", "obj/", ".gradle/",
-  ".idea/", ".vscode/", ".terraform/", ".lens/", ".ua/", ".understand-anything/", "*.min.js", "*.min.css", "*.map",
+  ".idea/", ".vscode/", ".terraform/", ".lens/", ".claude/worktrees/", ".ua/", ".understand-anything/", "*.min.js", "*.min.css", "*.map",
   "*.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "poetry.lock", "Cargo.lock", "go.sum",
   "*.snap", "*.generated.*", "*.pb.go", "*_pb2.py", "*.d.ts.map",
 ];
@@ -42,6 +42,8 @@ async function readIfExists(p: string): Promise<string> {
 export async function buildIgnore(root: string, exclude: string[] = []): Promise<Ignore> {
   const ig = ignore().add(DEFAULT_IGNORES);
   ig.add(await readIfExists(path.join(root, ".gitignore")));
+  // Local-only ignores that git honors but never commits.
+  ig.add(await readIfExists(path.join(root, ".git", "info", "exclude")));
   ig.add(await readIfExists(path.join(root, ".lensignore")));
   ig.add(await readIfExists(path.join(root, ".lens", ".lensignore")));
   // Keep .env.example visible even if .env* is gitignored; it documents config.

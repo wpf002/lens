@@ -248,6 +248,8 @@ export interface KnowledgeGraph {
   security?: SecurityReport;
   /** Deterministic code-health checks (see quality/health.ts). */
   health?: HealthReport;
+  /** File placement and naming checks, shown in the Architecture view. */
+  layout?: HealthReport;
   stats: GraphStats;
 }
 

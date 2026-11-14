@@ -1,15 +1,16 @@
 import type { EdgeKind, NodeKind, Severity } from "@lens/core/browser";
 import type { Auth } from "./utils/colors";
 
-export type ViewId = "structure" | "layers" | "domain" | "security" | "health" | "knowledge";
+export type ViewId = "structure" | "layers" | "domain" | "security" | "health" | "architecture" | "knowledge";
 
-export const VIEW_ORDER: ViewId[] = ["structure", "layers", "domain", "security", "health", "knowledge"];
+export const VIEW_ORDER: ViewId[] = ["structure", "layers", "domain", "security", "health", "architecture", "knowledge"];
 export const VIEW_LABEL: Record<ViewId, string> = {
   structure: "Structure",
   layers: "Layers",
   domain: "Business",
   security: "Security",
   health: "Health",
+  architecture: "Architecture",
   knowledge: "Knowledge",
 };
 
