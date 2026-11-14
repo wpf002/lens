@@ -270,8 +270,15 @@ export function Remediation({ source }: { source: Source }) {
       </div>
       {applied.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-line bg-[color-mix(in_srgb,var(--auth-guarded)_8%,transparent)] px-3 py-2 text-[12px]">
-          <button type="button" className="font-medium text-guarded hover:underline" title={changedFiles.join("\n")} onClick={() => setShowChanges((v) => !v)}>
-            ✓ {applied.length} Change{applied.length === 1 ? "" : "s"} · {changedFiles.length} File{changedFiles.length === 1 ? "" : "s"}
+          <button type="button" className="group flex items-center gap-2 text-fg" title={changedFiles.join("\n")} onClick={() => setShowChanges((v) => !v)}>
+            <span aria-hidden className="flex h-4 w-4 items-center justify-center rounded-full bg-guarded text-[10px] font-bold leading-none text-[var(--bg)]">
+              ✓
+            </span>
+            <span className="group-hover:underline">
+              <span className="font-mono font-medium tabular">{applied.length}</span> Change{applied.length === 1 ? "" : "s"}
+              <span className="px-1.5 text-faint">·</span>
+              <span className="font-mono font-medium tabular">{changedFiles.length}</span> File{changedFiles.length === 1 ? "" : "s"}
+            </span>
           </button>
           <span className="ml-auto flex items-center gap-3 text-[11.5px]">
             {merged ? (
@@ -280,10 +287,7 @@ export function Remediation({ source }: { source: Source }) {
               </a>
             ) : inPr ? (
               <>
-                <a className="text-muted hover:text-fg hover:underline" href={pr.url} target="_blank" rel="noreferrer noopener">
-                  Pull Request #{pr.number}
-                </a>
-                <TestsStatus pr={pr} />
+                <PrChip pr={pr} />
                 {pushed?.dirty ? (
                   <Button size="sm" variant="accent" disabled={aiBusy || !!prBusy || op.busy} onClick={() => void step("Updating…", createPullRequest)}>
                     {prBusy ?? "Update Pull Request"}
@@ -462,34 +466,44 @@ const repairsLeft = (t: TestGate) => t.attempts < (t.allowedRepairs ?? MAX_TEST_
 const needsFixTests = (pr: PullRequest) => pr.tests?.state === "broken" && !pr.tests.repairing && !repairsLeft(pr.tests) && !pr.tests.broken.some((b) => !!b.permissions?.length);
 
 /** Test results for an open fixes PR, counting only failures Lens's changes caused. */
-function TestsStatus({ pr }: { pr: PullRequest }) {
+/** Where the pull request's checks stand: label, color token, whether Lens is still working, and the hover detail. */
+function testsStatus(pr: PullRequest): { label: string; color: string; working: boolean; detail?: string } | null {
+  if (pr.conflicts) return { label: "Merge Conflicts", color: "var(--sev-critical)", working: false, detail: "GitHub can't merge these fixes into the base branch. Undo the conflicting fixes and run Fix again." };
   const t = pr.tests;
-  if (pr.conflicts)
-    return (
-      <span className="text-critical" title="GitHub can't merge these fixes into the base branch. Undo the conflicting fixes and run Fix again.">
-        Merge Conflicts
-      </span>
-    );
   if (!t) return null;
   const broken = t.broken.reduce((n, b) => n + Math.max(1, b.tests.length), 0);
   const plural = broken === 1 ? "" : "s";
-  const [label, tone] =
-    t.state === "running" ? ["Testing…", "text-muted"]
-    : t.state === "none" ? ["No CI", "text-muted"]
-    : t.state === "missing" ? ["Checks Didn't Run", "text-critical"]
-    : t.state === "passed" ? ["Tests Passed", "text-guarded"]
-    : t.repairing ? [`Fixing ${broken} Broken Test${plural}…`, "text-critical"]
-    : [`${broken} Test${plural} Broken`, "text-critical"];
+  const [label, color, working] =
+    t.state === "running" ? ["Testing", "var(--muted)", true]
+    : t.state === "none" ? ["No CI", "var(--muted)", false]
+    : t.state === "missing" ? ["Checks Didn't Run", "var(--sev-critical)", false]
+    : t.state === "passed" ? ["Tests Passed", "var(--auth-guarded)", false]
+    : t.repairing ? [`Fixing ${broken} Broken Test${plural}`, "var(--sev-medium)", true]
+    : [`${broken} Test${plural} Broken`, "var(--sev-critical)", false];
   const detail = [
     ...t.broken.map((b) => `${b.name}: ${b.tests.length ? b.tests.join(", ") : "failing"}`),
     ...(t.preexisting ? [`${t.preexisting} check${t.preexisting === 1 ? "" : "s"} also failing on the base branch`] : []),
     ...(t.state === "none" ? ["This repo has no GitHub checks, so its typecheck and tests haven't run on these fixes."] : []),
     ...(t.state === "missing" ? ["This repo's workflows didn't run on these fixes. Re-run CI on the pull request before merging."] : []),
   ].join("\n");
+  return { label, color, working, detail: detail || undefined };
+}
+
+/** The pull request link joined to its check status in one control. */
+function PrChip({ pr }: { pr: PullRequest }) {
+  const status = testsStatus(pr);
   return (
-    // Plain text: it renders where Create Pull Request was, so a link here caught repeat clicks and opened a tab.
-    <span className={tone} title={detail || undefined}>
-      {label}
+    <span className="flex h-7 items-stretch overflow-hidden rounded-md border border-line bg-panel">
+      <a className="flex items-center gap-1 px-2.5 text-muted hover:bg-raised hover:text-fg" href={pr.url} target="_blank" rel="noreferrer noopener">
+        Pull Request <span className="font-mono text-fg">#{pr.number}</span>
+      </a>
+      {status && (
+        // Plain text: it renders where Create Pull Request was, so a link here caught repeat clicks and opened a tab.
+        <span className="flex items-center gap-1.5 border-l border-line px-2.5 font-medium" style={{ color: status.color, background: `color-mix(in srgb, ${status.color} 10%, transparent)` }} title={status.detail}>
+          {status.working ? <Spinner size={11} label={status.label} /> : <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: status.color }} />}
+          {status.label}
+        </span>
+      )}
     </span>
   );
 }
