@@ -165,6 +165,16 @@ export async function coveredFiles(root: string): Promise<Set<string>> {
   return new Set(Object.keys(coverage).filter((rel) => hashes.get(rel) === coverage[rel]));
 }
 
+/** Files reviewed before Lens edited them stay reviewed at their new content. */
+export async function keepReviewed(root: string, changed: string[], covered: Set<string>): Promise<void> {
+  const kept = changed.filter((rel) => covered.has(rel));
+  if (!kept.length) return;
+  const coverage = await loadCoverage(root);
+  const hashes = await hashFiles(root, kept);
+  for (const [rel, hash] of hashes) coverage[rel] = hash;
+  await saveCoverage(root, coverage);
+}
+
 /** Content hash of each file. Files that can't be read are left out. */
 export async function hashFiles(root: string, rels: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();

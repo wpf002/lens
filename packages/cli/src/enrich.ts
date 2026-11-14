@@ -8,7 +8,7 @@
  * final stream-json result is reported back to the dashboard.
  */
 import { loadRepairItems } from "./ci.js";
-import { coveredFiles, hashFiles, loadCoverage, mergeReview, pendingReview, planBatches, priorFindingsFor, renderReport, reviewIndex, saveCoverage, type ReviewFile, type ReviewRecord } from "./review-ledger.js";
+import { BATCH_MAX_FILES, coveredFiles, hashFiles, keepReviewed, loadCoverage, mergeReview, pendingReview, planBatches, priorFindingsFor, renderReport, reviewIndex, saveCoverage, type ReviewFile, type ReviewRecord } from "./review-ledger.js";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
@@ -124,8 +124,10 @@ interface RemediationItem {
 const NO_CHANGE_NOTE = "An earlier attempt reported this fixed but changed no files. Make the edit this time, or skip it with the reason no change is needed.";
 /** Below this, a Claude run can't do useful work. */
 const MIN_RUN_USD = 0.3;
-/** Spend allowed for reviewing Lens's own changes after a fix run, and for fixing what it finds. */
+/** Spend allowed per review batch when checking Lens's own changes, and for fixing what it finds. */
 const FIX_CHECK_LIMIT_USD = 1.5;
+/** One batch's allowance for every batch of changed files, so a large fix run checks all of them. */
+export const fixCheckLimit = (changedFiles: number) => FIX_CHECK_LIMIT_USD * Math.max(1, Math.ceil(changedFiles / BATCH_MAX_FILES));
 const FIX_CHECK_DIFF_CHARS = 30_000;
 /** Budget added to every Fix run for that check: one review pass and one repair round. */
 export const FIX_CHECK_RESERVE_USD = 2 * FIX_CHECK_LIMIT_USD;
@@ -655,10 +657,10 @@ export class EnrichRunner {
   /**
    * Reviews every code file that is new or changed since its last review, in batches, and
    * folds the findings into the ledger after each batch so a stopped run keeps its progress.
-   * With `scope`, reviews only the files a fix run just changed, against their diff.
+   * With `scope`, reviews only the files a fix run just changed, each batch against its own diff.
    * Returns the indexes of new findings, or null when the job stopped.
    */
-  private async reviewStep(job: EnrichJob, opts: { limitUsd: number; scope?: { paths: string[]; diff: string; covered: Set<string> } }): Promise<number[] | null> {
+  private async reviewStep(job: EnrichJob, opts: { limitUsd: number; scope?: { paths: string[] } }): Promise<number[] | null> {
     const { root } = job;
     const scoped = !!opts.scope;
     this.push(job, "Rescanning");
@@ -709,7 +711,7 @@ export class EnrichRunner {
       const closed = await reviewClosed(root);
       const ledger = await loadReview(root);
       const health = (g.health?.checks ?? []).map((c) => ({ id: c.id, title: c.title, hits: c.hits.filter((h) => h.path && batchPaths.has(h.path)).slice(0, 10) })).filter((c) => c.hits.length);
-      await writeJsonAtomic(ctxPath, { project: g.project, mode: scoped ? "changes" : "full", files: batch, priorFindings: priorFindingsFor(ledger.findings, batchPaths, closed), health, ...(scoped ? { diff: opts.scope!.diff } : {}) }, true);
+      await writeJsonAtomic(ctxPath, { project: g.project, mode: scoped ? "changes" : "full", files: batch, priorFindings: priorFindingsFor(ledger.findings, batchPaths, closed), health, ...(scoped ? { diff: gitDiff(root, [...batchPaths]) } : {}) }, true);
       const prompt = [
         `Follow the agent instructions in ${instructions} (read that file first).`,
         `Project root: ${root}`,
@@ -741,10 +743,9 @@ export class EnrichRunner {
         const merged = mergeReview(current.findings, parsed.data, { ...closed, reviewed: batchPaths, existing, now, byFix: scoped });
         const record: ReviewRecord = { ...current, generatedAt: now, costUsd: (job.costUsd ?? 0) - startCost, summary: undefined, findings: merged.findings };
         await saveReview(root, record);
-        // A scoped check counts as a review only for files that were fully reviewed before Lens edited them.
-        const nowCovered = scoped ? batch.filter((f) => opts.scope!.covered.has(f.path)) : batch;
-        if (nowCovered.length) {
-          for (const f of nowCovered) coverage[f.path] = hashes.get(f.path)!;
+        // reviewOwnChanges keeps Lens-edited files reviewed; a scoped check reads only the diff.
+        if (!scoped) {
+          for (const f of batch) coverage[f.path] = hashes.get(f.path)!;
           await saveCoverage(root, coverage);
         }
         added.push(...merged.added);
@@ -785,15 +786,17 @@ export class EnrichRunner {
    */
   private async reviewOwnChanges(job: EnrichJob, changed: string[], covered: Set<string>): Promise<number[]> {
     const { root } = job;
+    // Lens's own edits don't send a file back for a full review; this check reads their diff instead.
+    await keepReviewed(root, changed, covered);
     if (!changed.length || job.state !== "running") return [];
-    const allowance = Math.min(FIX_CHECK_LIMIT_USD, job.budgetUsd - (job.costUsd ?? 0));
+    const allowance = Math.min(fixCheckLimit(changed.length), job.budgetUsd - (job.costUsd ?? 0));
     if (allowance < MIN_RUN_USD) {
-      this.push(job, "Skipped checking Lens's changes: spending limit reached. The next review covers them.");
+      this.push(job, "Skipped checking Lens's changes: spending limit reached.");
       return [];
     }
     this.push(job, `Checking Lens's changes to ${changed.length} file${changed.length === 1 ? "" : "s"}`);
     // The fixes are already applied; a failed check leaves their files pending for the next review instead of failing the run.
-    const added = await this.reviewStep(job, { limitUsd: allowance, scope: { paths: changed, diff: gitDiff(root, changed), covered } }).catch((e: unknown) => {
+    const added = await this.reviewStep(job, { limitUsd: allowance, scope: { paths: changed } }).catch((e: unknown) => {
       const reason = e instanceof Error ? e.message.split("\n")[0]! : String(e);
       console.error(`[ai] check of Lens's changes failed in ${path.basename(root)}: ${reason}`);
       this.push(job, `Couldn't check Lens's changes: ${reason}`);
