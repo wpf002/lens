@@ -212,7 +212,7 @@ export function Remediation({ source }: { source: Source }) {
   const applied = current.map((x) => x.f);
   const changedFiles = [...new Set(applied.flatMap((f) => f.files.map((x) => x.path)))];
   // Valid edits left from an older run that predates auto-apply.
-  const ready = rec.fixes.filter((f) => f.status === "proposed" && !f.invalid);
+  const ready = rec.fixes.filter((f) => (f.status === "proposed" || f.status === "undone") && !f.invalid);
   const notFixed = rec.fixes.filter((f) => f.status === "proposed" && f.invalid);
   const safe = rec.skipped.filter((x) => SAFE.test(x.reason));
   const todo = rec.skipped.filter((x) => !SAFE.test(x.reason));

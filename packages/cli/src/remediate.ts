@@ -192,7 +192,7 @@ export async function applyFixes(root: string, source: RemediationSource, ids: s
   const failed: Array<{ id: string; error: string }> = [];
   for (const id of ids) {
     const fix = rec.fixes.find((f) => f.id === id);
-    if (!fix || fix.status !== "proposed" || fix.invalid) {
+    if (!fix || !isReadyFix(fix)) {
       failed.push({ id, error: "not available to apply" });
       continue;
     }
@@ -235,6 +235,9 @@ export async function applyFixes(root: string, source: RemediationSource, ids: s
   await writeJsonAtomic(remediationPath(root, source), rec, true);
   return { applied, failed };
 }
+
+/** A fix Apply can put in: never applied, or applied and undone. Undo restored the original bytes, so its edits still match. */
+export const isReadyFix = (fix: Pick<ProposedFix, "status" | "invalid">) => (fix.status === "proposed" || fix.status === "undone") && !fix.invalid;
 
 /** An applied fix that hasn't been merged yet, so it belongs in the next pull request. */
 export const isPendingFix = (fix: Pick<ProposedFix, "status" | "mergedIn">) => fix.status === "applied" && fix.mergedIn === undefined;

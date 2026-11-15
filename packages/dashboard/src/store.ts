@@ -185,6 +185,9 @@ function rememberProject(root: string): void {
 }
 
 /** View state that belongs to one project and must not leak into the next. */
+/** The most fix ids the server applies per request. */
+const APPLY_BATCH = 30;
+
 const PROJECT_RESET = {
   structureDir: "",
   expanded: [] as string[],
@@ -580,10 +583,16 @@ export const useStore = create<State>((set, get) => ({
   async applyFixes(source, ids) {
     set({ fixOp: { busy: true, error: null } });
     try {
-      const r = await applyRemediation(source, ids);
-      set({ fixOp: { busy: false, error: r.failed.length ? r.failed.map((f) => f.error).join("; ") : null } });
+      const failed: string[] = [];
+      let applied = 0;
+      for (let i = 0; i < ids.length; i += APPLY_BATCH) {
+        const r = await applyRemediation(source, ids.slice(i, i + APPLY_BATCH));
+        failed.push(...r.failed.map((f) => f.error));
+        applied += r.applied.length;
+      }
+      set({ fixOp: { busy: false, error: failed.length ? [...new Set(failed)].join("; ") : null } });
       await get().refreshRemediation();
-      if (r.applied.length) await reloadGraph();
+      if (applied) await reloadGraph();
     } catch (err) {
       set({ fixOp: { busy: false, error: err instanceof Error ? err.message : String(err) } });
     }

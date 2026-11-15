@@ -52,4 +52,21 @@ describe("fixes after a merge", () => {
     expect(fixes.filter(isPendingFix).map((f) => f.id)).toEqual([second]);
     await fs.rm(root, { recursive: true, force: true });
   });
+
+  it("re-applies an undone fix from its saved edits", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-redo-"));
+    await fs.writeFile(path.join(root, "a.ts"), "a\n");
+    await fs.writeFile(path.join(root, "b.ts"), "b\n");
+    const [first] = await proposeTwoFixes(root);
+    await applyFixes(root, "health", [first]);
+    await undoFix(root, "health", first);
+    expect(await fs.readFile(path.join(root, "a.ts"), "utf8")).toBe("a\n");
+
+    expect((await applyFixes(root, "health", [first])).applied).toEqual([first]);
+    expect(await fs.readFile(path.join(root, "a.ts"), "utf8")).toBe("fixed one\n");
+    expect((await loadRemediation(root, "health"))!.fixes.find((f) => f.id === first)?.status).toBe("applied");
+    await undoFix(root, "health", first);
+    expect(await fs.readFile(path.join(root, "a.ts"), "utf8")).toBe("a\n");
+    await fs.rm(root, { recursive: true, force: true });
+  });
 });
