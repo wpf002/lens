@@ -72,11 +72,14 @@ export function safeTarget(root: string, rel: string): string {
 
 /** Apply edits in memory. Throws when a `find` isn't present exactly once. */
 /** `after: null` means the file is deleted. */
-export function applyEditsInMemory(root: string, edits: Remediation["fixes"][number]["edits"]): Map<string, { before: string | null; after: string | null }> {
+type Edits = Remediation["fixes"][number]["edits"];
+const readDisk = (abs: string): string | null => (existsSync(abs) ? readFileSync(abs, "utf8") : null);
+
+export function applyEditsInMemory(root: string, edits: Edits, read: (abs: string, rel: string) => string | null = readDisk): Map<string, { before: string | null; after: string | null }> {
   const out = new Map<string, { before: string | null; after: string | null }>();
   for (const e of edits) {
     const abs = safeTarget(root, e.path);
-    const cur = out.get(e.path) ?? { before: existsSync(abs) ? readFileSync(abs, "utf8") : null, after: "" as string | null };
+    const cur = out.get(e.path) ?? { before: read(abs, e.path), after: "" as string | null };
     const text = out.has(e.path) ? cur.after : cur.before;
     if (e.delete) {
       if (text === null) throw new Error(`${e.path} doesn't exist`);
@@ -93,6 +96,37 @@ export function applyEditsInMemory(root: string, edits: Remediation["fixes"][num
     out.set(e.path, cur);
   }
   return out;
+}
+
+/**
+ * The files as they were before `edits`, when the edits' result is already on disk (the fix
+ * landed through a commit or merge Lens didn't make); otherwise null. Undoing the edits in
+ * reverse and applying them again must give back exactly what's on disk.
+ */
+export function contentBeforeApplied(root: string, edits: Edits): Map<string, string | null> | null {
+  if (!edits.length) return null;
+  const now = new Map<string, string | null>();
+  for (const e of edits) if (!now.has(e.path)) now.set(e.path, readDisk(safeTarget(root, e.path)));
+  const before = new Map(now);
+  for (const e of [...edits].reverse()) {
+    const text = before.get(e.path) ?? null;
+    if (e.delete) return null;
+    if (e.find === "") {
+      if (text !== e.replace) return null;
+      before.set(e.path, null);
+      continue;
+    }
+    if (text === null || text.split(e.replace).length - 1 !== 1) return null;
+    before.set(e.path, text.replace(e.replace, () => e.find));
+  }
+  try {
+    const redone = applyEditsInMemory(root, edits, (_abs, rel) => before.get(rel) ?? null);
+    for (const [rel, c] of redone) if (c.after !== now.get(rel)) return null;
+  } catch {
+    // The reconstructed originals don't take the edits, so the result on disk came from something else.
+    return null;
+  }
+  return before;
 }
 
 export function unifiedDiff(rel: string, before: string | null, after: string | null): string {
@@ -196,6 +230,13 @@ export async function applyFixes(root: string, source: RemediationSource, ids: s
       failed.push({ id, error: "not available to apply" });
       continue;
     }
+    const landed = contentBeforeApplied(root, rec.edits[id] ?? []);
+    if (landed) {
+      recordLanded(root, source, id, landed);
+      fix.status = "applied";
+      applied.push(id);
+      continue;
+    }
     try {
       const changed = applyEditsInMemory(root, rec.edits[id] ?? []);
       const dir = path.join(paths(root).dir, "remediation-backup", source, id);
@@ -234,6 +275,18 @@ export async function applyFixes(root: string, source: RemediationSource, ids: s
   }
   await writeJsonAtomic(remediationPath(root, source), rec, true);
   return { applied, failed };
+}
+
+/** Back up a fix that's already on disk as the content before it, so Undo still works. */
+function recordLanded(root: string, source: RemediationSource, id: string, before: Map<string, string | null>): void {
+  const dir = path.join(paths(root).dir, "remediation-backup", source, id);
+  mkdirSync(dir, { recursive: true });
+  const manifest: BackupEntry[] = [];
+  for (const [rel, text] of before) {
+    manifest.push({ path: rel, existed: text !== null });
+    if (text !== null) backUp(dir, rel, text);
+  }
+  writeFileSync(path.join(dir, "manifest.json"), JSON.stringify(manifest));
 }
 
 /** A fix Apply can put in: never applied, or applied and undone. Undo restored the original bytes, so its edits still match. */

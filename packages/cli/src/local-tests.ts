@@ -1,6 +1,6 @@
 /**
- * Runs the project's own tests before Lens pushes, so a fix that breaks a test never reaches
- * GitHub. Only the changed packages are tested, and the run without Lens's edits happens only
+ * Runs the project's own tests, typecheck and build before Lens pushes, so a fix that breaks
+ * any of them never reaches GitHub. Only the changed packages are tested, and the run without Lens's edits happens only
  * when something fails, which keeps the usual clean push to one short test run.
  */
 import { execFile } from "node:child_process";
@@ -149,7 +149,28 @@ async function uncommitted(root: string): Promise<string[]> {
   return status.split("\n").filter(Boolean).map((line) => line.slice(3).split(" -> ").at(-1)!);
 }
 
-/** Run the tests of what Lens's uncommitted edits touch, and report what those edits break. */
+/** Root scripts that must still pass with Lens's edits, besides the tests. */
+const GATE_SCRIPTS = ["typecheck", "build"] as const;
+
+/** argv for each gate script the root package.json defines. Exported for tests. */
+export function gateRuns(manager: PackageManager, scripts: Record<string, string> | undefined): string[][] {
+  return GATE_SCRIPTS.filter((name) => scripts?.[name]).map((name) => [manager, "run", name]);
+}
+
+/** Run one check with Lens's edits; on failure, run it without them and report only what the edits broke. */
+async function runGate(root: string, argv: string[]): Promise<LocalTestResult> {
+  const withEdits = await run(root, argv, TEST_TIMEOUT_MS);
+  if (withEdits.ok) return { state: "passed" };
+  if (withEdits.timedOut) return { state: "broken", tests: [], excerpt: `\`${argv.join(" ")}\` ran past ${TEST_TIMEOUT_MS / 60_000} minutes.` };
+  const base = await headCopy(root);
+  try {
+    return newFailures(withEdits, await run(base, argv, TEST_TIMEOUT_MS));
+  } finally {
+    await removeHeadCopy(root, base);
+  }
+}
+
+/** Run the tests, typecheck and build for what Lens's uncommitted edits touch, and report what those edits break. */
 export async function checkLocalTests(root: string): Promise<LocalTestResult> {
   const changed = await uncommitted(root);
   if (!changed.length) return { state: "passed" };
@@ -157,13 +178,10 @@ export async function checkLocalTests(root: string): Promise<LocalTestResult> {
   if (!plan) return { state: "skipped", reason: "no test script" };
   const installProblem = await ensureInstalled(root, plan);
   if (installProblem) return { state: "skipped", reason: installProblem };
-  const withEdits = await run(root, plan.run, TEST_TIMEOUT_MS);
-  if (withEdits.ok) return { state: "passed" };
-  if (withEdits.timedOut) return { state: "broken", tests: [], excerpt: `The tests ran past ${TEST_TIMEOUT_MS / 60_000} minutes.` };
-  const base = await headCopy(root);
-  try {
-    return newFailures(withEdits, await run(base, plan.run, TEST_TIMEOUT_MS));
-  } finally {
-    await removeHeadCopy(root, base);
+  const manifest = await readJson<{ scripts?: Record<string, string> }>(path.join(root, "package.json"));
+  for (const argv of [plan.run, ...gateRuns(plan.manager, manifest?.scripts)]) {
+    const result = await runGate(root, argv);
+    if (result.state !== "passed") return result;
   }
+  return { state: "passed" };
 }

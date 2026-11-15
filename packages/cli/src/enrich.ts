@@ -8,7 +8,7 @@
  * final stream-json result is reported back to the dashboard.
  */
 import { inRepairScope, loadRepairItems } from "./ci.js";
-import { BATCH_MAX_FILES, coveredFiles, hashFiles, keepReviewed, loadCoverage, mergeReview, pendingReview, planBatches, priorFindingsFor, renderReport, reviewIndex, saveCoverage, type ReviewFile, type ReviewRecord } from "./review-ledger.js";
+import { BATCH_MAX_FILES, coveredFiles, hashFiles, keepReviewed, loadCoverage, markReviewed, mergeReview, pendingReview, planBatches, priorFindingsFor, renderReport, reviewIndex, saveCoverage, type ReviewFile, type ReviewRecord } from "./review-ledger.js";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
@@ -845,7 +845,7 @@ export class EnrichRunner {
         await saveReview(root, record);
         // reviewOwnChanges keeps Lens-edited files reviewed; a scoped check reads only the diff.
         if (!scoped) {
-          for (const f of batch) coverage[f.path] = hashes.get(f.path)!;
+          for (const f of batch) markReviewed(coverage, f.path, hashes.get(f.path)!);
           await saveCoverage(root, coverage);
         }
         added.push(...merged.added);

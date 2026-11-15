@@ -3,12 +3,12 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { checkLocalTests, newFailures, testPlan } from "../src/local-tests.js";
+import { checkLocalTests, gateRuns, newFailures, testPlan } from "../src/local-tests.js";
 
 /** A git repo whose `npm test` prints a vitest-style failure line for each wrong answer in lib.js. */
-async function repoWithTests(lib: string): Promise<string> {
+async function repoWithTests(lib: string, scripts: Record<string, string> = {}): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-local-tests-"));
-  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "app", private: true, scripts: { test: "node check.js" } }));
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "app", private: true, scripts: { test: "node check.js", ...scripts } }));
   await fs.writeFile(
     path.join(root, "check.js"),
     'const { add, sub } = require("./lib.js");\nlet bad = 0;\nif (add(1, 2) !== 3) { console.log(" × adds numbers"); bad++; }\nif (sub(3, 1) !== 2) { console.log(" × subtracts numbers"); bad++; }\nprocess.exit(bad ? 1 : 0);\n',
@@ -65,6 +65,22 @@ describe("local test check", () => {
     expect(await checkLocalTests(root)).toEqual({ state: "passed" });
     expect(execFileSync("git", ["worktree", "list"], { cwd: root, encoding: "utf8" }).trim().split("\n")).toHaveLength(1);
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("blocks an edit that passes the tests but breaks the build", async () => {
+    const root = await repoWithTests("exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a - b;\nexports.version = 1;\n", { build: "node build.js" });
+    await fs.writeFile(path.join(root, "build.js"), 'if (!require("./lib.js").version) { console.error("error: lib.js exports no version"); process.exit(1); }\n');
+    execFileSync("git", ["add", "build.js"], { cwd: root });
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "build script"], { cwd: root, stdio: "pipe" });
+
+    await fs.writeFile(path.join(root, "lib.js"), "exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a - b;\n");
+    expect(await checkLocalTests(root)).toMatchObject({ state: "broken", excerpt: expect.stringContaining("exports no version") });
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("runs typecheck and build only when the project defines them", () => {
+    expect(gateRuns("pnpm", { test: "vitest", typecheck: "tsc", build: "turbo build" })).toEqual([["pnpm", "run", "typecheck"], ["pnpm", "run", "build"]]);
+    expect(gateRuns("npm", { test: "vitest" })).toEqual([]);
   });
 
   it("skips a project with no test script", async () => {

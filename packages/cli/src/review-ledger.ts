@@ -2,8 +2,9 @@
  * The review ledger: every finding the code review has ever made, in .lens/review.json.
  * Findings are only appended, so a finding's id (review-<index>) never changes and fixes,
  * skips, and Won't Fix decisions stay attached to it across reviews. Coverage records the
- * content hash of each file as of its last review, so each run reviews only new or changed
- * files and the first run reviews all of them.
+ * content hashes each file has been reviewed at, so each run reviews only content it hasn't
+ * seen and the first run reviews every file. An undo or re-apply that brings a file back to
+ * content reviewed before doesn't send it back for review.
  */
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -148,7 +149,23 @@ export function planBatches(files: ReviewFile[], maxFiles = BATCH_MAX_FILES, max
   return batches;
 }
 
-export type Coverage = Record<string, string>;
+/** Every content hash a file has been reviewed at, newest first. Older ledgers hold one hash as a string. */
+export type Coverage = Record<string, string | string[]>;
+/** Enough history for several undo and re-apply rounds without the file growing without limit. */
+const MAX_HASHES_PER_FILE = 20;
+
+export function reviewedHashes(coverage: Coverage, rel: string): string[] {
+  const entry = coverage[rel];
+  return entry === undefined ? [] : typeof entry === "string" ? [entry] : entry;
+}
+
+export function isReviewed(coverage: Coverage, rel: string, hash: string | undefined): boolean {
+  return hash !== undefined && reviewedHashes(coverage, rel).includes(hash);
+}
+
+export function markReviewed(coverage: Coverage, rel: string, hash: string): void {
+  coverage[rel] = [hash, ...reviewedHashes(coverage, rel).filter((h) => h !== hash)].slice(0, MAX_HASHES_PER_FILE);
+}
 const coveragePath = (root: string) => path.join(paths(root).dir, "review-coverage.json");
 
 export async function loadCoverage(root: string): Promise<Coverage> {
@@ -158,11 +175,11 @@ export async function saveCoverage(root: string, coverage: Coverage): Promise<vo
   await writeJsonAtomic(coveragePath(root), coverage, true);
 }
 
-/** Files whose reviewed hash matches what's on disk now. */
+/** Files whose content on disk now has been reviewed. */
 export async function coveredFiles(root: string): Promise<Set<string>> {
   const coverage = await loadCoverage(root);
   const hashes = await hashFiles(root, Object.keys(coverage));
-  return new Set(Object.keys(coverage).filter((rel) => hashes.get(rel) === coverage[rel]));
+  return new Set(Object.keys(coverage).filter((rel) => isReviewed(coverage, rel, hashes.get(rel))));
 }
 
 /** Files reviewed before Lens edited them stay reviewed at their new content. */
@@ -171,7 +188,7 @@ export async function keepReviewed(root: string, changed: string[], covered: Set
   if (!kept.length) return;
   const coverage = await loadCoverage(root);
   const hashes = await hashFiles(root, kept);
-  for (const [rel, hash] of hashes) coverage[rel] = hash;
+  for (const [rel, hash] of hashes) markReviewed(coverage, rel, hash);
   await saveCoverage(root, coverage);
 }
 
@@ -187,9 +204,9 @@ export async function hashFiles(root: string, rels: string[]): Promise<Map<strin
   return out;
 }
 
-/** Files that are new or changed since their last review. */
+/** Files whose current content has never been reviewed. */
 export function pendingReview(files: ReviewFile[], hashes: Map<string, string>, coverage: Coverage): ReviewFile[] {
-  return files.filter((f) => hashes.has(f.path) && coverage[f.path] !== hashes.get(f.path));
+  return files.filter((f) => hashes.has(f.path) && !isReviewed(coverage, f.path, hashes.get(f.path)));
 }
 
 /** CODE_REVIEW.md, written from the ledger so it always matches the Health page. */
