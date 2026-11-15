@@ -23,7 +23,7 @@ export function Button({ variant = "outline", size = "md", active, className, ch
         "inline-flex items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-colors select-none",
         size === "sm" ? "h-7 px-2 text-[12px]" : "h-8 px-2.5 text-[12.5px]",
         variant === "ghost" && "text-muted hover:text-fg hover:bg-raised",
-        variant === "outline" && "border border-line text-fg bg-panel hover:border-line-strong hover:bg-raised",
+        variant === "outline" && "border border-line text-fg bg-panel hover:border-line-strong hover:bg-raised disabled:bg-transparent disabled:text-faint disabled:hover:border-line",
         variant === "solid" && "bg-raised text-fg hover:bg-line",
         // A faded amber still reads as clickable, so a disabled accent button goes grey.
         variant === "accent" && "bg-accent text-accent-fg hover:brightness-110 disabled:bg-raised disabled:text-faint disabled:hover:brightness-100",

@@ -109,7 +109,6 @@ export function Remediation({ source }: { source: Source }) {
   const batch = useStore((s) => s.fixable.batch);
   const plans = useStore((s) => s.fixable.plans);
   const run = useStore((s) => s.runAI);
-  const cancel = useStore((s) => s.cancelAI);
   const apply = useStore((s) => s.applyFixes);
   const op = useStore((s) => s.fixOp);
   const [showChanges, setShowChanges] = useState(false);
@@ -167,39 +166,7 @@ export function Remediation({ source }: { source: Source }) {
   const failed = job.task === "remediate" && ours(job.source) && job.state === "error";
   const box = "mx-3 my-2.5 rounded-lg border border-line bg-panel-2 text-[12px]";
 
-  if (running) {
-    const fa = job.fixAll;
-    const pct = fa && fa.total ? Math.min(100, Math.round((Math.min(fa.attempted, fa.total) / fa.total) * 100)) : null;
-    return (
-      <div className={cx(box, "overflow-hidden text-[12.5px] text-fg")} role="status">
-        <div className="flex items-center gap-2 px-3 pb-2 pt-2.5">
-          <Spinner size={14} />
-          <span className="shrink-0 font-medium">
-            {fa ? (
-              <>
-                Fixing <span className="font-mono tabular">{Math.min(fa.attempted, fa.total)}/{fa.total}</span>
-                <span className="font-normal text-muted"> · {fa.fixed} Fixed{job.costUsd ? ` · $${job.costUsd.toFixed(2)}` : ""}</span>
-              </>
-            ) : job.progress?.some((p) => p.startsWith("Auditing")) ? "Auditing" : job.progress?.some((p) => p.startsWith("Reviewing")) ? "Reviewing" : "Fixing"}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-[11.5px] text-faint" title={(job.progress ?? []).at(-1)}>
-            {fa?.current ? `Batch ${fa.batches}${fa.runsLeft !== undefined ? ` of ~${fa.batches + fa.runsLeft}` : ""} · ${fa.current}` : (job.progress ?? []).at(-1)}
-          </span>
-          {fa?.msPerRun && fa.runsLeft !== undefined ? (
-            <span className="shrink-0 whitespace-nowrap font-mono text-[12px] font-medium tabular" title="Average batch time so far, times the batches left">
-              ~{formatDuration(fa.msPerRun * (fa.runsLeft + 1))} Left
-            </span>
-          ) : (
-            <Elapsed since={job.step?.startedAt ?? job.startedAt} typicalMs={job.step?.typicalMs} />
-          )}
-          <Button size="sm" variant="ghost" onClick={() => void cancel()}>
-            Cancel
-          </Button>
-        </div>
-        <ProgressBar pct={pct} />
-      </div>
-    );
-  }
+  if (running) return <FixProgress />;
 
   if (confirm) {
     const fixAll = source !== "review" && !confirm.checkId;
@@ -367,14 +334,79 @@ export function Remediation({ source }: { source: Source }) {
 export const SAFE = /^(scanner was wrong|already (safe|hardened|handled|fixed))\b/i;
 const SAFE_PREFIX = /^scanner was wrong[:.,]?\s*/i;
 
-/** Thin bar under a running job. `null` shows the indeterminate sweep. */
-export function ProgressBar({ pct }: { pct: number | null }) {
+/** Live row for a running fix job: count and time lead, batch detail sits under the bar. */
+function FixProgress() {
+  const job = useStore((s) => s.enrichJob);
+  const cancel = useStore((s) => s.cancelAI);
+  const [cancelling, setCancelling] = useState(false);
+  const fa = job.fixAll;
+  const pct = fa && fa.total ? Math.min(100, Math.round((Math.min(fa.attempted, fa.total) / fa.total) * 100)) : null;
+  const latest = (job.progress ?? []).at(-1);
+  const verb = fa ? "Fixing" : job.progress?.some((p) => p.startsWith("Auditing")) ? "Auditing" : job.progress?.some((p) => p.startsWith("Reviewing")) ? "Reviewing" : "Fixing";
+  const detail = fa?.current ? [`Batch ${fa.batches}${fa.runsLeft !== undefined ? ` of ~${fa.batches + fa.runsLeft}` : ""}`, fa.current].join(" · ") : latest;
+  const stop = async () => {
+    setCancelling(true);
+    try {
+      await cancel();
+    } finally {
+      setCancelling(false);
+    }
+  };
   return (
-    <div className="relative h-[3px] bg-line" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct ?? undefined}>
+    <div className="mx-3 my-2.5 rounded-lg border border-line bg-panel-2 px-3.5 py-3 text-[12.5px] text-fg" role="status">
+      <div className="flex items-center gap-3">
+        <Spinner size={14} />
+        <span className="flex min-w-0 items-baseline gap-1.5 tabular">
+          <span className="font-medium">{verb}</span>
+          {fa && (
+            <>
+              <span className="text-[15px] font-semibold">{Math.min(fa.attempted, fa.total)}</span>
+              <span className="text-muted">/ {fa.total}</span>
+            </>
+          )}
+        </span>
+        {fa && (
+          <span className="flex items-baseline gap-3 border-l border-line pl-3 tabular">
+            <span>
+              <span className="font-semibold text-guarded">{fa.fixed}</span> <span className="text-muted">Fixed</span>
+            </span>
+            {job.costUsd ? <span className="text-muted">${job.costUsd.toFixed(2)}</span> : null}
+          </span>
+        )}
+        <span className="ml-auto flex shrink-0 items-center gap-3">
+          {fa?.msPerRun && fa.runsLeft !== undefined ? (
+            <span className="whitespace-nowrap tabular" title="Average batch time so far, times the batches left">
+              <span className="font-semibold">~{formatDuration(fa.msPerRun * (fa.runsLeft + 1))}</span> <span className="text-muted">Left</span>
+            </span>
+          ) : (
+            <Elapsed since={job.step?.startedAt ?? job.startedAt} typicalMs={job.step?.typicalMs} />
+          )}
+          <Button size="sm" disabled={cancelling} onClick={() => void stop()}>
+            {cancelling ? "Cancelling" : "Cancel"}
+          </Button>
+        </span>
+      </div>
+      <ProgressBar pct={pct} className="mt-2.5 h-1.5 rounded-full" />
+      {detail && (
+        <div className="mt-2 flex items-baseline gap-3 text-[11.5px] text-muted">
+          <span className="min-w-0 flex-1 truncate" title={latest}>
+            {detail}
+          </span>
+          {pct !== null && <span className="shrink-0 tabular">{pct}%</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Thin bar under a running job. `null` shows the indeterminate sweep. */
+export function ProgressBar({ pct, className }: { pct: number | null; className?: string }) {
+  return (
+    <div className={cx("relative h-[3px] overflow-hidden bg-line", className)} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct ?? undefined}>
       {pct === null ? (
         <div className="lens-scanbar !absolute !inset-0 !h-full !w-full !rounded-none !bg-transparent" />
       ) : (
-        <div className="h-full bg-accent transition-[width] duration-500" style={{ width: `${pct}%` }} />
+        <div className="h-full rounded-[inherit] bg-accent transition-[width] duration-500" style={{ width: `${pct}%` }} />
       )}
     </div>
   );
