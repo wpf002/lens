@@ -234,7 +234,7 @@ async function mergeLatestBase(root: string, branch: string, base: string, resol
       return;
     }
     await git(root, [...identity, "commit", "-q", "--no-edit"]);
-    console.log(`[github] resolved ${branch}'s conflicts with ${base}`);
+    console.error(`[github] resolved ${branch}'s conflicts with ${base}`);
   }
   if ((await git(root, ["rev-parse", "HEAD"])) !== before) await pushWithRetry(root, branch);
 }
@@ -253,8 +253,9 @@ async function finishMerge(root: string, base: string, resolveConflicts: Conflic
   if (sources.length) await resolveConflicts(root, sources, base);
   const marked: string[] = [];
   for (const file of sources) {
-    const text = await fs.readFile(path.join(root, file), "utf8").catch(() => null);
-    if (text !== null && CONFLICT_MARKER.test(text)) marked.push(file);
+    // A resolution may delete a file; only files still there can hold markers.
+    const absolute = path.join(root, file);
+    if (existsSync(absolute) && CONFLICT_MARKER.test(await fs.readFile(absolute, "utf8"))) marked.push(file);
   }
   if (marked.length) return `conflict markers left in ${marked.join(", ")}`;
   for (const lock of locks) {
