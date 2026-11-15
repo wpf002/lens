@@ -21,7 +21,7 @@ import { itemRate, loadFixCosts, recordFixCost, type ItemRate } from "./fix-cost
 import { actionPinFix } from "./action-pins.js";
 import { AuditVerdictsSchema, LayoutPlanSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, renameScannedPaths, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type Finding, type KnowledgeGraph } from "@lens/core";
 
-export type EnrichTask = "domain" | "audit" | "summaries" | "review" | "remediate" | "architecture";
+export type EnrichTask = "domain" | "audit" | "summaries" | "review" | "remediate" | "architecture" | "merge";
 
 export type { ReviewRecord } from "./review-ledger.js";
 
@@ -46,6 +46,12 @@ export interface FixAllProgress {
   runsLeft?: number;
   /** Wall-clock time per finished batch, so batches running side by side shorten it. */
   msPerRun?: number;
+}
+
+/** A merge stopped on conflicts: the files git left markers in, and the branch being merged in. */
+export interface MergeConflicts {
+  files: string[];
+  base: string;
 }
 
 export interface EnrichJob {
@@ -432,12 +438,12 @@ export class EnrichRunner {
     return this.job?.state === "running";
   }
 
-  start(task: EnrichTask, root: string, budgetUsd: number, opts: { source?: FixSource; checkId?: string; note?: string; fixNew?: boolean; areaId?: string } = {}): EnrichJob {
+  start(task: EnrichTask, root: string, budgetUsd: number, opts: { source?: FixSource; checkId?: string; note?: string; fixNew?: boolean; areaId?: string; conflicts?: MergeConflicts } = {}): EnrichJob {
     if (this.running) throw new Error("an AI run is already in progress");
     const job: EnrichJob = { task, root, state: "running", startedAt: Date.now(), budgetUsd, progress: ["Preparing context"], ...(task === "remediate" ? { source: opts.source ?? "audit", checkId: opts.checkId } : {}) };
     this.job = job;
     console.log(`[ai] start ${task}${job.source ? `/${job.source}` : ""} in ${path.basename(root)}, limit $${budgetUsd}`);
-    (task === "audit" ? this.runAudit(job) : task === "summaries" ? this.runSummaries(job) : task === "review" ? this.runReview(job, !!opts.fixNew) : task === "remediate" ? this.runRemediate(job, opts.source ?? "audit", opts.checkId, opts.note) : task === "architecture" ? (opts.areaId ? this.moveArea(job, opts.areaId) : this.planLayout(job)) : this.runDomain(job)).catch((e: unknown) => {
+    (task === "audit" ? this.runAudit(job) : task === "summaries" ? this.runSummaries(job) : task === "review" ? this.runReview(job, !!opts.fixNew) : task === "remediate" ? this.runRemediate(job, opts.source ?? "audit", opts.checkId, opts.note) : task === "architecture" ? (opts.areaId ? this.moveArea(job, opts.areaId) : this.planLayout(job)) : task === "merge" ? this.resolveMerge(job, opts.conflicts) : this.runDomain(job)).catch((e: unknown) => {
       // The message alone doesn't say which step failed (a WASM trap reads "memory access out of bounds").
       if (e instanceof Error && e.stack) console.error(`[ai] ${task} failed: ${e.stack}`);
       this.finish(job, "error", e instanceof Error ? e.message : String(e));
@@ -1092,6 +1098,30 @@ export class EnrichRunner {
     await renameScannedPaths(root, area.moves);
     await scanAndSave(root);
     job.remediation = { source: "layout", proposed: 1, invalid: 0, skipped: 0, applied: 1 };
+    this.finish(job, "done");
+  }
+
+  /**
+   * Resolve a stopped merge's conflict markers in the project itself: the merge only exists in its
+   * working tree. Edits are limited to the conflicted files; the caller checks and commits the result.
+   */
+  private async resolveMerge(job: EnrichJob, conflicts: MergeConflicts | undefined) {
+    if (!conflicts?.files.length) throw new Error("no conflicted files to resolve");
+    const instructions = agentInstructions("merge-resolver");
+    if (!existsSync(instructions)) throw new Error(`missing ${instructions}`);
+    const { files, base } = conflicts;
+    this.push(job, `Resolving ${files.length} conflicted file${files.length === 1 ? "" : "s"} with ${base}`);
+    const prompt = [
+      `Follow the agent instructions in ${instructions} (read that file first).`,
+      `Project root: ${job.root}`,
+      `Base branch: ${base}`,
+      "Conflicted files:",
+      ...files.map((file) => `- ${file}`),
+    ].join("\n");
+    const tools = ["Read", "Grep", "Glob", ...files.map((file) => `Edit(./${file})`), "Bash(git log:*)", "Bash(git show:*)", "Bash(git diff:*)"];
+    const { code, stderr, resultError } = await this.runClaude(job, prompt, tools, MODEL_ARGS);
+    if (job.state !== "running") return;
+    if (resultError || code) throw new Error(resultError ?? `Claude Code exited with code ${code}: ${stderr.trim().split("\n").pop() ?? ""}`);
     this.finish(job, "done");
   }
 

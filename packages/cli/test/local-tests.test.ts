@@ -42,6 +42,20 @@ describe("local test check", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("runs the workspace root's own tests too, unless that script runs every package's tests", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-plan-"));
+    await fs.mkdir(path.join(root, "packages/api/src"), { recursive: true });
+    await fs.writeFile(path.join(root, "pnpm-workspace.yaml"), "packages: ['packages/*']\n");
+    await fs.writeFile(path.join(root, "pnpm-lock.yaml"), "");
+    await fs.writeFile(path.join(root, "packages/api/package.json"), "{}");
+    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
+    expect((await testPlan(root, ["packages/api/src/sync.ts"]))?.run).toEqual(["pnpm", "--filter", "...{./packages/api}", "--filter", "{.}", "--include-workspace-root", "-r", "--no-bail", "run", "--if-present", "test"]);
+    expect((await testPlan(root, ["tsconfig.json"]))?.run).toEqual(["pnpm", "--include-workspace-root", "-r", "--no-bail", "run", "--if-present", "test"]);
+    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ scripts: { test: "turbo run test" } }));
+    expect((await testPlan(root, ["packages/api/src/sync.ts"]))?.run).not.toContain("--include-workspace-root");
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
   it("reports a test the edits break and passes one that was already failing", async () => {
     const root = await repoWithTests("exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a + b;\n");
     await fs.writeFile(path.join(root, "lib.js"), "exports.add = (a, b) => a * b;\nexports.sub = (a, b) => a + b;\n");

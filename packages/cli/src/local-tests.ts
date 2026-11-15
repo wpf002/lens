@@ -17,6 +17,8 @@ const GIT_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 const LOCKFILES = { "pnpm-lock.yaml": "pnpm", "yarn.lock": "yarn", "package-lock.json": "npm" } as const;
 type PackageManager = (typeof LOCKFILES)[keyof typeof LOCKFILES];
+/** A root test script that runs the workspace packages' tests itself. */
+const RUNS_WORKSPACE_TESTS = /\b(turbo|nx|lerna)\b|\s(-r|--recursive|--filter|-F|--workspaces?)\b/;
 
 export interface TestPlan {
   manager: PackageManager;
@@ -82,7 +84,11 @@ export async function testPlan(root: string, changed: string[]): Promise<TestPla
     const dirs = [...new Set(changed.map((file) => packageDirOf(root, file)))];
     // A root file can affect every package; otherwise only changed packages and the ones depending on them.
     const filters = dirs.includes(".") ? [] : dirs.flatMap((dir) => ["--filter", `...{./${dir}}`]);
-    return { manager, lockfile, run: ["pnpm", ...filters, "-r", "--no-bail", "run", "--if-present", "test"] };
+    // `pnpm -r` skips the root package, whose own suite often tests every package. A root script
+    // that runs each package's tests itself would repeat the whole run, so that one stays out.
+    const rootScript = manifest.scripts?.test;
+    const withRoot = rootScript && !RUNS_WORKSPACE_TESTS.test(rootScript) ? [...(filters.length ? ["--filter", "{.}"] : []), "--include-workspace-root"] : [];
+    return { manager, lockfile, run: ["pnpm", ...filters, ...withRoot, "-r", "--no-bail", "run", "--if-present", "test"] };
   }
   if (!manifest.scripts?.test) return null;
   return { manager, lockfile, run: manager === "npm" ? ["npm", "test"] : [manager, "test"] };

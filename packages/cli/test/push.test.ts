@@ -66,7 +66,7 @@ describe("pushFixes", () => {
     await fs.rm(tmp, { recursive: true, force: true });
   });
 
-  it("pushes to a fresh branch instead of force-pushing when the remote branch diverged", async () => {
+  async function remoteFixesBranchMoved(otherEdit: { file: string; content: string }) {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "lens-push-"));
     const remote = path.join(tmp, "remote.git");
     const root = path.join(tmp, "work");
@@ -81,17 +81,34 @@ describe("pushFixes", () => {
     run(root, "checkout", "-qb", "lens/fixes-1");
     run(tmp, "clone", "-q", "-b", "main", remote, other);
     run(other, "checkout", "-qb", "lens/fixes-1");
-    await fs.writeFile(path.join(other, "b.js"), "x\n");
+    await fs.writeFile(path.join(other, otherEdit.file), otherEdit.content);
     run(other, "add", "-A");
     run(other, "commit", "-qm", "someone else");
     run(other, "push", "-q", "origin", "lens/fixes-1");
     await fs.writeFile(path.join(root, "a.js"), "2\n");
+    return { tmp, remote, root };
+  }
+
+  it("merges commits someone else pushed to the fixes branch instead of force-pushing", async () => {
+    const { tmp, remote, root } = await remoteFixesBranchMoved({ file: "b.js", content: "x\n" });
+
+    const { branch } = await pushFixes(root);
+
+    expect(branch).toBe("lens/fixes-1");
+    expect(run(remote, "show", `${branch}:a.js`)).toBe("2");
+    expect(run(remote, "show", `${branch}:b.js`)).toBe("x");
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
+  it("pushes to a fresh branch when someone else's commits on the fixes branch conflict with the fixes", async () => {
+    const { tmp, remote, root } = await remoteFixesBranchMoved({ file: "a.js", content: "x\n" });
 
     const { branch } = await pushFixes(root);
 
     expect(branch).not.toBe("lens/fixes-1");
     expect(run(remote, "show", `${branch}:a.js`)).toBe("2");
-    expect(run(remote, "show", "lens/fixes-1:b.js")).toBe("x");
+    expect(run(remote, "show", "lens/fixes-1:a.js")).toBe("x");
+    expect(run(root, "status", "--porcelain")).toBe("");
     await fs.rm(tmp, { recursive: true, force: true });
   });
 
@@ -140,6 +157,37 @@ describe("pushFixes", () => {
 
     expect(run(remote, "show", `${branch}:c.js`)).toBe("3");
     expect(run(remote, "show", `${branch}:a.js`)).toBe("2");
+    expect(run(root, "status", "--porcelain")).toBe("");
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
+  it("resolves conflicts with the base through the resolver and pushes the merge", async () => {
+    const { tmp, remote, root } = await fixesBranchBehindMain({ file: "a.js", content: "main\n" });
+    await fs.writeFile(path.join(root, "c.js"), "3\n");
+    const asked: Array<{ files: string[]; base: string }> = [];
+
+    const { branch } = await pushFixes(root, [], async (dir, files, base) => {
+      asked.push({ files, base });
+      await fs.writeFile(path.join(dir, "a.js"), "main and 2\n");
+    });
+
+    expect(asked).toEqual([{ files: ["a.js"], base: "main" }]);
+    expect(run(remote, "show", `${branch}:a.js`)).toBe("main and 2");
+    expect(run(remote, "show", `${branch}:c.js`)).toBe("3");
+    expect(run(remote, "merge-base", "--is-ancestor", "main", branch)).toBe("");
+    expect(run(root, "status", "--porcelain")).toBe("");
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
+  it("aborts the merge when the resolver leaves conflict markers", async () => {
+    const { tmp, remote, root } = await fixesBranchBehindMain({ file: "a.js", content: "main\n" });
+    await fs.writeFile(path.join(root, "c.js"), "3\n");
+
+    const { branch } = await pushFixes(root, [], async () => undefined);
+
+    expect(run(remote, "show", `${branch}:a.js`)).toBe("2");
+    expect(run(remote, "show", `${branch}:c.js`)).toBe("3");
+    expect(() => run(remote, "merge-base", "--is-ancestor", "main", branch)).toThrow();
     expect(run(root, "status", "--porcelain")).toBe("");
     await fs.rm(tmp, { recursive: true, force: true });
   });

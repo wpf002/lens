@@ -86,6 +86,12 @@ export function lockfileFor(root: string, manifestRel: string): LockTarget | nul
   }
 }
 
+/** The target for a lockfile path itself, or null when Lens doesn't know that kind of lockfile. */
+export function lockTargetOf(lockRel: string): LockTarget | null {
+  const locker = LOCKERS.find((l) => l.file === path.posix.basename(lockRel));
+  return locker ? { lockRel, locker } : null;
+}
+
 /** Distinct lockfiles affected by a set of changed paths. */
 export function lockTargets(root: string, changedRels: Iterable<string>): LockTarget[] {
   const byLock = new Map<string, LockTarget>();

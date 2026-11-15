@@ -19,7 +19,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { authorizeUrl, configureGithubApp, disconnectGithub, ensureGithubLoaded, finishOAuth, githubAppMode, githubConnected, githubLogin, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
 import { PrBusy, PrLock } from "./pr-lock.js";
-import { cloneOrUpdate, commitFilesAndPush, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, uncommittedPaths, type PushInfo } from "./cloud.js";
+import { cloneOrUpdate, commitFilesAndPush, type ConflictResolver, type PullRequest, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, uncommittedPaths, type PushInfo } from "./cloud.js";
 import { MAX_TEST_REPAIRS, allowAnotherRepair, gateNeedsWork, recordRepairAttempt, repairItems, repairsLeft, saveRepairItems, type TestGate } from "./ci.js";
 import { grantCheckPermissions } from "./ci-permissions.js";
 import type { AppliedFix } from "./commit-text.js";
@@ -126,6 +126,27 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
   // run, and the repair is pushed to the same pull request, up to MAX_TEST_REPAIRS times.
   let watchingTests: string | null = null;
   const prLock = new PrLock();
+  /** A Claude run resolves a merge's conflict markers in the working tree; cloud.ts checks and commits the result. */
+  const resolveConflicts: ConflictResolver = async (root, files, base) => {
+    const authProblem = await checkClaudeAuth();
+    if (authProblem) throw new Error(authProblem);
+    const job = enrich.start("merge", root, estimateCost("remediate", files.length).limit, { conflicts: { files, base } });
+    while (job.state === "running") await sleep(JOB_POLL_MS);
+    if (job.state !== "done") throw new Error(job.error ?? `the conflict run ${job.state}`);
+  };
+  const conflictTries = new Set<string>();
+  /** GitHub can't merge the pull request: merge its base in and resolve the conflicts. Once per head commit. */
+  const resolvePrConflicts = async (root: string, pr: PullRequest) => {
+    const key = `${root}#${pr.number}@${pr.tests?.sha ?? ""}`;
+    if (conflictTries.has(key)) return;
+    conflictTries.add(key);
+    try {
+      await prLock.whenFree(JOB_POLL_MS);
+      await prLock.hold("the conflict merge", () => pushPending(root, [], resolveConflicts));
+    } catch (e) {
+      console.error(`[github] PR #${pr.number}: ${e instanceof Error ? e.message : e}`);
+    }
+  };
   const permissionTries = new Set<string>();
   /** A check refused a GITHUB_TOKEN permission: grant it in the workflow and push. Once per head commit. */
   const grantRefusedPermissions = async (root: string, gate: TestGate): Promise<boolean> => {
@@ -143,7 +164,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
     if (!files.size) return false;
     console.log(`[tests] PR #${gate.pr}: granting workflow permissions to ${granted.join("; ")}`);
     await prLock.whenFree(JOB_POLL_MS);
-    await prLock.hold("the workflow permission push", () => commitFilesAndPush(root, [...files], `Grant CI jobs the GitHub token permissions they need\n\n${granted.join("\n")}`));
+    await prLock.hold("the workflow permission push", () => commitFilesAndPush(root, [...files], `Grant CI jobs the GitHub token permissions they need\n\n${granted.join("\n")}`, resolveConflicts));
     return true;
   };
   const repairingTests = () => enrich.running && enrich.job?.checkId === TEST_REPAIR_ID;
@@ -192,7 +213,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
             return false;
           }
           try {
-            await pushPending(root, await recordedFixes(root));
+            await pushPending(root, await recordedFixes(root), resolveConflicts);
           } catch (e) {
             if (e instanceof TestsBroken) return rollBack(`still breaks tests: ${e.message}`);
             throw e;
@@ -381,7 +402,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
             : task === "remediate" && source !== "review" && !checkId
             ? (await fixAllPlan(proj.root, source)).estimate.limit
             : task === "remediate"
-              ? remediateLimit(checkId, (await remediationItems(proj.root, source, checkId)).length) : (await estimatesFor(proj.root, (await getGraph()).graph, true)).enrichEstimates[task as Exclude<EnrichTask, "remediate">].limit;
+              ? remediateLimit(checkId, (await remediationItems(proj.root, source, checkId)).length) : (await estimatesFor(proj.root, (await getGraph()).graph, true)).enrichEstimates[task as Exclude<EnrichTask, "remediate" | "merge">].limit;
         if (enrich.running) return send(res, 409, { error: "an AI run is already in progress" });
         const authProblem = await checkClaudeAuth();
         if (authProblem) return send(res, 412, { error: authProblem });
@@ -501,6 +522,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         if (st?.pr?.state === "merged") await markFixesMerged(proj.root, st.pr.number, await uncommittedPaths(proj.root));
         const tests = st?.pr?.state === "open" ? st.pr.tests : undefined;
         if (tests && gateNeedsWork(tests)) void watchTests(proj.root);
+        if (st?.pr?.state === "open" && st.pr.conflicts && !st.dirty && !enrich.running && !prLock.label) void resolvePrConflicts(proj.root, st.pr);
         return send(res, 200, { state: withRepairFlag(st), busy: prLock.label });
       }
       if (opts.cloud && req.method === "POST" && url.pathname === "/api/project/pr/fix-tests") {
@@ -515,7 +537,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         if (!githubConnected()) return send(res, 400, { error: "Connect GitHub to push, or use Download Patch." });
         if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });
         if (!repoName(proj.root)) return send(res, 400, { error: "this project isn't a cloned repo" });
-        return send(res, 200, await prLock.hold("the push", async () => pushFixes(proj.root, await recordedFixes(proj.root))));
+        return send(res, 200, await prLock.hold("the push", async () => pushFixes(proj.root, await recordedFixes(proj.root), resolveConflicts)));
       }
       if (opts.cloud && req.method === "POST" && (url.pathname === "/api/project/pr" || url.pathname === "/api/project/merge")) {
         if (!githubConnected()) return send(res, 400, { error: "Connect GitHub first." });
@@ -631,7 +653,7 @@ async function estimatesFor(root: string, g: KnowledgeGraph, hasSource: boolean)
   const files = g.nodes.filter((n) => isFileKind(n) && n.path).length;
   const pending = buildBatches(g, { pendingOnly: true }).reduce((a, b) => a + b.files.length, 0);
   const review = hasSource ? await reviewPlan(root, g) : { files: 0, batches: 0, estimate: reviewEstimate(0) };
-  const enrichEstimates: Record<Exclude<EnrichTask, "remediate">, CostEstimate> = {
+  const enrichEstimates: Record<Exclude<EnrichTask, "remediate" | "merge">, CostEstimate> = {
     domain: estimateCost("domain", files),
     audit: estimateCost("audit", files),
     review: review.estimate,

@@ -43,7 +43,7 @@ export interface AuditRecord {
 }
 
 export interface EnrichJob {
-  task?: "domain" | "audit" | "summaries" | "review" | "remediate" | "architecture";
+  task?: "domain" | "audit" | "summaries" | "review" | "remediate" | "architecture" | "merge";
   state: "idle" | "running" | "done" | "error" | "cancelled";
   startedAt?: number;
   finishedAt?: number;
