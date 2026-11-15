@@ -1114,7 +1114,7 @@ export class EnrichRunner {
     const prompt = [
       `Follow the agent instructions in ${instructions} (read that file first).`,
       `Project root: ${job.root}`,
-      `Base branch: ${base}`,
+      `Merging in: ${base}`,
       "Conflicted files:",
       ...files.map((file) => `- ${file}`),
     ].join("\n");

@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createPullRequest, fixesPatch, isFixesBranch, pushFixes, pushPending, restartFromBase } from "../src/cloud.js";
+import { createPullRequest, fixesPatch, isFixesBranch, pushFixes, pushPending, pushTime, restartFromBase } from "../src/cloud.js";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" }).trim();
 
@@ -108,6 +108,22 @@ describe("pushFixes", () => {
     expect(branch).not.toBe("lens/fixes-1");
     expect(run(remote, "show", `${branch}:a.js`)).toBe("2");
     expect(run(remote, "show", "lens/fixes-1:a.js")).toBe("x");
+    expect(run(root, "status", "--porcelain")).toBe("");
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
+  it("resolves conflicts with someone else's commits on the fixes branch and keeps its pull request's branch", async () => {
+    const { tmp, remote, root } = await remoteFixesBranchMoved({ file: "a.js", content: "x\n" });
+    const asked: Array<{ files: string[]; base: string }> = [];
+
+    const { branch } = await pushFixes(root, [], async (dir, files, base) => {
+      asked.push({ files, base });
+      await fs.writeFile(path.join(dir, "a.js"), "x and 2\n");
+    });
+
+    expect(branch).toBe("lens/fixes-1");
+    expect(asked).toEqual([{ files: ["a.js"], base: "the newer lens/fixes-1 on GitHub" }]);
+    expect(run(remote, "show", `${branch}:a.js`)).toBe("x and 2");
     expect(run(root, "status", "--porcelain")).toBe("");
     await fs.rm(tmp, { recursive: true, force: true });
   });
@@ -295,5 +311,14 @@ describe("pushFixes", () => {
       expect(`${sent.title}\n${sent.body}`).not.toMatch(/lens|claude|\bAI\b/i);
       await fs.rm(tmp, { recursive: true, force: true });
     });
+  });
+});
+
+describe("pushTime", () => {
+  it("counts a commit pushed hours after it was made from the push, so its checks aren't called missing", () => {
+    const made = Date.parse("2026-11-15T05:53:42Z");
+    expect(pushTime(made, "2026-11-15T14:11:43Z")).toBe(Date.parse("2026-11-15T14:11:43Z"));
+    expect(pushTime(made, "")).toBe(made);
+    expect(pushTime(0, "")).toBe(0);
   });
 });

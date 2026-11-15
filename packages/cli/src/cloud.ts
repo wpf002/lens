@@ -185,7 +185,7 @@ export async function pushFixes(root: string, fixes: AppliedFix[] = [], resolveC
   }
   const base = await baseBranch(root);
   await commit(root, commitMessage(touching, changed));
-  const pushed = await pushBranch(root, branch);
+  const pushed = await pushBranch(root, branch, resolveConflicts);
   branch = pushed.branch;
   const dropped = pushed.dropped;
   await mergeLatestBase(root, branch, base, resolveConflicts);
@@ -200,7 +200,7 @@ export async function commitFilesAndPush(root: string, files: string[], message:
   if (!(await isFixesBranch(root, branch))) throw new Error("No fixes branch to push to.");
   await git(root, ["add", "--", ...files]);
   await commit(root, message);
-  const pushed = await pushBranch(root, branch);
+  const pushed = await pushBranch(root, branch, resolveConflicts);
   await mergeLatestBase(root, pushed.branch, await baseBranch(root), resolveConflicts);
 }
 
@@ -310,10 +310,11 @@ async function dropWorkflowChanges(root: string): Promise<number> {
 
 /**
  * Push the fixes branch. Retries dropped connections, drops workflow files if GitHub
- * refuses them, and when the remote branch has moved ahead merges it in, or moves to a fresh
- * branch name if that merge conflicts (never force-pushes). Returns the branch that was pushed.
+ * refuses them, and when the remote branch has moved ahead merges it in, resolving conflicts through
+ * `resolveConflicts`. Only when that fails does it move to a fresh branch name (never force-pushes),
+ * closing the old branch's pull request so it doesn't stay open beside the new one.
  */
-async function pushBranch(root: string, start: string): Promise<{ branch: string; dropped: number }> {
+async function pushBranch(root: string, start: string, resolveConflicts?: ConflictResolver): Promise<{ branch: string; dropped: number }> {
   let branch = start;
   let dropped = 0;
   let renames = 0;
@@ -321,6 +322,7 @@ async function pushBranch(root: string, start: string): Promise<{ branch: string
   for (;;) {
     try {
       await pushWithRetry(root, branch);
+      if (branch !== start) await closeReplacedPr(root, start, branch);
       return { branch, dropped };
     } catch (e) {
       if (!(e instanceof Error)) throw e;
@@ -330,7 +332,7 @@ async function pushBranch(root: string, start: string): Promise<{ branch: string
       } else if (DIVERGED.test(e.message) && (!mergedRemote || renames < MAX_RENAMES)) {
         if (!mergedRemote) {
           mergedRemote = true;
-          if (await mergeRemoteBranch(root, branch)) continue;
+          if (await mergeRemoteBranch(root, branch, resolveConflicts)) continue;
         }
         if (renames >= MAX_RENAMES) throw e;
         renames++;
@@ -345,9 +347,10 @@ async function pushBranch(root: string, start: string): Promise<{ branch: string
 
 /**
  * Merge commits someone else pushed to the fixes branch, such as a hand-resolved conflict, so the
- * pull request keeps them. Returns false, with nothing changed, when they conflict with Lens's commits.
+ * pull request keeps them. Conflicts go to `resolveConflicts` when given. Returns false, with nothing
+ * changed, when the merge can't be finished.
  */
-async function mergeRemoteBranch(root: string, branch: string): Promise<boolean> {
+async function mergeRemoteBranch(root: string, branch: string, resolveConflicts?: ConflictResolver): Promise<boolean> {
   const author = await authorIdentity(root);
   const why = (e: unknown) => (e instanceof Error ? e.message.slice(0, 200) : String(e));
   try {
@@ -356,13 +359,35 @@ async function mergeRemoteBranch(root: string, branch: string): Promise<boolean>
     console.error(`[github] couldn't fetch the newer ${branch} from GitHub: ${why(e)}`);
     return false;
   }
+  const identity = ["-c", `user.name=${author.name}`, "-c", `user.email=${author.email}`];
   try {
-    await git(root, ["-c", `user.name=${author.name}`, "-c", `user.email=${author.email}`, "merge", "-q", "--no-edit", "FETCH_HEAD"]);
+    await git(root, [...identity, "merge", "-q", "--no-edit", "FETCH_HEAD"]);
     return true;
   } catch (e) {
+    const unresolved = resolveConflicts ? await finishMerge(root, `the newer ${branch} on GitHub`, resolveConflicts).catch(why) : why(e);
+    if (!unresolved) {
+      await git(root, [...identity, "commit", "-q", "--no-edit"]);
+      console.error(`[github] resolved the conflicts with the newer ${branch} on GitHub`);
+      return true;
+    }
     await git(root, ["merge", "--abort"]).catch((abortError: unknown) => console.error(`[github] merge --abort failed on ${branch}: ${why(abortError)}`));
-    console.error(`[github] the newer ${branch} on GitHub conflicts with Lens's commits: ${why(e)}`);
+    console.error(`[github] the newer ${branch} on GitHub conflicts with Lens's commits: ${unresolved.slice(0, 300)}`);
     return false;
+  }
+}
+
+/** Close the open pull request of a fixes branch Lens moved off, pointing it at the branch that replaced it. */
+async function closeReplacedPr(root: string, old: string, replacement: string): Promise<void> {
+  if (!githubConnected()) return;
+  try {
+    const r = await repoOf(root);
+    const pr = await findPr(root, r, old);
+    if (pr?.state !== "open") return;
+    await githubApi(`/repos/${r.owner}/${r.name}/issues/${pr.number}/comments`, "POST", { body: `Replaced by \`${replacement}\`: GitHub's copy of \`${old}\` couldn't be merged with Lens's commits.` });
+    await githubApi(`/repos/${r.owner}/${r.name}/pulls/${pr.number}`, "PATCH", { state: "closed" });
+    console.error(`[github] closed #${pr.number}, replaced by ${replacement}`);
+  } catch (e) {
+    console.error(`[github] couldn't close ${old}'s pull request: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
   }
 }
 
@@ -390,7 +415,7 @@ async function repoOf(root: string): Promise<RepoRef> {
 }
 
 async function findPr(root: string, r: RepoRef, branch: string): Promise<PullRequest | null> {
-  const rows = (await githubApi(`/repos/${r.owner}/${r.name}/pulls?state=all&head=${encodeURIComponent(`${r.owner}:${branch}`)}`)) as Array<{ number: number; html_url: string; state: string; merged_at: string | null; head: { sha: string }; base: { sha: string } }>;
+  const rows = (await githubApi(`/repos/${r.owner}/${r.name}/pulls?state=all&head=${encodeURIComponent(`${r.owner}:${branch}`)}`)) as Array<{ number: number; html_url: string; state: string; merged_at: string | null; updated_at: string; head: { sha: string }; base: { sha: string } }>;
   const p = rows[0];
   if (!p) return null;
   const state = p.merged_at ? "merged" : p.state === "open" ? "open" : "closed";
@@ -405,9 +430,18 @@ async function hasConflicts(r: RepoRef, n: number): Promise<boolean> {
   return p.mergeable === false && p.mergeable_state === "dirty";
 }
 
-async function gateFor(root: string, r: RepoRef, p: { number: number; head: { sha: string }; base: { sha: string } }): Promise<TestGate> {
-  const committed = Number(await git(root, ["log", "-1", "--format=%ct", p.head.sha]).catch(() => ""));
-  return testGate(root, { repo: `${r.owner}/${r.name}`, pr: p.number, headSha: p.head.sha, baseSha: p.base.sha, ...(committed ? { pushedAt: committed * 1000 } : {}) });
+/**
+ * When the PR's head commit reached GitHub, in ms, or 0 if unknown. A commit can be pushed long after
+ * it was made (a failed push retried later), and every push updates the pull request.
+ */
+export function pushTime(committedMs: number, prUpdatedAt: string): number {
+  return Math.max(committedMs || 0, Date.parse(prUpdatedAt) || 0);
+}
+
+async function gateFor(root: string, r: RepoRef, p: { number: number; updated_at: string; head: { sha: string }; base: { sha: string } }): Promise<TestGate> {
+  const committed = Number(await git(root, ["log", "-1", "--format=%ct", p.head.sha]).catch(() => "")) * 1000;
+  const pushedAt = pushTime(committed, p.updated_at);
+  return testGate(root, { repo: `${r.owner}/${r.name}`, pr: p.number, headSha: p.head.sha, baseSha: p.base.sha, ...(pushedAt ? { pushedAt } : {}) });
 }
 
 /** Paths the open pull request changes, for the test-repair prompt. */
@@ -458,7 +492,7 @@ export async function pushPending(root: string, fixes: AppliedFix[] = [], resolv
   }
   if (!st?.branch || st.dirty) await pushFixes(root, fixes, resolveConflicts);
   else {
-    const pushed = await pushBranch(root, st.branch);
+    const pushed = await pushBranch(root, st.branch, resolveConflicts);
     await mergeLatestBase(root, pushed.branch, await baseBranch(root), resolveConflicts);
   }
 }
