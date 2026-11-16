@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
-import { paths, scanAndSave } from "@lens/core";
+import { loadGraph, paths, saveGraph, scanAndSave, scannerBuild } from "@lens/core";
 import { startServer } from "../src/server.js";
 
 const FIX = path.resolve(__dirname, "../../core/test/fixtures/vuln-app");
@@ -816,6 +816,28 @@ if (get("Findings path")) {
       expect(rec.skipped.some((x: { itemId: string }) => !x.itemId.startsWith("review-"))).toBe(false);
     } finally {
       delete process.env.LENS_CLAUDE_BIN;
+    }
+  });
+});
+
+describe("lens serve with a graph from an older Lens build", () => {
+  it("rescans on start so the dashboard shows the current checks", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-stale-"));
+    await fs.cp(FIX, dir, { recursive: true });
+    await scanAndSave(dir, { full: true });
+    const saved = (await loadGraph(dir))!;
+    expect(saved.health?.checks.length).toBeGreaterThan(0);
+    const { scannerBuild: _current, ...olderProject } = saved.project;
+    await saveGraph(dir, { ...saved, project: olderProject, health: { ...saved.health!, checks: [] } });
+
+    const s = await startServer({ root: dir, port: 0, host: "127.0.0.1" });
+    try {
+      const r = await get(`${s.url.split("/#")[0]}/api/graph`, { "X-Lens-Token": s.token });
+      const graph = JSON.parse(r.body) as { project: { scannerBuild?: string }; health?: { checks: unknown[] } };
+      expect(graph.project.scannerBuild).toBe(scannerBuild());
+      expect(graph.health?.checks.length).toBe(saved.health?.checks.length);
+    } finally {
+      await s.close();
     }
   });
 });

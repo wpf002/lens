@@ -9,6 +9,7 @@ export * from "./resolve.js";
 export * from "./heuristics.js";
 export * from "./persistence.js";
 export * from "./scan.js";
+export * from "./scanner-build.js";
 export * from "./security/rules.js";
 export * from "./security/entrypoints.js";
 export * from "./security/analyze.js";

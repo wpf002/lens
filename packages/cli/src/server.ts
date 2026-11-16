@@ -28,7 +28,7 @@ import { loadLayoutPlan, reopenLayoutArea, usableMoves } from "./layout-plan.js"
 import { EnrichRunner, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import { TestsBroken } from "./local-tests.js";
 import {
-  buildBatches, diffImpact, isGitRepo, loadGraph, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
+  buildBatches, diffImpact, isGitRepo, loadGraph, madeByOtherBuild, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
   type EmbeddingStore, type KnowledgeGraph,
 } from "@lens/core";
 
@@ -109,7 +109,20 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
   };
   let proj = await loadProject(opts.root, opts.graphFile);
 
+  /** Rescan a graph saved by an older Lens build once, so changed checks show without reopening the project. */
+  const refreshes = new Map<string, Promise<unknown>>();
+  const rescanIfOtherBuild = async (p: Project) => {
+    if (p.graphFile) return;
+    const saved = await loadGraph(p.root);
+    if (!saved || !madeByOtherBuild(saved)) return;
+    if (!refreshes.has(p.root)) {
+      console.error(`[scan] ${p.root} was scanned by another Lens build, rescanning`);
+      refreshes.set(p.root, scanAndSave(p.root).finally(() => refreshes.delete(p.root)));
+    }
+    await refreshes.get(p.root);
+  };
   const getGraph = async (p: Project = proj) => {
+    if (!p.cache) await rescanIfOtherBuild(p);
     const st = await fs.stat(p.graphPath);
     if (!p.cache || p.cache.mtime !== st.mtimeMs) {
       const g = p.graphFile ? await readJson<KnowledgeGraph>(p.graphPath) : await loadGraph(p.root);

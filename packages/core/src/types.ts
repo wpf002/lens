@@ -223,6 +223,8 @@ export interface ProjectMeta {
   frameworks: string[];
   analyzedAt: string;
   gitCommit?: string;
+  /** The Lens build that made the graph (see scanner-build.ts). */
+  scannerBuild?: string;
   root?: string;
   /** The project's public website, when the repo says where it lives. */
   homepage?: string;

@@ -30,6 +30,7 @@ import {
   buildHeuristicLayers, buildHeuristicTour, detectFrameworks, fileComplexity, functionComplexity, heuristicLayer, isFileKind, listPreview,
 } from "./heuristics.js";
 import { loadFingerprints, loadGraph, loadMeta, paths, saveFingerprints, saveGraph, saveMeta, loadConfig, loadArchitectureConfig, type LensMeta } from "./persistence.js";
+import { scannerBuild } from "./scanner-build.js";
 
 export interface ScanOptions {
   exclude?: string[];
@@ -609,7 +610,7 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
   const graph: KnowledgeGraph = {
     schema: SCHEMA_VERSION,
     kind: "codebase",
-    project: { ...project, analyzedAt: new Date().toISOString(), gitCommit },
+    project: { ...project, analyzedAt: new Date().toISOString(), gitCommit, scannerBuild: scannerBuild() },
     nodes: nodeList,
     edges,
     layers,

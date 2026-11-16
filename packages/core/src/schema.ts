@@ -122,6 +122,7 @@ export const KnowledgeGraphSchema = z.object({
     frameworks: z.array(z.string()),
     analyzedAt: z.string(),
     gitCommit: z.string().optional(),
+    scannerBuild: z.string().max(64).optional(),
     root: z.string().optional(),
     homepage: z.string().url().max(300).optional(),
   }),
