@@ -552,7 +552,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
           });
           return send(res, 200, { pr });
         }
-        const pr = await prLock.hold("the pull request", async () => createPullRequest(proj.root, await recordedFixes(proj.root)));
+        const pr = await prLock.hold("the pull request", async () => createPullRequest(proj.root, await recordedFixes(proj.root), resolveConflicts));
         void watchTests(proj.root);
         return send(res, 200, { pr });
       }

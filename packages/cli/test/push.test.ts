@@ -239,7 +239,7 @@ describe("pushFixes", () => {
     await fs.rm(tmp, { recursive: true, force: true });
   });
 
-  it("keeps the fixes uncommitted on the old branch when they conflict with the new base", async () => {
+  it("starts conflicting fixes from the commit they were made on, so the push can merge the new base", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "lens-push-"));
     const remote = path.join(tmp, "remote.git");
     const root = path.join(tmp, "work");
@@ -260,9 +260,12 @@ describe("pushFixes", () => {
     await fs.writeFile(path.join(root, "a.js"), "fix\n");
     await fs.writeFile(path.join(root, "new.ts"), "export {};\n");
 
-    await expect(restartFromBase(root, "lens/fixes-1")).rejects.toThrow(/conflict with the latest main/);
+    const madeOn = run(root, "rev-parse", "HEAD");
+    await restartFromBase(root, "lens/fixes-1");
 
-    expect(run(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe("lens/fixes-1");
+    expect(run(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+    expect(run(root, "rev-parse", "HEAD")).toBe(madeOn);
+    expect(run(root, "branch", "--list", "lens/fixes-1")).toBe("");
     expect(run(root, "log", "--oneline")).not.toContain("Carry");
     expect(run(root, "status", "--porcelain")).toBe("M a.js\n?? new.ts");
     expect(await fs.readFile(path.join(root, "a.js"), "utf8")).toBe("fix\n");

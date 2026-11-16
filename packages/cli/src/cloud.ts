@@ -506,6 +506,23 @@ async function carryCommit(root: string): Promise<string> {
   return git(root, ["rev-parse", "HEAD"]);
 }
 
+/**
+ * Put the carried fixes on `base`, uncommitted. When they conflict with it, `base` points at the
+ * commit the fixes were made on instead, so they apply cleanly; the push then merges the real base
+ * in and hands the conflicts to the resolver.
+ */
+async function moveCarried(root: string, base: string, carried: string): Promise<void> {
+  try {
+    await git(root, ["cherry-pick", "--no-commit", carried]);
+  } catch (e) {
+    console.error(`[github] fixes conflict with the latest ${base}, merging it after the push: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+    await git(root, ["reset", "-q", "--hard"]);
+    await git(root, ["checkout", "-q", "-B", base, `${carried}~1`]);
+    await git(root, ["cherry-pick", "--no-commit", carried]);
+  }
+  await git(root, ["reset", "-q"]);
+}
+
 export async function restartFromBase(root: string, old: string): Promise<void> {
   const base = await baseBranch(root);
   const dirty = !!(await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"]));
@@ -516,17 +533,12 @@ export async function restartFromBase(root: string, old: string): Promise<void> 
   try {
     await git(root, ["fetch", "-q", "--no-tags", "origin", base]);
     await git(root, ["checkout", "-q", "-B", base, "FETCH_HEAD"]);
-    if (carried) {
-      await git(root, ["cherry-pick", "--no-commit", carried]);
-      await git(root, ["reset", "-q"]);
-    }
   } catch (e) {
-    // Put everything back where it was rather than lose the fixes.
-    await git(root, ["reset", "-q", "--hard"]).catch(() => undefined);
     await git(root, ["checkout", "-q", "-f", old]);
     if (carried) await git(root, ["reset", "-q", "HEAD~1"]);
-    throw new Error(`These fixes conflict with the latest ${base}. Undo them and run Fix again. (${e instanceof Error ? e.message.slice(0, 200) : e})`);
+    throw new Error(`Couldn't fetch the latest ${base}. Try again. (${e instanceof Error ? e.message.slice(0, 200) : e})`);
   }
+  if (carried) await moveCarried(root, base, carried);
   await git(root, ["branch", "-D", old]).catch(() => undefined);
   await forgetBranch(root, old);
 }
@@ -534,8 +546,8 @@ export async function restartFromBase(root: string, old: string): Promise<void> 
 /** Push any new fixes, then open a pull request into the base branch. */
 const PR_BODY_MAX = 60_000;
 
-export async function createPullRequest(root: string, fixes: AppliedFix[]): Promise<PullRequest> {
-  await pushPending(root, fixes);
+export async function createPullRequest(root: string, fixes: AppliedFix[], resolveConflicts?: ConflictResolver): Promise<PullRequest> {
+  await pushPending(root, fixes, resolveConflicts);
   const branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
   const r = await repoOf(root);
   const existing = await findPr(root, r, branch);
