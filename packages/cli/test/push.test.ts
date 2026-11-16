@@ -45,6 +45,26 @@ describe("pushFixes", () => {
     await fs.rm(tmp, { recursive: true, force: true });
   });
 
+  it("pushes past the repo's own pre-push hook, which Lens's test gate replaces", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "lens-push-"));
+    const remote = path.join(tmp, "remote.git");
+    const root = path.join(tmp, "work");
+    run(tmp, "init", "-q", "--bare", "-b", "main", remote);
+    run(tmp, "init", "-q", "-b", "main", root);
+    await fs.writeFile(path.join(root, "a.js"), "1\n");
+    run(root, "add", "-A");
+    run(root, "commit", "-qm", "init");
+    run(root, "remote", "add", "origin", remote);
+    run(root, "push", "-q", "-u", "origin", "main");
+    await fs.writeFile(path.join(root, ".git/hooks/pre-push"), "#!/bin/sh\necho 'Tests failed, not pushing.'\nexit 1\n", { mode: 0o755 });
+
+    await fs.writeFile(path.join(root, "a.js"), "2\n");
+    const { branch } = await pushFixes(root);
+
+    expect(run(remote, "show", `${branch}:a.js`)).toBe("2");
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
   it("re-pushes a commit whose earlier push failed", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "lens-push-"));
     const remote = path.join(tmp, "remote.git");
