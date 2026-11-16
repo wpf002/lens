@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createPullRequest, fixesPatch, isFixesBranch, pushFixes, pushPending, pushTime, restartFromBase } from "../src/cloud.js";
+import { createPullRequest, filesNamedIn, fixesPatch, isFixesBranch, pushFixes, pushPending, pushTime, restartFromBase, syncBeforeFixing } from "../src/cloud.js";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" }).trim();
 
@@ -215,15 +215,15 @@ describe("pushFixes", () => {
     await fs.rm(tmp, { recursive: true, force: true });
   });
 
-  it("aborts the merge when the resolver leaves conflict markers", async () => {
+  it("takes the base's version of files the resolver leaves conflicted and keeps the other fixes", async () => {
     const { tmp, remote, root } = await fixesBranchBehindMain({ file: "a.js", content: "main\n" });
     await fs.writeFile(path.join(root, "c.js"), "3\n");
 
     const { branch } = await pushFixes(root, [], async () => undefined);
 
-    expect(run(remote, "show", `${branch}:a.js`)).toBe("2");
+    expect(run(remote, "show", `${branch}:a.js`)).toBe("main");
     expect(run(remote, "show", `${branch}:c.js`)).toBe("3");
-    expect(() => run(remote, "merge-base", "--is-ancestor", "main", branch)).toThrow();
+    expect(run(remote, "merge-base", "--is-ancestor", "main", branch)).toBe("");
     expect(run(root, "status", "--porcelain")).toBe("");
     await fs.rm(tmp, { recursive: true, force: true });
   });
@@ -364,6 +364,56 @@ describe("pushFixes", () => {
       expect(`${sent.title}\n${sent.body}`).not.toMatch(/lens|claude|\bAI\b/i);
       await fs.rm(tmp, { recursive: true, force: true });
     });
+  });
+});
+
+describe("syncBeforeFixing", () => {
+  const behindMain = async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "lens-sync-"));
+    const remote = path.join(tmp, "remote.git");
+    const root = path.join(tmp, "work");
+    run(tmp, "init", "-q", "--bare", "-b", "main", remote);
+    run(tmp, "init", "-q", "-b", "main", root);
+    await fs.writeFile(path.join(root, "a.js"), "1\n");
+    run(root, "add", "-A");
+    run(root, "commit", "-qm", "init");
+    run(root, "remote", "add", "origin", remote);
+    run(root, "push", "-q", "-u", "origin", "main");
+    const other = path.join(tmp, "other");
+    run(tmp, "clone", "-q", remote, other);
+    await fs.writeFile(path.join(other, "a.js"), "main\n");
+    run(other, "commit", "-qam", "main edit");
+    run(other, "push", "-q", "origin", "main");
+    return { tmp, remote, root };
+  };
+
+  it("moves a clean checkout to the latest base, so fixes aren't made on old code", async () => {
+    const { tmp, remote, root } = await behindMain();
+
+    expect(await syncBeforeFixing(root)).toBe(true);
+
+    expect(run(root, "rev-parse", "HEAD")).toBe(run(remote, "rev-parse", "main"));
+    expect(await fs.readFile(path.join(root, "a.js"), "utf8")).toBe("main\n");
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
+  it("leaves unpushed fixes where they are", async () => {
+    const { tmp, root } = await behindMain();
+    const head = run(root, "rev-parse", "HEAD");
+    await fs.writeFile(path.join(root, "a.js"), "fix\n");
+
+    expect(await syncBeforeFixing(root)).toBe(false);
+
+    expect(run(root, "rev-parse", "HEAD")).toBe(head);
+    expect(await fs.readFile(path.join(root, "a.js"), "utf8")).toBe("fix\n");
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+});
+
+describe("filesNamedIn", () => {
+  it("picks the changed files a type error names", () => {
+    const excerpt = "@app/api:typecheck: src/ops/morning.ts(6,10): error TS2305: Module has no exported member 'readBrief'.";
+    expect(filesNamedIn(excerpt, ["apps/api/src/ops/morning.ts", "apps/api/src/mail/routes.ts"])).toEqual(["apps/api/src/ops/morning.ts"]);
   });
 });
 

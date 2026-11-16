@@ -19,7 +19,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { authorizeUrl, configureGithubApp, disconnectGithub, ensureGithubLoaded, finishOAuth, githubAppMode, githubConnected, githubLogin, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
 import { PrBusy, PrLock } from "./pr-lock.js";
-import { cloneOrUpdate, commitFilesAndPush, type ConflictResolver, type PullRequest, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, uncommittedPaths, type PushInfo } from "./cloud.js";
+import { cloneOrUpdate, commitFilesAndPush, type ConflictResolver, type PullRequest, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, syncBeforeFixing, uncommittedPaths, type PushInfo } from "./cloud.js";
 import { MAX_TEST_REPAIRS, allowAnotherRepair, gateNeedsWork, recordRepairAttempt, repairItems, repairsLeft, saveRepairItems, type TestGate } from "./ci.js";
 import { grantCheckPermissions } from "./ci-permissions.js";
 import type { AppliedFix } from "./commit-text.js";
@@ -406,6 +406,13 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         if (enrich.running) return send(res, 409, { error: "an AI run is already in progress" });
         const authProblem = await checkClaudeAuth();
         if (authProblem) return send(res, 412, { error: authProblem });
+        if (repoName(proj.root)) {
+          const synced = await syncBeforeFixing(proj.root).catch((e: unknown) => {
+            console.error(`[github] couldn't move to the latest base before the ${task} run: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+            return false;
+          });
+          if (synced) await scanAndSave(proj.root);
+        }
         return send(res, 202, enrich.start(task, proj.root, budget, { source, checkId, note, fixNew: task === "review" && opts.fixNew === true, areaId }));
       }
       if (req.method === "GET" && url.pathname === "/api/audit") {

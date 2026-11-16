@@ -257,16 +257,52 @@ async function finishMerge(root: string, base: string, resolveConflicts: Conflic
     const absolute = path.join(root, file);
     if (existsSync(absolute) && CONFLICT_MARKER.test(await fs.readFile(absolute, "utf8"))) marked.push(file);
   }
-  if (marked.length) return `conflict markers left in ${marked.join(", ")}`;
+  // The base already changed these files further than the fixes did; its version wins and those fixes are dropped.
+  if (marked.length) {
+    console.error(`[github] resolver left markers in ${marked.length} file(s); taking ${base}'s version of ${marked.join(", ").slice(0, 300)}`);
+    await takeBaseVersion(root, marked);
+  }
   for (const lock of locks) {
     await git(root, ["checkout", "--theirs", "--", lock]);
     regenerateLockfile(root, lockTargetOf(lock)!);
   }
   await git(root, ["add", "-A", "--", ".", ":(exclude).lens"]);
-  const tests = await checkLocalTests(root);
-  if (tests.state === "broken") return new TestsBroken(tests).message;
-  if (tests.state === "skipped") console.error(`[tests] not run on the merge with ${base}: ${tests.reason}`);
-  return null;
+  return gateMerge(root, base);
+}
+
+/** Put `files` back to MERGE_HEAD's version, removing the ones it doesn't have. */
+async function takeBaseVersion(root: string, files: string[]): Promise<void> {
+  for (const file of files) {
+    const inBase = await git(root, ["cat-file", "-e", `MERGE_HEAD:${file}`]).then(() => true, () => false);
+    if (inBase) await git(root, ["checkout", "MERGE_HEAD", "--", file]);
+    else await git(root, ["rm", "-q", "-f", "--", file]);
+  }
+}
+
+const MERGE_GATE_ROUNDS = 4;
+const MAX_PATH_LENGTH = 400;
+
+/** Files named in a failure excerpt that the merge still changes against the base. */
+export function filesNamedIn(excerpt: string, changed: string[]): string[] {
+  return changed.filter((file) => file.length <= MAX_PATH_LENGTH && excerpt.includes(file.split("/").slice(-2).join("/")));
+}
+
+/**
+ * Check the staged merge. When it breaks typecheck, build or tests, fix files named in the failure
+ * take the base's version and it runs again, so one stale fix doesn't block the rest.
+ */
+async function gateMerge(root: string, base: string): Promise<string | null> {
+  for (let round = 0; ; round++) {
+    const tests = await checkLocalTests(root);
+    if (tests.state === "skipped") console.error(`[tests] not run on the merge with ${base}: ${tests.reason}`);
+    if (tests.state !== "broken") return null;
+    const changed = (await git(root, ["diff", "--cached", "--name-only", "MERGE_HEAD"])).split("\n").filter(Boolean);
+    const named = filesNamedIn(`${tests.excerpt}\n${tests.tests.join("\n")}`, changed);
+    if (!named.length || round + 1 >= MERGE_GATE_ROUNDS) return new TestsBroken(tests).message;
+    console.error(`[tests] merge with ${base} broke ${named.join(", ").slice(0, 300)}; taking ${base}'s version`);
+    await takeBaseVersion(root, named);
+    await git(root, ["add", "-A", "--", ".", ":(exclude).lens"]);
+  }
 }
 
 const WORKFLOWS = ".github/workflows";
@@ -498,7 +534,27 @@ export async function pushPending(root: string, fixes: AppliedFix[] = [], resolv
   }
 }
 
-/** Move uncommitted fixes off a finished fixes branch onto the latest base branch. */
+/**
+ * Before an AI run edits the code, move a clean tree onto the latest base, so new fixes are made on
+ * the code they'll merge into. A tree holding unpushed fixes stays put; the push carries them over.
+ * Returns whether the code changed.
+ */
+export async function syncBeforeFixing(root: string): Promise<boolean> {
+  if (await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"])) return false;
+  const st = await pushState(root);
+  if (st?.branch) {
+    if (!st.pr || st.pr.state === "open") return false;
+    await restartFromBase(root, st.branch);
+    return true;
+  }
+  const base = await baseBranch(root);
+  if ((await git(root, ["rev-parse", "--abbrev-ref", "HEAD"])) !== base) return false;
+  const before = await git(root, ["rev-parse", "HEAD"]);
+  await git(root, ["fetch", "-q", "--no-tags", "origin", base]);
+  await git(root, ["merge", "-q", "--ff-only", "FETCH_HEAD"]);
+  return (await git(root, ["rev-parse", "HEAD"])) !== before;
+}
+
 /** Commit every change outside .lens on the current branch and return the commit. */
 async function carryCommit(root: string): Promise<string> {
   await git(root, ["add", "-A"]);
