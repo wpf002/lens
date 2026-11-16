@@ -90,6 +90,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
   }
   const loadProject = async (dir: string, graphFile?: string): Promise<Project> => {
     const root = realpathSync(path.resolve(dir));
+    if (!graphFile) await followFileMoves(root);
     const store = await readJson<EmbeddingStore>(paths(root).embeddings);
     return {
       root,
@@ -117,7 +118,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
     if (!saved || !madeByOtherBuild(saved)) return;
     if (!refreshes.has(p.root)) {
       console.error(`[scan] ${p.root} was scanned by another Lens build, rescanning`);
-      refreshes.set(p.root, scanAndSave(p.root).then(() => followFileMoves(p.root)).finally(() => refreshes.delete(p.root)));
+      refreshes.set(p.root, scanAndSave(p.root).finally(() => refreshes.delete(p.root)));
     }
     await refreshes.get(p.root);
   };
