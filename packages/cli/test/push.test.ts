@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createPullRequest, filesNamedIn, fixesPatch, isFixesBranch, pushFixes, pushPending, pushTime, restartFromBase, syncBeforeFixing } from "../src/cloud.js";
+import { createPullRequest, filesNamedIn, findCulprits, fixesPatch, isFixesBranch, pushFixes, pushPending, pushTime, restartFromBase, syncBeforeFixing, takeDroppedFiles } from "../src/cloud.js";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" }).trim();
 
@@ -228,6 +228,31 @@ describe("pushFixes", () => {
     await fs.rm(tmp, { recursive: true, force: true });
   });
 
+  it("finds the fix that breaks a test naming no file, drops only that one and records it", async () => {
+    const { tmp, remote, root } = await fixesBranchBehindMain({ file: "a.js", content: "main\n" });
+    // Fails only when the base's a.js meets the new c.js, and names neither file.
+    const verify = 'const fs = require("fs");\nif (fs.readFileSync("a.js", "utf8").includes("main") && fs.existsSync("c.js")) { console.error("assertion failed"); process.exit(1); }\n';
+    const manifest = JSON.stringify({ name: "x", private: true, scripts: { test: "node verify.cjs" } });
+    const other = path.join(tmp, "other");
+    for (const dir of [root, other]) {
+      await fs.writeFile(path.join(dir, "verify.cjs"), verify);
+      await fs.writeFile(path.join(dir, "package.json"), manifest);
+    }
+    run(other, "add", "-A");
+    run(other, "commit", "-qm", "add tests");
+    run(other, "push", "-q", "origin", "main");
+    await fs.writeFile(path.join(root, "c.js"), "3\n");
+
+    const { branch } = await pushFixes(root, [], async (dir) => fs.writeFile(path.join(dir, "a.js"), "main and 2\n"));
+
+    expect(run(remote, "show", `${branch}:a.js`)).toBe("main and 2");
+    expect(run(remote, "ls-tree", "--name-only", branch).split("\n")).not.toContain("c.js");
+    expect(run(remote, "merge-base", "--is-ancestor", "main", branch)).toBe("");
+    expect(await takeDroppedFiles(root)).toEqual(["c.js"]);
+    expect(await takeDroppedFiles(root)).toEqual([]);
+    await fs.rm(tmp, { recursive: true, force: true });
+  }, 60_000);
+
   it("moves fixes to the base branch after a patch download marked new files intent-to-add, with .lens gitignored", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "lens-push-"));
     const remote = path.join(tmp, "remote.git");
@@ -414,6 +439,24 @@ describe("filesNamedIn", () => {
   it("picks the changed files a type error names", () => {
     const excerpt = "@app/api:typecheck: src/ops/morning.ts(6,10): error TS2305: Module has no exported member 'readBrief'.";
     expect(filesNamedIn(excerpt, ["apps/api/src/ops/morning.ts", "apps/api/src/mail/routes.ts"])).toEqual(["apps/api/src/ops/morning.ts"]);
+  });
+});
+
+describe("findCulprits", () => {
+  const breaksWhenKept = (bad: string[]) => async (reverted: string[]) => bad.every((file) => reverted.includes(file));
+
+  it("narrows eight files down to the two that break the tests", async () => {
+    const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    expect((await findCulprits(files, breaksWhenKept(["c", "g"]), 20))?.sort()).toEqual(["c", "g"]);
+  });
+
+  it("reverts everything still in question once it runs out of trials", async () => {
+    const culprits = await findCulprits(["a", "b", "c", "d"], breaksWhenKept(["d"]), 1);
+    expect(culprits).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("gives up when reverting every file still fails", async () => {
+    expect(await findCulprits(["a", "b"], async () => false)).toBeNull();
   });
 });
 

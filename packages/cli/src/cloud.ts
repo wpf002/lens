@@ -267,7 +267,7 @@ async function finishMerge(root: string, base: string, resolveConflicts: Conflic
     regenerateLockfile(root, lockTargetOf(lock)!);
   }
   await git(root, ["add", "-A", "--", ".", ":(exclude).lens"]);
-  return gateMerge(root, base);
+  return gateMerge(root, base, marked);
 }
 
 /** Put `files` back to MERGE_HEAD's version, removing the ones it doesn't have. */
@@ -287,21 +287,84 @@ export function filesNamedIn(excerpt: string, changed: string[]): string[] {
   return changed.filter((file) => file.length <= MAX_PATH_LENGTH && excerpt.includes(file.split("/").slice(-2).join("/")));
 }
 
+const DROPPED_KEY = "lens.dropped";
+/** Full test runs the culprit search may spend before it gives up and reverts what's left. */
+const MAX_CULPRIT_TRIALS = 8;
+
+/**
+ * Files among `files` whose revert makes `passes` true, found by splitting the set in halves.
+ * Out of trials, the candidates still in question are all returned, which still passes.
+ * Null when reverting every file doesn't pass either. Exported for tests.
+ */
+export async function findCulprits(files: string[], passes: (reverted: string[]) => Promise<boolean>, maxTrials = MAX_CULPRIT_TRIALS): Promise<string[] | null> {
+  let trials = 0;
+  const trial = (reverted: string[]) => {
+    trials++;
+    return passes(reverted);
+  };
+  // Precondition: `fixed` plus all of `candidates` passes and `fixed` alone doesn't.
+  const search = async (candidates: string[], fixed: string[]): Promise<string[]> => {
+    if (candidates.length === 1 || trials >= maxTrials) return candidates;
+    const half = Math.ceil(candidates.length / 2);
+    const left = candidates.slice(0, half);
+    const right = candidates.slice(half);
+    if (await trial([...fixed, ...left])) return search(left, fixed);
+    if (trials >= maxTrials) return candidates;
+    if (await trial([...fixed, ...right])) return search(right, fixed);
+    const fromRight = await search(right, [...fixed, ...left]);
+    return [...(await search(left, [...fixed, ...fromRight])), ...fromRight];
+  };
+  if (!files.length || !(await trial(files))) return null;
+  return search(files, []);
+}
+
+/** Put the staged merge back to `snapshot`, then give `files` the base's version. */
+async function revertFrom(root: string, snapshot: string, files: string[]): Promise<void> {
+  await git(root, ["read-tree", "-u", "--reset", snapshot]);
+  await takeBaseVersion(root, files);
+  await git(root, ["add", "-A", "--", ".", ":(exclude).lens"]);
+}
+
+/** Fix files whose base version makes the staged merge pass, for failures that name no changed file. */
+async function culpritsOf(root: string, changed: string[]): Promise<string[] | null> {
+  const snapshot = await git(root, ["write-tree"]);
+  const culprits = await findCulprits(changed, async (reverted) => {
+    await revertFrom(root, snapshot, reverted);
+    return (await checkLocalTests(root)).state !== "broken";
+  });
+  await git(root, ["read-tree", "-u", "--reset", snapshot]);
+  return culprits;
+}
+
+/** Files whose fixes a merge replaced with the base's version since the last call, then forget them. */
+export async function takeDroppedFiles(root: string): Promise<string[]> {
+  const files = (await git(root, ["config", "--get-all", DROPPED_KEY]).catch(() => "")).split("\n").filter(Boolean);
+  if (files.length) await git(root, ["config", "--unset-all", DROPPED_KEY]);
+  return [...new Set(files)];
+}
+
 /**
  * Check the staged merge. When it breaks typecheck, build or tests, fix files named in the failure
- * take the base's version and it runs again, so one stale fix doesn't block the rest.
+ * take the base's version and it runs again, so one stale fix doesn't block the rest. A failure that
+ * names none of them is narrowed down by reverting halves of the changed files.
  */
-async function gateMerge(root: string, base: string): Promise<string | null> {
+async function gateMerge(root: string, base: string, dropped: string[]): Promise<string | null> {
   for (let round = 0; ; round++) {
     const tests = await checkLocalTests(root);
     if (tests.state === "skipped") console.error(`[tests] not run on the merge with ${base}: ${tests.reason}`);
-    if (tests.state !== "broken") return null;
+    if (tests.state !== "broken") {
+      for (const file of dropped) await git(root, ["config", "--add", DROPPED_KEY, file]);
+      return null;
+    }
+    if (round + 1 >= MERGE_GATE_ROUNDS) return new TestsBroken(tests).message;
     const changed = (await git(root, ["diff", "--cached", "--name-only", "MERGE_HEAD"])).split("\n").filter(Boolean);
     const named = filesNamedIn(`${tests.excerpt}\n${tests.tests.join("\n")}`, changed);
-    if (!named.length || round + 1 >= MERGE_GATE_ROUNDS) return new TestsBroken(tests).message;
-    console.error(`[tests] merge with ${base} broke ${named.join(", ").slice(0, 300)}; taking ${base}'s version`);
-    await takeBaseVersion(root, named);
+    const culprits = named.length ? named : await culpritsOf(root, changed);
+    if (!culprits?.length) return new TestsBroken(tests).message;
+    console.error(`[tests] merge with ${base} broke ${culprits.join(", ").slice(0, 300)}; taking ${base}'s version`);
+    await takeBaseVersion(root, culprits);
     await git(root, ["add", "-A", "--", ".", ":(exclude).lens"]);
+    dropped.push(...culprits);
   }
 }
 

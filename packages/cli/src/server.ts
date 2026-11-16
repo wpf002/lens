@@ -19,11 +19,11 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { authorizeUrl, configureGithubApp, disconnectGithub, ensureGithubLoaded, finishOAuth, githubAppMode, githubConnected, githubLogin, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
 import { PrBusy, PrLock } from "./pr-lock.js";
-import { cloneOrUpdate, commitFilesAndPush, type ConflictResolver, type PullRequest, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, syncBeforeFixing, uncommittedPaths, type PushInfo } from "./cloud.js";
+import { cloneOrUpdate, commitFilesAndPush, type ConflictResolver, type PullRequest, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, syncBeforeFixing, takeDroppedFiles, uncommittedPaths, type PushInfo } from "./cloud.js";
 import { MAX_TEST_REPAIRS, allowAnotherRepair, gateNeedsWork, recordRepairAttempt, repairItems, repairsLeft, saveRepairItems, type TestGate } from "./ci.js";
 import { grantCheckPermissions } from "./ci-permissions.js";
 import type { AppliedFix } from "./commit-text.js";
-import { FIX_SOURCES, SOURCES, appliedFixIds, applyFixes, isPendingFix, loadRemediation, markFixesMerged, undoFix, undoFixesSince, type FixSource, type RemediationSource } from "./remediate.js";
+import { FIX_SOURCES, SOURCES, appliedFixIds, applyFixes, discardFixesTouching, isPendingFix, loadRemediation, markFixesMerged, undoFix, undoFixesSince, type FixSource, type RemediationSource } from "./remediate.js";
 import { loadLayoutPlan, reopenLayoutArea, usableMoves } from "./layout-plan.js";
 import { EnrichRunner, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import { TestsBroken } from "./local-tests.js";
@@ -126,6 +126,17 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
   // run, and the repair is pushed to the same pull request, up to MAX_TEST_REPAIRS times.
   let watchingTests: string | null = null;
   const prLock = new PrLock();
+  /** Hold the PR lock for a push, then reopen the fixes its merge with the base had to drop. */
+  const holdPush = <T>(label: string, root: string, work: () => Promise<T>): Promise<T> =>
+    prLock.hold(label, async () => {
+      try {
+        return await work();
+      } finally {
+        const dropped = await takeDroppedFiles(root);
+        const reopened = dropped.length ? await discardFixesTouching(root, dropped) : 0;
+        if (reopened) console.error(`[github] reopened ${reopened} fix(es) the merge with the base dropped`);
+      }
+    });
   /** A Claude run resolves a merge's conflict markers in the working tree; cloud.ts checks and commits the result. */
   const resolveConflicts: ConflictResolver = async (root, files, base) => {
     const authProblem = await checkClaudeAuth();
@@ -142,7 +153,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
     conflictTries.add(key);
     try {
       await prLock.whenFree(JOB_POLL_MS);
-      await prLock.hold("the conflict merge", () => pushPending(root, [], resolveConflicts));
+      await holdPush("the conflict merge", root, () => pushPending(root, [], resolveConflicts));
     } catch (e) {
       console.error(`[github] PR #${pr.number}: ${e instanceof Error ? e.message : e}`);
     }
@@ -164,7 +175,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
     if (!files.size) return false;
     console.log(`[tests] PR #${gate.pr}: granting workflow permissions to ${granted.join("; ")}`);
     await prLock.whenFree(JOB_POLL_MS);
-    await prLock.hold("the workflow permission push", () => commitFilesAndPush(root, [...files], `Grant CI jobs the GitHub token permissions they need\n\n${granted.join("\n")}`, resolveConflicts));
+    await holdPush("the workflow permission push", root, () => commitFilesAndPush(root, [...files], `Grant CI jobs the GitHub token permissions they need\n\n${granted.join("\n")}`, resolveConflicts));
     return true;
   };
   const repairingTests = () => enrich.running && enrich.job?.checkId === TEST_REPAIR_ID;
@@ -196,7 +207,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         await recordRepairAttempt(root, gate.pr);
         console.log(`[tests] PR #${gate.pr} broke ${items.length} check(s); repair ${gate.attempts + 1} of ${gate.allowedRepairs ?? MAX_TEST_REPAIRS}`);
         await prLock.whenFree(JOB_POLL_MS);
-        const repaired = await prLock.hold("the test repair", async () => {
+        const repaired = await holdPush("the test repair", root, async () => {
           const before = await appliedFixIds(root, "health");
           const job = enrich.start("remediate", root, remediateLimit(TEST_REPAIR_ID, items.length), { source: "health", checkId: TEST_REPAIR_ID });
           while (job.state === "running") await sleep(JOB_POLL_MS);
@@ -544,7 +555,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         if (!githubConnected()) return send(res, 400, { error: "Connect GitHub to push, or use Download Patch." });
         if (enrich.running) return send(res, 409, { error: "wait for the AI run to finish" });
         if (!repoName(proj.root)) return send(res, 400, { error: "this project isn't a cloned repo" });
-        return send(res, 200, await prLock.hold("the push", async () => pushFixes(proj.root, await recordedFixes(proj.root), resolveConflicts)));
+        return send(res, 200, await holdPush("the push", proj.root, async () => pushFixes(proj.root, await recordedFixes(proj.root), resolveConflicts)));
       }
       if (opts.cloud && req.method === "POST" && (url.pathname === "/api/project/pr" || url.pathname === "/api/project/merge")) {
         if (!githubConnected()) return send(res, 400, { error: "Connect GitHub first." });
@@ -559,7 +570,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
           });
           return send(res, 200, { pr });
         }
-        const pr = await prLock.hold("the pull request", async () => createPullRequest(proj.root, await recordedFixes(proj.root), resolveConflicts));
+        const pr = await holdPush("the pull request", proj.root, async () => createPullRequest(proj.root, await recordedFixes(proj.root), resolveConflicts));
         void watchTests(proj.root);
         return send(res, 200, { pr });
       }

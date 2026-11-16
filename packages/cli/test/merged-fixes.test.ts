@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { applyFixes, buildRecord, isPendingFix, loadRemediation, markFixesMerged, remediationPath, undoFix } from "../src/remediate.js";
+import { applyFixes, buildRecord, discardFixesTouching, isPendingFix, loadRemediation, markFixesMerged, remediationPath, undoFix } from "../src/remediate.js";
 import { collectChanges, makeWorkspace } from "../src/workspace.js";
 import { writeJsonAtomic } from "@lens/core";
 
@@ -36,6 +36,24 @@ describe("fixes after a merge", () => {
     expect(fixes.find((f) => f.id === first)?.mergedIn).toBe(26);
     await expect(undoFix(root, "health", first)).rejects.toThrow(/already merged in #26/);
     expect(await fs.readFile(path.join(root, "a.ts"), "utf8")).toBe("fixed one\n");
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("reopens unmerged fixes in files a merge with the base dropped, leaving merged ones alone", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-dropped-"));
+    await fs.writeFile(path.join(root, "a.ts"), "a\n");
+    await fs.writeFile(path.join(root, "b.ts"), "b\n");
+    const [first, second] = await proposeTwoFixes(root);
+    await applyFixes(root, "health", [first]);
+    await markFixesMerged(root, 30);
+    await applyFixes(root, "health", [second]);
+
+    expect(await discardFixesTouching(root, ["a.ts", "b.ts"])).toBe(1);
+
+    const fixes = (await loadRemediation(root, "health"))!.fixes;
+    expect(fixes.find((f) => f.id === first)?.status).toBe("applied");
+    expect(fixes.find((f) => f.id === second)?.status).toBe("discarded");
+    expect(fixes.filter(isPendingFix)).toEqual([]);
     await fs.rm(root, { recursive: true, force: true });
   });
 

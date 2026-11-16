@@ -309,6 +309,24 @@ export async function markFixesMerged(root: string, pr: number, uncommitted: Rea
   }
 }
 
+/**
+ * Reopen the unmerged fixes a merge with the base threw out by taking the base's version of
+ * `files`, so their items show Open again and the next Fix All retries them on the new base.
+ */
+export async function discardFixesTouching(root: string, files: readonly string[]): Promise<number> {
+  const dropped = new Set(files);
+  let discarded = 0;
+  for (const source of SOURCES) {
+    const rec = await loadRemediation(root, source);
+    const hit = rec?.fixes.filter((f) => isPendingFix(f) && f.files.some((x) => dropped.has(x.path))) ?? [];
+    if (!rec || !hit.length) continue;
+    for (const fix of hit) fix.status = "discarded";
+    discarded += hit.length;
+    await writeJsonAtomic(remediationPath(root, source), rec, true);
+  }
+  return discarded;
+}
+
 /** Restore the exact pre-apply bytes of an applied fix. */
 export async function undoFix(root: string, source: RemediationSource, id: string): Promise<void> {
   const rec = await loadRemediation(root, source);
