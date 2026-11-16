@@ -389,14 +389,14 @@ function serialQueue(): (task: () => Promise<void>) => Promise<void> {
   };
 }
 
-async function reviewTargets(root: string, scope: { paths: string[] } | undefined) {
+async function reviewTargets(root: string, scope: { paths: string[] } | undefined, recheck?: Set<string>) {
   const g = await loadGraph(root);
   if (!g) throw new Error("no graph for this project; scan it first");
   const files = reviewFiles(g);
   const hashes = await hashFiles(root, files.map((f) => f.path));
   const coverage = await loadCoverage(root);
   const inScope = new Set(scope?.paths ?? []);
-  const targets = scope ? files.filter((f) => inScope.has(f.path)) : pendingReview(files, hashes, coverage);
+  const targets = scope ? files.filter((f) => inScope.has(f.path)) : pendingReview(files, hashes, coverage).filter((f) => !recheck || recheck.has(f.path));
   return { g, files, hashes, coverage, targets };
 }
 
@@ -782,24 +782,27 @@ export class EnrichRunner {
    * Reviews every code file that is new or changed since its last review, in batches, and
    * folds the findings into the ledger after each batch so a stopped run keeps its progress.
    * With `scope`, reviews only the files a fix run just changed, each batch against its own diff.
+   * With `recheck`, reviews in full only those of these files that changed since their last review.
    * Returns the indexes of new findings, or null when the job stopped.
    */
-  private async reviewStep(job: EnrichJob, opts: { limitUsd: number; scope?: { paths: string[] } }): Promise<number[] | null> {
+  private async reviewStep(job: EnrichJob, opts: { limitUsd: number; scope?: { paths: string[] }; recheck?: string[] }): Promise<number[] | null> {
     const { root } = job;
     const scoped = !!opts.scope;
+    // A re-check covers some files, so it can't mark the whole review current or start a new run.
+    const wholeRun = !scoped && !opts.recheck;
     this.push(job, "Rescanning");
     await scanAndSave(root);
-    const { g, files, hashes, coverage, targets } = await reviewTargets(root, opts.scope);
+    const { g, files, hashes, coverage, targets } = await reviewTargets(root, opts.scope, opts.recheck && new Set(opts.recheck));
     const batches = planBatches(targets);
     const progress = { findings: 0, report: REVIEW_REPORT, batchesDone: 0, batchesTotal: batches.length } as NonNullable<EnrichJob["review"]>;
     if (!scoped) job.review = progress;
     if (!batches.length) {
       // Every file is covered at its current hash, so the existing findings are current as of now.
-      if (!scoped) await markReviewCurrent(root);
+      if (wholeRun) await markReviewCurrent(root);
       this.push(job, "No new or changed files to review");
       return [];
     }
-    if (!scoped) await saveReview(root, { ...(await loadReview(root)), runStartedAt: new Date().toISOString() });
+    if (wholeRun) await saveReview(root, { ...(await loadReview(root)), runStartedAt: new Date().toISOString() });
     const dir = await clearReviewIntermediates(root);
     const instructions = agentInstructions("code-reviewer");
     if (!existsSync(instructions)) throw new Error(`missing ${instructions}`);
@@ -1132,9 +1135,15 @@ export class EnrichRunner {
     if (!checkId && source !== "review") return this.runFixAll(job, source);
     if (source === "health" && checkId && REFACTOR_CHECKS.has(checkId)) return this.runFixAll(job, source, (id) => id.startsWith(`${checkId}~`));
     const { root } = job;
+    const rechecked = source === "review" && (await this.recheckFindings(job, checkId));
+    if (rechecked === null) return;
     // One item the owner picked: no size limit, and their note rides along as data.
     const single = !!checkId && (/^review-\d+$/.test(checkId) || checkId.includes("~"));
     const items = (await remediationItems(root, source, checkId)).map((i) => (single && note ? { ...i, ownerNote: note.slice(0, 600) } : i));
+    if (!items.length && rechecked) {
+      this.push(job, "The re-check found these findings already fixed in the code");
+      return this.finish(job, "done");
+    }
     if (!items.length) throw new Error(source === "audit" ? "nothing in the checklist is failing" : source === "health" ? "that check has nothing to fix" : "the review has no high or medium findings");
     const covered = await coveredFiles(root);
     const { data, error } = await this.draftFixes(job, items, single);
@@ -1179,6 +1188,20 @@ export class EnrichRunner {
     // A test repair stays inside the pull request's files; reviewing its own edits would widen it.
     if (!testRepair) await this.fixOwnFindings(job, source, await this.reviewOwnChanges(job, changedPaths(record, valid), covered), covered);
     this.finish(job, "done");
+  }
+
+  /**
+   * Review findings are only as current as the last review of their file. Before paying to fix
+   * them, re-review the files that changed since, so findings already fixed outside Lens close
+   * instead of being sent to Claude. Returns whether a re-check ran, or null when the job stopped.
+   */
+  private async recheckFindings(job: EnrichJob, checkId: string | undefined): Promise<boolean | null> {
+    const plan = await recheckPlan(job.root, checkId);
+    if (!plan.paths.length) return false;
+    this.push(job, `Re-checking ${plan.paths.length} changed file${plan.paths.length === 1 ? "" : "s"} before fixing`);
+    const found = await this.reviewStep(job, { limitUsd: plan.estimate.limit, recheck: plan.paths });
+    job.review = undefined;
+    return found === null ? null : true;
   }
 
   /**
@@ -1463,6 +1486,16 @@ export async function reviewPlan(root: string, graph?: KnowledgeGraph | null): P
   return { files: pending.length, batches, estimate: reviewEstimate(batches) };
 }
 
+/** Files holding the open review findings a fix run targets that changed since their last review, and what re-reviewing them costs. */
+export async function recheckPlan(root: string, checkId?: string, graph?: KnowledgeGraph | null): Promise<{ paths: string[]; estimate: CostEstimate }> {
+  const g = graph ?? (await loadGraph(root));
+  const ledger = await readJson<ReviewRecord>(reviewPath(root));
+  const targeted = new Set((await remediationItems(root, "review", checkId, Infinity)).map((i) => ledger?.findings[reviewIndex(i.id) ?? -1]?.path));
+  const files = (g ? reviewFiles(g) : []).filter((f) => targeted.has(f.path));
+  const pending = pendingReview(files, await hashFiles(root, files.map((f) => f.path)), await loadCoverage(root));
+  return { paths: pending.map((f) => f.path), estimate: reviewEstimate(planBatches(pending).length) };
+}
+
 const fencedJson = (text: string): unknown => {
   try {
     return JSON.parse(new RegExp("```json\\s*\\n([\\s\\S]*?)\\n```").exec(text)?.[1] ?? "null");
@@ -1634,7 +1667,7 @@ export async function remediationItems(root: string, source: RemediationSource, 
     const skip = new Set(await loadWontFix(root));
     return (rec?.findings ?? [])
       .map((f, i) => ({ f, i }))
-      .filter(({ f, i }) => (only === null ? f.severity !== "low" && !f.resolvedAt && !skip.has(reviewKey(f)) : i === only))
+      .filter(({ f, i }) => !f.resolvedAt && (only === null ? f.severity !== "low" && !skip.has(reviewKey(f)) : i === only))
       .map(({ f, i }) => ({ id: `review-${i}`, title: f.title, evidence: [`${f.path}${f.line ? `:${f.line}` : ""} ${f.detail}`], fix: f.fix }));
   }
   if (source === "health" && !checkId) {

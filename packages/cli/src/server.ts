@@ -25,7 +25,7 @@ import { grantCheckPermissions } from "./ci-permissions.js";
 import type { AppliedFix } from "./commit-text.js";
 import { FIX_SOURCES, SOURCES, appliedFixIds, applyFixes, discardFixesTouching, isPendingFix, loadRemediation, markFixesMerged, undoFix, undoFixesSince, type FixSource, type RemediationSource } from "./remediate.js";
 import { loadLayoutPlan, reopenLayoutArea, usableMoves } from "./layout-plan.js";
-import { EnrichRunner, followFileMoves, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
+import { EnrichRunner, followFileMoves, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, recheckPlan, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import { TestsBroken } from "./local-tests.js";
 import {
   buildBatches, diffImpact, isGitRepo, loadGraph, madeByOtherBuild, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
@@ -428,7 +428,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
             : task === "remediate" && source !== "review" && !checkId
             ? (await fixAllPlan(proj.root, source)).estimate.limit
             : task === "remediate"
-              ? remediateLimit(checkId, (await remediationItems(proj.root, source, checkId)).length) : (await estimatesFor(proj.root, (await getGraph()).graph, true)).enrichEstimates[task as Exclude<EnrichTask, "remediate" | "merge">].limit;
+              ? remediateLimit(checkId, (await remediationItems(proj.root, source, checkId)).length) + (source === "review" ? (await recheckPlan(proj.root, checkId)).estimate.limit : 0) : (await estimatesFor(proj.root, (await getGraph()).graph, true)).enrichEstimates[task as Exclude<EnrichTask, "remediate" | "merge">].limit;
         if (enrich.running) return send(res, 409, { error: "an AI run is already in progress" });
         const authProblem = await checkClaudeAuth();
         if (authProblem) return send(res, 412, { error: authProblem });
