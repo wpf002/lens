@@ -44,7 +44,9 @@ const MAGIC_PATTERNS = [
   new RegExp(String.raw`(?<![\w.$])(${NUMBER})\s*[*/](?![*/=])`, "g"),
 ];
 /** Factors that turn a count into a duration or size: `5 * 60_000` reads as five minutes, `6 / 12` as half a year. */
-const UNIT_FACTORS = new Set(["7", "12", "24", "60", "365", "1000", "1024", "3600", "86400", "60000", "3600000"]);
+const UNIT_FACTORS = new Set(["7", "12", "24", "60", "365", "1000", "1024", "3600", "86400", "60000", "3600000", "86400000", "604800000"]);
+/** Patterns matching a number that multiplies or divides; a unit factor there is a conversion, not a rule. */
+const PRODUCT_PATTERNS = new Set([2, 3]);
 const LITERAL_PRODUCT = new RegExp(String.raw`(?<![\w.$])${NUMBER}(?:\s*[*/]\s*${NUMBER})+(?![\w.])`, "g");
 /** A JS regex literal: a slash after an operator, bracket, or keyword, so division isn't caught. */
 const REGEX_LITERAL = /(?<=(?:^|[(,=:[!&|?{};+\-*%<>~^]|\breturn|\btypeof)\s*)\/(?![/*])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])+\/[dgimsuvy]*/gm;
@@ -67,7 +69,12 @@ export function magicNumbersInLine(line: string): string[] {
   if (NAMED_CONSTANT_LINE.test(line)) return [];
   const judged = blankUnitProducts(line);
   const found = new Set<string>();
-  for (const re of MAGIC_PATTERNS) for (const m of judged.matchAll(re)) if (!isPlainNumber(m[1]!, line)) found.add(m[1]!);
+  MAGIC_PATTERNS.forEach((re, index) => {
+    for (const m of judged.matchAll(re)) {
+      const isConversion = PRODUCT_PATTERNS.has(index) && UNIT_FACTORS.has(normalize(m[1]!));
+      if (!isConversion && !isPlainNumber(m[1]!, line)) found.add(m[1]!);
+    }
+  });
   return [...found];
 }
 

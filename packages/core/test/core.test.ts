@@ -288,6 +288,22 @@ describe("code health", () => {
     expect(graph.health!.score).toBeLessThan(100);
   });
 
+  // Regression: a route file's register function and each long handler inside it were separate rows.
+  it("reports one oversized row per file, naming its longest function", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-oversized-"));
+    await fs.mkdir(path.join(dir, "src"));
+    const body = (n: number) => Array.from({ length: n }, (_, i) => `    total += ${i};`).join("\n");
+    const routes = `export function registerRoutes(app: { get: (p: string, h: () => number) => void }) {\n  app.get("/a", function handleA() {\n    let total = 0;\n${body(90)}\n    return total;\n  });\n}\n`;
+    await fs.writeFile(path.join(dir, "package.json"), JSON.stringify({ name: "o" }));
+    await fs.writeFile(path.join(dir, "src/routes.ts"), routes);
+    const { graph } = await scanProject(dir, { full: true });
+    const oversized = graph.health!.checks.find((c) => c.id === "oversized")!;
+    expect(oversized.count).toBe(1);
+    expect(oversized.hits[0]!.detail).toMatch(/^registerRoutes\(\) is \d+ lines, 1 more long function$/);
+    expect(graph.health!.checks.some((c) => c.id === "hotspots")).toBe(false);
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
   // Regression: the Health header showed the scan-time score, so closing rows never changed it.
   it("scores only what's still open", () => {
     const allOpen = healthScore([{ severity: "high", open: 1 }, { severity: "low", open: 5 }]);

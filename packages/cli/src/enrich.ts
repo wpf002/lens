@@ -227,7 +227,7 @@ function claudeTimeoutMs(): number {
 }
 const timeoutLabel = (ms: number) => (ms >= MINUTE_MS ? `${Math.round(ms / MINUTE_MS)} minutes` : `${Math.round(ms / SECOND_MS)} seconds`);
 /** Checks whose fixes are refactors: each item gets its own Claude run and a larger cap. */
-export const REFACTOR_CHECKS = new Set(["oversized", "hotspots", "import-cycles", "layer-violations", "fragmented"]);
+export const REFACTOR_CHECKS = new Set(["oversized", "import-cycles", "layer-violations", "fragmented"]);
 export const REFACTOR_ITEM_LIMIT_USD = 8;
 const DEFAULT_REFACTOR_ITEM_RATE: ItemRate = { low: 1, high: 4 };
 /** Ceiling for one Remediate run over a whole project, review included. */

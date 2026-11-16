@@ -4,7 +4,7 @@ import type { HealthCheck, HealthHit, HealthReport } from "./health.js";
 type ChangedFile = ImpactReport["changedFiles"][number];
 
 /** Checks about the project as a whole, or about work that's fine to leave for later, never block a change. */
-const NOT_ABOUT_THE_CHANGE = new Set(["untested", "readme-boilerplate", "stale-docs", "unused-deps", "inconsistent-libs", "hotspots"]);
+const NOT_ABOUT_THE_CHANGE = new Set(["untested", "readme-boilerplate", "stale-docs", "unused-deps", "inconsistent-libs"]);
 
 export interface ChangedHealthCheck {
   id: string;

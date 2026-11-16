@@ -87,6 +87,9 @@ describe("magic numbers", () => {
     expect(magicNumbersInLine("if (res.status === 404) return null;")).toEqual([]);
     expect(magicNumbersInLine("const pct = value * 100.0;")).toEqual([]);
     expect(magicNumbersInLine("const fee = amount * 0.029;")).toEqual(["0.029"]);
+    expect(magicNumbersInLine("const end = start + s.minutes * 60_000;")).toEqual([]);
+    expect(magicNumbersInLine("const days = Math.round((due - today) / 86_400_000);")).toEqual([]);
+    expect(magicNumbersInLine("if (attempt >= 3) throw e;")).toEqual(["3"]);
   });
 });
 

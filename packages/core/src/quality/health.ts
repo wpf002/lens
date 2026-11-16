@@ -63,6 +63,8 @@ export interface HealthInput {
   architecture?: ArchitectureConfig;
 }
 
+const MAX_FUNCTION_LINES = 80;
+const MAX_FILE_LINES = 800;
 const FRAMEWORK_ROUTE_DIR = /(^|\/)(pages|app|routes|api|migrations|alembic|scripts|bin|cmd)\//;
 
 /** Names frameworks call by convention; never "dead". */
@@ -357,21 +359,30 @@ export function buildHealth(input: HealthInput): HealthReport {
 
   /* ---------- structure ---------- */
   {
+    // One row per file: a route file's register function and the handlers inside it are one refactor.
     const hits: HealthHit[] = [];
     let count = 0;
-    for (const f of prod)
-      for (const s of f.symbols) {
-        const len = s.lines[1] - s.lines[0] + 1;
-        if (s.kind !== "function" || len <= 80) continue;
-        count++;
-        push(hits, { path: f.path, line: s.lines[0], detail: `${s.name}() is ${len} lines` });
-      }
-    const big = prod.map((f) => ({ f, loc: f.src.split("\n").length })).filter((x) => x.loc > 800).sort((a, b) => b.loc - a.loc);
-    for (const x of big) {
+    const bigFiles = prod
+      .map((f) => {
+        const loc = f.src.split("\n").length;
+        const longFunctions = f.symbols
+          .filter((s) => s.kind === "function" && s.lines[1] - s.lines[0] + 1 > MAX_FUNCTION_LINES)
+          .sort((a, b) => b.lines[1] - b.lines[0] - (a.lines[1] - a.lines[0]));
+        return { f, loc, longFunctions };
+      })
+      .filter((x) => x.loc > MAX_FILE_LINES || x.longFunctions.length)
+      .sort((a, b) => b.loc - a.loc);
+    for (const { f, loc, longFunctions } of bigFiles) {
       count++;
-      push(hits, { path: x.f.path, detail: `${x.loc}-line file` });
+      const longest = longFunctions[0];
+      const parts = [
+        ...(loc > MAX_FILE_LINES ? [`${loc}-line file`] : []),
+        ...(longest ? [`${longest.name}() is ${longest.lines[1] - longest.lines[0] + 1} lines`] : []),
+        ...(longFunctions.length > 1 ? [`${longFunctions.length - 1} more long function${longFunctions.length > 2 ? "s" : ""}`] : []),
+      ];
+      push(hits, { path: f.path, line: longest?.lines[0], detail: parts.join(", ") });
     }
-    add({ id: "oversized", title: "Oversized Functions and Files", category: "structure", severity: "low", hits, count, fix: "Split by responsibility: functions over ~80 lines and files over ~800 are hard to review and test." });
+    add({ id: "oversized", title: "Oversized Functions and Files", category: "structure", severity: "low", hits, count, fix: `Split by responsibility: functions over ~${MAX_FUNCTION_LINES} lines and files over ~${MAX_FILE_LINES} are hard to review and test.` });
   }
   {
     const fileIds = prod.map((f) => byPath.get(f.path)?.id).filter((x): x is string => !!x);
@@ -379,15 +390,6 @@ export function buildHealth(input: HealthInput): HealthReport {
     const nameOf = (id: string) => id.replace(/^[a-z]+:/, "");
     const hits = cycles.slice(0, MAX_HITS).map((c) => ({ path: nameOf(c[0]!), detail: `import cycle: ${c.map(nameOf).join(" → ")} → ${nameOf(c[0]!)}` }));
     add({ id: "import-cycles", title: "Circular Imports", category: "structure", severity: "medium", hits, count: cycles.length, fix: "Move the shared piece into its own module that both sides import." });
-  }
-  {
-    const fanIn = new Map<string, number>();
-    for (const e of edges) if (e.kind === "imports" || e.kind === "calls") fanIn.set(e.target, (fanIn.get(e.target) ?? 0) + 1);
-    const hot = prod
-      .map((f) => byPath.get(f.path))
-      .filter((n): n is GraphNode => !!n && n.complexity === "complex" && (fanIn.get(n.id) ?? 0) >= 3)
-      .sort((a, b) => (fanIn.get(b.id) ?? 0) - (fanIn.get(a.id) ?? 0));
-    add({ id: "hotspots", title: "Complex and Widely Used", category: "structure", severity: "medium", hits: hot.slice(0, MAX_HITS).map((n) => ({ path: n.path!, detail: `complex, used by ${fanIn.get(n.id)} other places` })), count: hot.length, fix: "These break the most things when they're wrong. Give them tests first, then simplify." });
   }
 
   add(buildLayerCheck({ files: code, nodes, edges, config: input.architecture }));
