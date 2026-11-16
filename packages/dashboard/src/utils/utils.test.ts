@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { formatDuration } from "./format";
-import { awaitingRemediation, compareIssues, isNewFinding } from "./health";
+import { awaitingRemediation, compareIssues, isNewFinding, sumTallies, tallyItems } from "./health";
 import ELK from "elkjs/lib/elk.bundled.js";
 import type { ImpactReport, KnowledgeGraph } from "@lens/core/browser";
 import type { Meta } from "../api";
@@ -397,5 +397,14 @@ describe("awaitingRemediation", () => {
   it("never waits where no fix records are served", () => {
     expect(awaitingRemediation({ mode: "embedded", meta, remediationLoaded: false })).toBe(false);
     expect(awaitingRemediation({ mode: "server", meta: { ...meta, canEnrich: false }, remediationLoaded: false })).toBe(false);
+  });
+});
+
+describe("issue tallies", () => {
+  it("counts every hit behind a check row, so the issue line matches the severity totals", () => {
+    const check = tallyItems(53, [{ kind: "open" }, { kind: "open", reason: "pick a name" }, { kind: "fixed", label: "Fixed" }, { kind: "wontfix" }]);
+    expect(check).toEqual({ open: 51, asking: 1, closed: 2 });
+    const finding = tallyItems(1, [{ kind: "safe", reason: "test only" }]);
+    expect(sumTallies([check, finding])).toEqual({ open: 51, asking: 1, closed: 3 });
   });
 });

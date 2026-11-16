@@ -23,3 +23,17 @@ export function compareIssues(a: IssueOrder, b: IssueOrder): number {
 /** True while the counts would still miss fixes the server knows about. */
 export const awaitingRemediation = (s: { mode: DataMode; meta: Meta | null; remediationLoaded: boolean }): boolean =>
   s.mode === "server" && !!s.meta?.canEnrich && !s.remediationLoaded;
+
+export type ItemStatus = { kind: "open"; reason?: string } | { kind: "fixed"; label: string } | { kind: "safe"; reason: string } | { kind: "wontfix" };
+/** Items behind one issue row. A check row stands for every hit it found, which can be more than it lists. */
+export type Tally = { open: number; asking: number; closed: number };
+
+export const needsYou = (st: ItemStatus): boolean => st.kind === "open" && !!st.reason;
+
+export function tallyItems(count: number, states: ItemStatus[]): Tally {
+  const closed = states.filter((st) => st.kind !== "open").length;
+  return { open: Math.max(0, count - closed), asking: states.filter(needsYou).length, closed };
+}
+
+export const sumTallies = (tallies: Tally[]): Tally =>
+  tallies.reduce((sum, t) => ({ open: sum.open + t.open, asking: sum.asking + t.asking, closed: sum.closed + t.closed }), { open: 0, asking: 0, closed: 0 });

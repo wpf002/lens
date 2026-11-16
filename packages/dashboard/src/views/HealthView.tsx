@@ -14,10 +14,10 @@ import { Button, EmptyState, SeverityBadge, Spinner, cx, renderInlineCode } from
 import { useStore } from "../store";
 import { SEVERITY_COLOR } from "../utils/colors";
 import { costRange } from "../utils/format";
-import { awaitingRemediation, compareIssues, isNewFinding, type IssueOrder } from "../utils/health";
+import { awaitingRemediation, compareIssues, isNewFinding, needsYou, sumTallies, tallyItems, type IssueOrder, type ItemStatus, type Tally } from "../utils/health";
 import { useModel } from "./hooks";
 
-type Row = IssueOrder & { key: string; closed: boolean } & (
+type Row = IssueOrder & { key: string; closed: boolean; tally: Tally } & (
   | { kind: "finding"; f: ReviewRecord["findings"][number]; i: number; st: ItemStatus }
   | { kind: "check"; c: HealthCheck }
 );
@@ -37,20 +37,16 @@ function Hit({ path, line, detail }: { path: string; line?: number; detail: stri
   );
 }
 
-const needsYou = (st: ItemStatus) => st.kind === "open" && !!st.reason;
 const rank = (st: ItemStatus) => (st.kind !== "open" ? 2 : st.reason ? 0 : 1);
 
 /** Open hits left in a check (hits past the listed ones count as open) and how many need the owner. */
-function checkCounts(c: HealthCheck, statusOf: (id: string) => ItemStatus) {
-  const states = checkHitIds(c).map(statusOf);
-  return { left: c.count - states.filter((st) => st.kind !== "open").length, asks: states.filter(needsYou).length };
-}
+const checkTally = (c: HealthCheck, statusOf: (id: string) => ItemStatus) => tallyItems(c.count, checkHitIds(c).map(statusOf));
 
 function CheckRow({ c, statusOf, canFix }: { c: HealthCheck; statusOf: (id: string) => ItemStatus; canFix: boolean }) {
   const [open, setOpen] = useState(false);
   const ids = checkHitIds(c);
   const rows = c.hits.map((h, k) => ({ h, id: ids[k]!, st: statusOf(ids[k]!) })).sort((a, b) => rank(a.st) - rank(b.st));
-  const { left, asks } = checkCounts(c, statusOf);
+  const { open: left, asking: asks } = checkTally(c, statusOf);
   return (
     <li className="border-b border-line last:border-b-0">
       <div className="flex items-center gap-3 pr-4 hover:bg-raised">
@@ -137,7 +133,6 @@ function HitRow({ h, id, checkId, st, canFix }: { h: HealthCheck["hits"][number]
 }
 
 /** An open item with a reason needs the owner: Lens tried and couldn't fix it. */
-type ItemStatus = { kind: "open"; reason?: string } | { kind: "fixed"; label: string } | { kind: "safe"; reason: string } | { kind: "wontfix" };
 
 function StatusTag({ st, count }: { st: ItemStatus; count?: number }) {
   const ask = needsYou(st);
@@ -415,15 +410,15 @@ export function HealthView() {
   const canReview = mode === "server" && !!meta?.canEnrich;
   // One list: review findings and automatic checks, by severity, new findings first within each.
   const rows: Row[] = [
-    ...findings.map(({ f, i, st }): Row => ({ kind: "finding", key: `f${i}`, severity: f.severity, closed: st.kind !== "open", asks: needsYou(st), fresh: !!review && isNewFinding(f.foundAt, review), f, i, st })),
+    ...findings.map(({ f, i, st }): Row => ({ kind: "finding", key: `f${i}`, severity: f.severity, closed: st.kind !== "open", tally: tallyItems(1, [st]), asks: needsYou(st), fresh: !!review && isNewFinding(f.foundAt, review), f, i, st })),
     ...checks.map((c): Row => {
-      const { left, asks } = checkCounts(c, hitStatus);
-      return { kind: "check", key: `c${c.id}`, severity: c.severity, closed: left <= 0, asks: asks > 0, fresh: false, c };
+      const tally = checkTally(c, hitStatus);
+      return { kind: "check", key: `c${c.id}`, severity: c.severity, closed: tally.open <= 0, tally, asks: tally.asking > 0, fresh: false, c };
     }),
   ].sort(compareIssues);
   const openRows = rows.filter((r) => !r.closed);
   const closedRows = rows.filter((r) => r.closed);
-  const asking = openRows.filter((r) => r.asks).length;
+  const totals = sumTallies(rows.map((r) => r.tally));
   const renderRow = (r: Row) =>
     r.kind === "finding" ? (
       <FindingRow key={r.key} f={r.f} i={r.i} st={r.st} canFix={canReview} isNew={r.fresh} />
@@ -470,8 +465,8 @@ export function HealthView() {
             <h3 className="eyebrow flex items-center gap-3 border-b border-line px-5 py-2">
               Issues
               <span className="font-mono normal-case tracking-normal text-faint">
-                {asking > 0 && <span className="text-accent">{asking} Need You · </span>}
-                {openRows.length - asking} Open · {closedRows.length} Closed
+                {totals.asking > 0 && <span className="text-accent">{totals.asking} Need You · </span>}
+                {totals.open - totals.asking} Open · {totals.closed} Closed
               </span>
             </h3>
             <ul>{openRows.map(renderRow)}</ul>
@@ -479,7 +474,7 @@ export function HealthView() {
             {closedRows.length > 0 && (
               <>
                 <button type="button" className="eyebrow flex w-full items-center gap-1 border-t border-line px-5 py-2 hover:!text-fg" onClick={() => setShowClosed((v) => !v)} aria-expanded={showClosed}>
-                  {showClosed ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />} Closed <span className="font-mono text-faint">{closedRows.length}</span>
+                  {showClosed ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />} Closed <span className="font-mono text-faint">{totals.closed}</span>
                 </button>
                 {showClosed && <ul className="border-t border-line">{closedRows.map(renderRow)}</ul>}
               </>
