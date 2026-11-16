@@ -63,6 +63,12 @@ async function git(cwd: string, args: string[], timeout = 5 * 60_000): Promise<s
   });
 }
 
+/** Fetch history back to `since` in a shallow clone, so renames older than the clone are visible. */
+export async function deepenSince(root: string, since: string | undefined): Promise<void> {
+  if ((await git(root, ["rev-parse", "--is-shallow-repository"])) !== "true") return;
+  await git(root, ["fetch", "-q", "--no-tags", since ? `--shallow-since=${since}` : "--unshallow", "origin"]);
+}
+
 /** Keep tokens out of error messages that reach the browser. */
 function scrub(msg: string): string {
   let out = msg;

@@ -8,6 +8,7 @@
  * final stream-json result is reported back to the dashboard.
  */
 import { inRepairScope, loadRepairItems } from "./ci.js";
+import { deepenSince } from "./cloud.js";
 import { BATCH_MAX_FILES, coveredFiles, followMoves, hashFiles, keepReviewed, loadCoverage, markReviewed, mergeReview, pendingReview, planBatches, priorFindingsFor, renderReport, reviewIndex, saveCoverage, type ReviewFile, type ReviewRecord } from "./review-ledger.js";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { promises as fs, existsSync, statSync } from "node:fs";
@@ -1519,10 +1520,9 @@ function gitDiff(root: string, files: string[]): string {
  * Hosted checkouts are shallow, so history is deepened back to `since` first; a rename older than
  * the clone would otherwise read as a deleted file and close a finding that still applies.
  */
-function gitRenames(root: string, since: string | undefined): PathMove[] | null {
+async function gitRenames(root: string, since: string | undefined): Promise<PathMove[] | null> {
   try {
-    const shallow = execFileSync("git", ["rev-parse", "--is-shallow-repository"], { cwd: root, encoding: "utf8", timeout: 10_000 }).trim() === "true";
-    if (shallow) execFileSync("git", ["fetch", "--quiet", "--no-tags", since ? `--shallow-since=${since}` : "--unshallow", "origin"], { cwd: root, timeout: 120_000 });
+    await deepenSince(root, since);
     const out = execFileSync("git", ["log", "-M", "--diff-filter=R", "--name-status", "--format=", "--reverse", "HEAD"], { cwd: root, encoding: "utf8", timeout: 20_000, maxBuffer: 50_000_000 });
     return out.split("\n").map((line) => line.split("\t")).filter((cols) => cols.length === 3 && cols[0]!.startsWith("R")).map(([, from, to]) => ({ from: from!, to: to! }));
   } catch (e) {
@@ -1541,7 +1541,7 @@ export async function followFileMoves(root: string, moves?: PathMove[]): Promise
   const missing = (rec?.findings ?? []).filter((f) => !exists(f.path));
   if (!rec || !missing.length) return;
   const oldest = missing.every((f) => f.foundAt) ? missing.map((f) => f.foundAt!).sort()[0] : undefined;
-  const known = moves ?? gitRenames(root, oldest);
+  const known = moves ?? (await gitRenames(root, oldest));
   if (!known) return;
   const { findings, moved, resolved } = followMoves(rec.findings, known, exists, { ...(await reviewClosed(root)), now: new Date().toISOString() });
   if (!moved && !resolved) return;
