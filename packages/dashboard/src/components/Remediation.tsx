@@ -253,8 +253,9 @@ export function Remediation({ source }: { source: Source }) {
         )}
       </div>
       {applied.length > 0 && (
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-line bg-[color-mix(in_srgb,var(--auth-guarded)_8%,transparent)] px-3 py-2 text-[12px]">
-          <button type="button" className="group flex items-center gap-2 text-fg" title={changedFiles.join("\n")} onClick={() => setShowChanges((v) => !v)}>
+        <div className={cx("flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-line bg-[color-mix(in_srgb,var(--auth-guarded)_8%,var(--panel))] px-3 py-2 text-[12px]", showChanges && "sticky top-0 z-[2]")}>
+          <button type="button" className="group flex items-center gap-2 text-fg" title={changedFiles.join("\n")} onClick={() => setShowChanges((v) => !v)} aria-expanded={showChanges}>
+            {showChanges ? <IconChevronDown size={12} className="text-faint" /> : <IconChevronRight size={12} className="text-faint" />}
             <span aria-hidden className="flex h-4 w-4 items-center justify-center rounded-full bg-guarded text-[10px] font-bold leading-none text-[var(--bg)]">
               ✓
             </span>
