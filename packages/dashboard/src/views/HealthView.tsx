@@ -14,7 +14,7 @@ import { Button, EmptyState, SeverityBadge, Spinner, cx, renderInlineCode } from
 import { useStore } from "../store";
 import { SEVERITY_COLOR } from "../utils/colors";
 import { costRange } from "../utils/format";
-import { compareIssues, isNewFinding, type IssueOrder } from "../utils/health";
+import { awaitingRemediation, compareIssues, isNewFinding, type IssueOrder } from "../utils/health";
 import { useModel } from "./hooks";
 
 type Row = IssueOrder & { key: string; closed: boolean } & (
@@ -347,6 +347,7 @@ export function HealthView() {
   const healthFixes = useStore((s) => s.remediation.health);
   const wontFixList = useStore((s) => s.wontFix);
   const push = useStore((s) => s.push);
+  const loadingFixes = useStore(awaitingRemediation);
   const [showClosed, setShowClosed] = useState(false);
   const health = model.graph.health;
 
@@ -391,6 +392,13 @@ export function HealthView() {
 
   if (!health) {
     return <EmptyState title="No health report" body="Rescan this project with the current version of Lens to run the code health checks." />;
+  }
+  if (loadingFixes) {
+    return (
+      <div className="grid h-full place-items-center">
+        <Spinner size={20} label="Loading fixes" />
+      </div>
+    );
   }
   const fixedLabel = push?.pr?.state === "merged" && !push.dirty ? "Merged" : push?.pr?.state === "open" ? `In PR #${push.pr.number}` : "Fixed";
   const statusOf = (f: ReviewRecord["findings"][number], i: number): ItemStatus => {

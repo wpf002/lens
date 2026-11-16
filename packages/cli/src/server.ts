@@ -462,6 +462,13 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         if (proj.graphFile) return send(res, 200, { review: null });
         return send(res, 200, { review: await readJson<ReviewRecord>(reviewPath(proj.root)) });
       }
+      if (req.method === "GET" && url.pathname === "/api/remediation/fix") {
+        const source = url.searchParams.get("source") ?? "";
+        if (!SOURCES.includes(source as RemediationSource)) return send(res, 400, { error: "source must be audit, review, health, or layout" });
+        const fix = (await loadRemediation(proj.root, source as RemediationSource))?.fixes.find((f) => f.id === url.searchParams.get("id"));
+        if (!fix) return send(res, 404, { error: "fix not found" });
+        return send(res, 200, { files: fix.files ?? [] });
+      }
       if (req.method === "GET" && url.pathname === "/api/remediation") {
         if (proj.graphFile) return send(res, 200, { remediation: null });
         // Edits stay server-side; the dashboard gets diffs.
@@ -475,7 +482,8 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
               if (k && ids[Number(k[1]) - 1]) f.itemId = ids[Number(k[1]) - 1]!;
             }
           }
-          records[s] = rec && { ...rec, edits: undefined, legacyIds: undefined };
+          // Records written by older builds can lack files. Diffs load per fix from /api/remediation/fix; with hundreds of fixes they made this response megabytes.
+          records[s] = rec && { ...rec, edits: undefined, legacyIds: undefined, fixes: rec.fixes.map((f) => ({ ...f, files: (f.files ?? []).map((file) => ({ ...file, diff: undefined })) })) };
         }
         const audit = await fixAllPlan(proj.root, "audit");
         const health = await fixAllPlan(proj.root, "health");

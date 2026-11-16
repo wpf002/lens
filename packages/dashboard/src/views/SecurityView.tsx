@@ -3,9 +3,10 @@ import { findingItemId, type Finding, type Severity } from "@lens/core/browser";
 import { Checklist } from "../components/Checklist";
 import { GraphCanvas } from "../components/GraphCanvas";
 import { IconChevronDown, IconChevronRight, IconChevronUp, IconDroplet, IconShield } from "../components/icons";
-import { EmptyState, SeverityBadge, cx } from "../components/ui";
+import { EmptyState, SeverityBadge, Spinner, cx } from "../components/ui";
 import { FixAllButton } from "../components/Remediation";
 import { useStore } from "../store";
+import { awaitingRemediation } from "../utils/health";
 import { AUTH_COLOR, SEVERITIES, SEVERITY_COLOR } from "../utils/colors";
 import { appliedFixItemIds, buildSecurity, checkGroup, endpointCounts, filterFindings, inputPath, isClosedFinding, mergeChecklist, securityScore, splitFindings, toFixCount, traceLimitsText } from "../utils/security";
 import { useCompiledFilters, useModel, useOverlayInput } from "./hooks";
@@ -55,6 +56,7 @@ export function SecurityView() {
   };
   const audit = useStore((s) => s.audit);
   const remediation = useStore((s) => s.remediation.audit);
+  const loadingFixes = useStore(awaitingRemediation);
   const checklist = useMemo(() => mergeChecklist(model.graph.security?.checklist ?? [], audit), [model, audit]);
   const failingChecks = checklist.filter((c) => checkGroup(c.status) === "fix").length;
   const needsYou = checklist.filter((c) => checkGroup(c.status) === "you").length;
@@ -76,6 +78,13 @@ export function SecurityView() {
         title="No security report"
         body="This graph has no security section. Run `lens scan` to detect entry points, auth guards and dangerous sinks, then `/lens-security` for agent triage."
       />
+    );
+  }
+  if (loadingFixes) {
+    return (
+      <div className="grid h-full place-items-center">
+        <Spinner size={20} label="Loading fixes" />
+      </div>
     );
   }
   const bySev = SEVERITIES.reduce((a, s) => ({ ...a, [s]: openFindings.filter((f) => f.severity === s).length }), {} as Record<Severity, number>);

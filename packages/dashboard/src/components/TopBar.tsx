@@ -1,4 +1,5 @@
 import { useStore } from "../store";
+import { awaitingRemediation } from "../utils/health";
 import { VIEW_GROUPS, VIEW_LABEL, VIEW_ORDER, type ViewId } from "../types";
 import { useMemo } from "react";
 import { activeFilterCount } from "../utils/filters";
@@ -20,6 +21,7 @@ function ViewTabs({ vertical }: { vertical?: boolean }) {
   const setView = useStore((s) => s.setView);
   const views = useVisibleViews();
   const auditFixes = useStore((s) => s.remediation.audit);
+  const loadingFixes = useStore(awaitingRemediation);
   const hot = useMemo(() => urgentOpenCount(model.graph.security?.findings ?? [], appliedFixItemIds(auditFixes)), [model, auditFixes]);
   return (
     <div className={cx("flex", vertical ? "flex-col gap-3" : "items-center gap-2")}>
@@ -47,7 +49,7 @@ function ViewTabs({ vertical }: { vertical?: boolean }) {
                   )}
                 >
                   {VIEW_LABEL[v]}
-                  {v === "security" && hot > 0 && (
+                  {v === "security" && !loadingFixes && hot > 0 && (
                     <span className="rounded-full px-1.5 font-mono text-[10px] leading-[15px]" style={{ color: "var(--sev-critical)", background: "color-mix(in srgb, var(--sev-critical) 16%, transparent)" }}>
                       {hot}
                     </span>

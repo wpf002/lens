@@ -1,4 +1,4 @@
-import type { ReviewRecord } from "../api";
+import type { DataMode, Meta, ReviewRecord } from "../api";
 
 export const SEV_ORDER = { high: 0, medium: 1, low: 2 } as const;
 
@@ -19,3 +19,7 @@ export function isNewFinding(foundAt: string | undefined, review: Pick<ReviewRec
 export function compareIssues(a: IssueOrder, b: IssueOrder): number {
   return SEV_ORDER[a.severity] - SEV_ORDER[b.severity] || Number(b.fresh) - Number(a.fresh) || Number(b.asks) - Number(a.asks);
 }
+
+/** True while the counts would still miss fixes the server knows about. */
+export const awaitingRemediation = (s: { mode: DataMode; meta: Meta | null; remediationLoaded: boolean }): boolean =>
+  s.mode === "server" && !!s.meta?.canEnrich && !s.remediationLoaded;

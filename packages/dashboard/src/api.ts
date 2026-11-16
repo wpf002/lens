@@ -68,7 +68,7 @@ export interface ProposedFix {
   itemId: string;
   title: string;
   explanation: string;
-  files: Array<{ path: string; diff: string; created: boolean }>;
+  files: Array<{ path: string; created: boolean; deleted?: boolean }>;
   invalid?: string;
   status: "proposed" | "applied" | "undone" | "discarded";
   mergedIn?: number;
@@ -267,6 +267,8 @@ export const fetchArchitecture = () => request<ArchitectureState>("/api/architec
 export type FixAllPlans = Record<"audit" | "health", { items: number; first: "audit" | "review" | null }>;
 export const fetchRemediation = () =>
   request<{ records: Record<RemediationSource, RemediationRecord | null>; estimates: Record<RemediationSource, CostEstimate>; fixAll: FixAllPlans; healthBatch: number; healthItems: number; wontFix?: string[] }>("/api/remediation");
+export const fetchFixFiles = (source: RemediationSource, id: string) =>
+  request<{ files: Array<{ path: string; diff: string; created: boolean }> }>(`/api/remediation/fix?source=${encodeURIComponent(source)}&id=${encodeURIComponent(id)}`).then((r) => r.files);
 export const applyRemediation = (source: RemediationSource, ids: string[]) =>
   request<{ applied: string[]; failed: Array<{ id: string; error: string }> }>("/api/remediation/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source, ids }) });
 export const undoRemediation = (source: RemediationSource, id: string) =>

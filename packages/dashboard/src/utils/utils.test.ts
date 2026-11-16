@@ -2,9 +2,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { formatDuration } from "./format";
-import { compareIssues, isNewFinding } from "./health";
+import { awaitingRemediation, compareIssues, isNewFinding } from "./health";
 import ELK from "elkjs/lib/elk.bundled.js";
 import type { ImpactReport, KnowledgeGraph } from "@lens/core/browser";
+import type { Meta } from "../api";
 import { buildLayers, buildStructure, edgeAccumulator } from "./aggregate";
 import { layerColor, hashColor } from "./colors";
 import { buildDomain } from "./domain";
@@ -384,5 +385,17 @@ describe("health issue order", () => {
       { id: "medium-new", severity: "medium" as const, fresh: true, asks: false },
     ];
     expect(rows.sort(compareIssues).map((r) => r.id)).toEqual(["high", "medium-new", "medium-asks", "medium-old", "low-asks"]);
+  });
+});
+
+describe("awaitingRemediation", () => {
+  const meta = { project: { name: "p", root: "/p" }, hasEmbeddings: false, git: true, canEnrich: true } as unknown as Meta;
+  it("holds counts on a server that has fix records still on the way", () => {
+    expect(awaitingRemediation({ mode: "server", meta, remediationLoaded: false })).toBe(true);
+    expect(awaitingRemediation({ mode: "server", meta, remediationLoaded: true })).toBe(false);
+  });
+  it("never waits where no fix records are served", () => {
+    expect(awaitingRemediation({ mode: "embedded", meta, remediationLoaded: false })).toBe(false);
+    expect(awaitingRemediation({ mode: "server", meta: { ...meta, canEnrich: false }, remediationLoaded: false })).toBe(false);
   });
 });

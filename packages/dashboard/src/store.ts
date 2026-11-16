@@ -108,6 +108,8 @@ export interface State {
   /** Proposed fixes from the last Remediate run, plus cost estimates per source. */
   remediation: Partial<Record<RemediationSource, RemediationRecord | null>>;
   remediationEstimates: Partial<Record<RemediationSource, CostEstimate>>;
+  /** False until the first /api/remediation answer for this project, so fixed items aren't counted as open meanwhile. */
+  remediationLoaded: boolean;
   /** Automatic checks that offer Fix with AI, and how many hits one run takes. */
   fixable: { batch: number; items: number; plans?: FixAllPlans };
   remediateConfirm: { source: RemediationSource; checkId?: string } | null;
@@ -261,6 +263,7 @@ export const useStore = create<State>((set, get) => ({
   reviewConfirm: false,
   remediation: {},
   remediationEstimates: {},
+  remediationLoaded: false,
   wontFix: [],
   push: null,
   prBusy: null,
@@ -549,10 +552,11 @@ export const useStore = create<State>((set, get) => ({
   async refreshRemediation() {
     try {
       const r = await fetchRemediation();
-      set({ remediation: r.records, remediationEstimates: r.estimates, wontFix: r.wontFix ?? [], fixable: { batch: r.healthBatch, items: r.healthItems, plans: r.fixAll } });
+      set({ remediation: r.records, remediationEstimates: r.estimates, remediationLoaded: true, wontFix: r.wontFix ?? [], fixable: { batch: r.healthBatch, items: r.healthItems, plans: r.fixAll } });
       void get().refreshPush();
-    } catch {
-      /* not served (static export) */
+    } catch (err) {
+      // Without fix records the counts can't improve by waiting, so show them as they are.
+      set({ remediationLoaded: true, fixOp: { busy: false, error: err instanceof Error ? err.message : String(err) } });
     }
   },
   async toggleWontFix(id, on) {
@@ -669,7 +673,7 @@ export const useStore = create<State>((set, get) => ({
 async function switchedTo(root: string): Promise<void> {
   rememberProject(root);
   clearFileCache();
-  useStore.setState({ ...PROJECT_RESET, modal: null, projectOp: { busy: null, error: null }, enrichJob: { state: "idle" }, audit: null, review: null, remediation: {}, wontFix: [], push: null, prBusy: null, prStep: null, remediateConfirm: null });
+  useStore.setState({ ...PROJECT_RESET, modal: null, projectOp: { busy: null, error: null }, enrichJob: { state: "idle" }, audit: null, review: null, remediation: {}, remediationLoaded: false, wontFix: [], push: null, prBusy: null, prStep: null, remediateConfirm: null });
   await useStore.getState().init();
 }
 

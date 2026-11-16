@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { createPullRequest, fixBrokenTests, fixesPatch, mergePullRequest, type ProposedFix, type RemediationSource, type PullRequest, type TestGate } from "../api";
+import { createPullRequest, fetchFixFiles, fixBrokenTests, fixesPatch, mergePullRequest, type ProposedFix, type RemediationSource, type PullRequest, type TestGate } from "../api";
 import { useStore } from "../store";
 import { costRange, formatDuration } from "../utils/format";
 import { remediateLabel } from "../utils/security";
@@ -58,8 +58,25 @@ function Diff({ text }: { text: string }) {
   );
 }
 
+type FixDiffs = { state: "loading" } | { state: "error"; message: string } | { state: "ready"; files: Array<{ path: string; diff: string }> };
+
+/** The fix's diffs, fetched the first time its row opens. */
+function useFixDiffs(source: Source, id: string, open: boolean): FixDiffs | null {
+  const [diffs, setDiffs] = useState<FixDiffs | null>(null);
+  useEffect(() => {
+    if (!open || diffs) return;
+    setDiffs({ state: "loading" });
+    fetchFixFiles(source, id).then(
+      (files) => setDiffs({ state: "ready", files }),
+      (e: unknown) => setDiffs({ state: "error", message: e instanceof Error ? e.message : String(e) }),
+    );
+  }, [open, diffs, source, id]);
+  return diffs;
+}
+
 function FixRow({ fix, source }: { fix: ProposedFix; source: Source }) {
   const [open, setOpen] = useState(false);
+  const diffs = useFixDiffs(source, fix.id, open);
   const undo = useStore((s) => s.undoFix);
   const busy = useStore((s) => s.fixOp.busy);
   return (
@@ -83,9 +100,9 @@ function FixRow({ fix, source }: { fix: ProposedFix; source: Source }) {
       {open && (
         <div className="space-y-2 pb-3 pl-9 pr-3 text-[12px] text-muted">
           <p>{renderInlineCode(fix.explanation)}</p>
-          {fix.files.map((f) => (
-            <Diff key={f.path} text={f.diff} />
-          ))}
+          {diffs?.state === "loading" && <Spinner />}
+          {diffs?.state === "error" && <p className="text-critical">{diffs.message}</p>}
+          {diffs?.state === "ready" && diffs.files.map((f) => <Diff key={f.path} text={f.diff} />)}
         </div>
       )}
     </li>

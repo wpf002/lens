@@ -396,7 +396,10 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
       expect(remediation.edits).toBeUndefined(); // raw edits never leave the server
       const good = remediation.fixes.find((f: { title: string }) => f.title === "Return 2");
       expect(good.files.map((f: { path: string }) => f.path)).toEqual(["main.py"]);
-      expect(good.files[0].diff).toContain("+    return 2");
+      expect(good.files[0].diff).toBeUndefined(); // diffs load per fix, keeping the list small
+      const fixFiles = JSON.parse((await get(`${base}/api/remediation/fix?source=audit&id=${good.id}`, auth())).body).files;
+      expect(fixFiles[0].diff).toContain("+    return 2");
+      expect((await get(`${base}/api/remediation/fix?source=audit&id=missing`, auth())).status).toBe(404);
       expect(remediation.skipped.some((x: { reason: string }) => x.reason.includes("changed no files"))).toBe(true);
       expect(good.status).toBe("applied"); // Fix applies valid edits itself
       expect(await fs.readFile(path.join(root, "main.py"), "utf8")).toContain("return 2");
