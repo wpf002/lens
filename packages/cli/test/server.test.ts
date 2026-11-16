@@ -764,6 +764,49 @@ if (get("Findings path")) {
     }
   });
 
+  it("Remediate on review findings fixes them in batches and leaves them Open when the credit balance runs out", async () => {
+    const fake = path.join(os.tmpdir(), `fake-credit-${process.pid}.mjs`);
+    const calls = path.join(os.tmpdir(), `fake-credit-calls-${process.pid}`);
+    await fs.writeFile(fake, `#!/usr/bin/env node
+import fs from "node:fs";
+const prompt = process.argv[process.argv.indexOf("-p") + 1];
+const get = (k) => new RegExp(k + ": (.+)").exec(prompt)?.[1].trim();
+if (get("Findings path")) {
+  fs.writeFileSync(get("Findings path"), JSON.stringify({ findings: [] }));
+  console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, total_cost_usd: 0.05 }));
+} else {
+  fs.appendFileSync(${JSON.stringify(calls)}, "x");
+  console.log(JSON.stringify({ type: "result", subtype: "success", is_error: true, total_cost_usd: 0, result: "Credit balance is too low" }));
+}
+`);
+    await fs.chmod(fake, 0o755);
+    await fs.rm(calls, { force: true });
+    const root = JSON.parse((await get(`${base}/api/meta`, auth())).body).root as string;
+    const lens = paths(root).dir;
+    const now = new Date().toISOString();
+    const review = JSON.parse(await fs.readFile(path.join(lens, "review.json"), "utf8").catch(() => "null")) ?? { generatedAt: now, report: "CODE_REVIEW.md", findings: [] };
+    const first = review.findings.length;
+    for (const title of ["Credit one", "Credit two"]) review.findings.push({ title, severity: "medium", category: "bug", path: "main.py", line: 1, detail: title, fix: "Fix it.", foundAt: now });
+    await fs.writeFile(path.join(lens, "review.json"), JSON.stringify(review));
+    process.env.LENS_CLAUDE_BIN = fake;
+    try {
+      expect((await post(`${base}/api/enrich/remediate`, { source: "review" }, auth())).status).toBe(202);
+      let job: { state: string; error?: string; progress: string[] } = { state: "running", progress: [] };
+      for (let i = 0; i < 200 && job.state === "running"; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        job = JSON.parse((await get(`${base}/api/enrich/status`, auth())).body);
+      }
+      expect(job.error).toBeUndefined();
+      expect(job.progress.some((p) => /^Batch 1: /.test(p))).toBe(true);
+      expect(await fs.readFile(calls, "utf8")).toBe("x");
+      const records = JSON.parse((await get(`${base}/api/remediation`, auth())).body).records;
+      const ids = [`review-${first}`, `review-${first + 1}`];
+      for (const rec of [records.health, records.review]) expect((rec?.skipped ?? []).filter((x: { itemId: string }) => ids.includes(x.itemId))).toEqual([]);
+    } finally {
+      delete process.env.LENS_CLAUDE_BIN;
+    }
+  });
+
   it("The re-review after a merge fixes the findings it adds", async () => {
     const fake = path.join(os.tmpdir(), `fake-merge-${process.pid}.mjs`);
     // An earlier test switched projects; the last job ran in the current one.

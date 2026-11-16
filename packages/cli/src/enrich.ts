@@ -9,7 +9,7 @@
  */
 import { inRepairScope, loadRepairItems } from "./ci.js";
 import { deepenSince } from "./cloud.js";
-import { BATCH_MAX_FILES, coveredFiles, followMoves, hashFiles, keepReviewed, loadCoverage, markReviewed, mergeReview, pendingReview, planBatches, priorFindingsFor, renderReport, reviewIndex, saveCoverage, type ReviewFile, type ReviewRecord } from "./review-ledger.js";
+import { BATCH_MAX_FILES, coveredFiles, followMoves, hashFiles, keepReviewed, loadCoverage, markReviewed, mergeReview, pendingReview, planBatches, priorFindingsFor, renderReport, REVIEW_ID, reviewIndex, saveCoverage, type ReviewFile, type ReviewRecord } from "./review-ledger.js";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
@@ -1137,6 +1137,8 @@ export class EnrichRunner {
     const { root } = job;
     const rechecked = source === "review" && (await this.recheckFindings(job, checkId));
     if (rechecked === null) return;
+    // Every open review finding: fix them in batches like Fix All, since one Claude run can't settle a hundred.
+    if (source === "review" && !checkId) return this.runFixAll(job, "health", (id) => REVIEW_ID.test(id));
     // One item the owner picked: no size limit, and their note rides along as data.
     const single = !!checkId && (/^review-\d+$/.test(checkId) || checkId.includes("~"));
     const items = (await remediationItems(root, source, checkId)).map((i) => (single && note ? { ...i, ownerNote: note.slice(0, 600) } : i));
@@ -1252,6 +1254,7 @@ export class EnrichRunner {
       edits: Object.fromEntries(kept.map((f) => [f.id, prior?.edits?.[f.id] ?? []])),
     };
     const key = (i: { title: string; evidence: string[] }) => `${i.title}|${i.evidence[0]}`;
+    let outOfCredit = false;
     let cost = new ParallelCost(job);
     const applyInOrder = serialQueue();
     const startedAt = Date.now();
@@ -1275,6 +1278,12 @@ export class EnrichRunner {
         if (job.state !== "running") return;
         if (!data) {
           this.push(job, `Batch ${batch} produced no usable fixes${error ? `: ${error}` : ""}`);
+          // No credit is the account's problem, not the items': stop, and leave them Open to retry.
+          if (error && OUT_OF_CREDIT.test(error)) {
+            outOfCredit = true;
+            progress.stopped ??= "the Claude credit balance ran out";
+            return;
+          }
           markUnaddressed(merged, items.map((i) => i.id), error?.slice(0, 600) || undefined);
           await writeJsonAtomic(remediationPath(root, source), merged, true);
           if (error?.includes("spending") || error?.includes("safety limit")) progress.stopped ??= "reached the spending limit";
@@ -1360,7 +1369,7 @@ export class EnrichRunner {
       progress.total += added.length;
     }
     // Anything still open after the run says why: Lens stopped first, or couldn't fix it.
-    if (job.state === "running") {
+    if (job.state === "running" && !outOfCredit) {
       const left = (await pending()).map((i) => i.id);
       markUnaddressed(merged, left, progress.stopped ? `Lens stopped first: ${progress.stopped}.` : undefined);
     }
@@ -1495,6 +1504,16 @@ export async function recheckPlan(root: string, checkId?: string, graph?: Knowle
   const pending = pendingReview(files, await hashFiles(root, files.map((f) => f.path)), await loadCoverage(root));
   return { paths: pending.map((f) => f.path), estimate: reviewEstimate(planBatches(pending).length) };
 }
+
+/** The spending limit for a Remediate run that isn't a Fix All: re-checking stale review findings, then fixing. */
+export async function remediateBudget(root: string, source: FixSource, checkId?: string): Promise<number> {
+  const items = (await remediationItems(root, source, checkId)).length;
+  const recheck = source === "review" ? (await recheckPlan(root, checkId)).estimate.limit : 0;
+  const fixes = source === "review" && !checkId ? Math.min(MAX_FIX_ALL_USD, estimateFixAll(items).limit + FIX_CHECK_RESERVE_USD) : remediateLimit(checkId, items);
+  return Math.round((recheck + fixes) * 100) / 100;
+}
+
+const OUT_OF_CREDIT = /credit balance is too low/i;
 
 const fencedJson = (text: string): unknown => {
   try {
