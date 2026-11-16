@@ -239,6 +239,36 @@ describe("pushFixes", () => {
     await fs.rm(tmp, { recursive: true, force: true });
   });
 
+  it("keeps the fixes uncommitted on the old branch when they conflict with the new base", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "lens-push-"));
+    const remote = path.join(tmp, "remote.git");
+    const root = path.join(tmp, "work");
+    run(tmp, "init", "-q", "--bare", "-b", "main", remote);
+    run(tmp, "init", "-q", "-b", "main", root);
+    await fs.writeFile(path.join(root, "a.js"), "1\n");
+    run(root, "add", "-A");
+    run(root, "commit", "-qm", "init");
+    run(root, "remote", "add", "origin", remote);
+    run(root, "push", "-q", "-u", "origin", "main");
+    run(root, "config", "lens.base", "main");
+    run(root, "checkout", "-qb", "lens/fixes-1");
+    const other = path.join(tmp, "other");
+    run(tmp, "clone", "-q", remote, other);
+    await fs.writeFile(path.join(other, "a.js"), "main\n");
+    run(other, "commit", "-qam", "main edit");
+    run(other, "push", "-q", "origin", "main");
+    await fs.writeFile(path.join(root, "a.js"), "fix\n");
+    await fs.writeFile(path.join(root, "new.ts"), "export {};\n");
+
+    await expect(restartFromBase(root, "lens/fixes-1")).rejects.toThrow(/conflict with the latest main/);
+
+    expect(run(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe("lens/fixes-1");
+    expect(run(root, "log", "--oneline")).not.toContain("Carry");
+    expect(run(root, "status", "--porcelain")).toBe("M a.js\n?? new.ts");
+    expect(await fs.readFile(path.join(root, "a.js"), "utf8")).toBe("fix\n");
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
   describe("in the owner's name", () => {
     afterEach(() => {
       vi.unstubAllGlobals();

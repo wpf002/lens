@@ -498,21 +498,33 @@ export async function pushPending(root: string, fixes: AppliedFix[] = [], resolv
 }
 
 /** Move uncommitted fixes off a finished fixes branch onto the latest base branch. */
+/** Commit every change outside .lens on the current branch and return the commit. */
+async function carryCommit(root: string): Promise<string> {
+  await git(root, ["add", "-A"]);
+  await git(root, ["reset", "-q", "--", ".lens"]).catch(() => undefined);
+  await git(root, ["-c", "user.name=Lens", "-c", "user.email=lens@localhost", "commit", "-q", "--no-verify", "-m", "Carry uncommitted fixes"]);
+  return git(root, ["rev-parse", "HEAD"]);
+}
+
 export async function restartFromBase(root: string, old: string): Promise<void> {
   const base = await baseBranch(root);
   const dirty = !!(await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"]));
-  // A patch download leaves new files marked intent-to-add, and git stash refuses those ("not uptodate. Cannot merge").
+  // A patch download leaves new files marked intent-to-add, which git add and cherry-pick refuse.
   await git(root, ["reset", "-q"]);
-  // No pathspec: .lens is ignored (info/exclude or .gitignore) so -u skips it, and naming it makes git exit 1 even though the stash succeeded.
-  if (dirty) await git(root, ["stash", "push", "-u", "-q"]);
+  // The fixes ride a temporary commit, not a stash: a stash pop refuses new files whose paths are already in the working tree.
+  const carried = dirty ? await carryCommit(root) : null;
   try {
     await git(root, ["fetch", "-q", "--no-tags", "origin", base]);
     await git(root, ["checkout", "-q", "-B", base, "FETCH_HEAD"]);
-    if (dirty) await git(root, ["stash", "pop", "-q"]);
+    if (carried) {
+      await git(root, ["cherry-pick", "--no-commit", carried]);
+      await git(root, ["reset", "-q"]);
+    }
   } catch (e) {
     // Put everything back where it was rather than lose the fixes.
-    await git(root, ["checkout", "-q", "-f", old]).catch(() => undefined);
-    if (dirty) await git(root, ["stash", "pop", "-q"]).catch(() => undefined);
+    await git(root, ["reset", "-q", "--hard"]).catch(() => undefined);
+    await git(root, ["checkout", "-q", "-f", old]);
+    if (carried) await git(root, ["reset", "-q", "HEAD~1"]);
     throw new Error(`These fixes conflict with the latest ${base}. Undo them and run Fix again. (${e instanceof Error ? e.message.slice(0, 200) : e})`);
   }
   await git(root, ["branch", "-D", old]).catch(() => undefined);
