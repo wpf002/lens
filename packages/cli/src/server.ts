@@ -108,6 +108,11 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
     const parts = rel.split(path.sep);
     return parts.length === 2 && !rel.startsWith("..") ? parts.join("/") : null;
   };
+  // Opening a project can fetch git history, which needs GitHub auth loaded first.
+  if (opts.cloud) {
+    configureGithubApp();
+    await loadGithub(opts.cloud.workspace);
+  }
   let proj = await loadProject(opts.root, opts.graphFile);
 
   /** Rescan a graph saved by an older Lens build once, so changed checks show without reopening the project. */
@@ -293,10 +298,6 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
     res.end(data);
   };
 
-  if (opts.cloud) {
-    configureGithubApp();
-    await loadGithub(opts.cloud.workspace);
-  }
   /** OAuth callback on this host, as the browser sees it behind Railway's proxy. */
   const callbackUrl = (req: http.IncomingMessage) => {
     const first = (h: string | string[] | undefined) => (Array.isArray(h) ? h[0] : h)?.split(",")[0]?.trim();
