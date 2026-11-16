@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { paths, readJson, reviewKey, writeJsonAtomic, type ReviewFindings } from "@lens/core";
+import { paths, readJson, reviewKey, writeJsonAtomic, type PathMove, type ReviewFindings } from "@lens/core";
 
 type AgentFinding = ReviewFindings["findings"][number];
 export type StoredFinding = Omit<AgentFinding, "priorId"> & {
@@ -111,6 +111,31 @@ export function mergeReview(prior: StoredFinding[], output: Pick<ReviewFindings,
   }
   for (let i = 0; i < priorCount; i++) if (!ctx.existing.has(findings[i]!.path) && findingStatus(findings[i]!, i, ctx) === "open") resolve(i);
   return { findings, added };
+}
+
+/**
+ * Point findings at the paths their files moved to, applying moves oldest first, then close open
+ * findings whose file no longer exists. Without this a finding on a moved file stays open until
+ * the next paid review, and Remediate keeps sending Claude to a file that isn't there.
+ */
+export function followMoves(
+  prior: StoredFinding[],
+  moves: PathMove[],
+  exists: (rel: string) => boolean,
+  ctx: Pick<MergeContext, "fixed" | "wontFix" | "now">,
+): { findings: StoredFinding[]; moved: number; resolved: number } {
+  let moved = 0;
+  let resolved = 0;
+  const findings = prior.map((f, i) => {
+    if (exists(f.path)) return f;
+    const to = moves.reduce((at, m) => (m.from === at ? m.to : at), f.path);
+    const next = to === f.path ? f : { ...f, path: to };
+    if (next !== f) moved++;
+    if (exists(next.path) || findingStatus(next, i, ctx) !== "open") return next;
+    resolved++;
+    return { ...next, resolvedAt: ctx.now };
+  });
+  return { findings, moved, resolved };
 }
 
 /** What the reviewer is told about earlier findings in the files it's reviewing. */

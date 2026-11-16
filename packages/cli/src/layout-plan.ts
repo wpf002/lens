@@ -5,7 +5,7 @@
  */
 import { promises as fs, existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { isFileKind, paths, readJson, renameScannedPaths, writeJsonAtomic, type KnowledgeGraph, type LayoutPlan } from "@lens/core";
+import { isFileKind, paths, readJson, renameScannedPaths, writeJsonAtomic, type KnowledgeGraph, type LayoutPlan, type PathMove } from "@lens/core";
 import { loadRemediation, safeTarget } from "./remediate.js";
 import { isBinary } from "./workspace.js";
 
@@ -117,12 +117,14 @@ async function removeEmptyParents(workspace: string, dir: string): Promise<void>
 }
 
 /** After Undo of an area's moves, offer that area again. */
-export async function reopenLayoutArea(root: string, fixId: string): Promise<void> {
+export async function reopenLayoutArea(root: string, fixId: string): Promise<PathMove[]> {
   const fix = (await loadRemediation(root, "layout"))?.fixes.find((f) => f.id === fixId);
   const plan = await loadLayoutPlan(root);
   const area = fix && plan?.areas.find((a) => `layout-${a.id}` === fix.itemId);
-  if (!plan || !area) return;
+  if (!plan || !area) return [];
   area.status = "planned";
   await saveLayoutPlan(root, plan);
-  await renameScannedPaths(root, area.moves.map((m) => ({ from: m.to, to: m.from })));
+  const back = area.moves.map((m) => ({ from: m.to, to: m.from }));
+  await renameScannedPaths(root, back);
+  return back;
 }

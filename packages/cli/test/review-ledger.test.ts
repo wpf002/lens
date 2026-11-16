@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { reviewKey } from "@lens/core";
-import { mergeReview, pendingReview, planBatches, priorFindingsFor, type StoredFinding } from "../src/review-ledger.js";
+import { followMoves, mergeReview, pendingReview, planBatches, priorFindingsFor, type StoredFinding } from "../src/review-ledger.js";
 
 const finding = (title: string, path = "a.ts", extra: Partial<StoredFinding> = {}): StoredFinding => ({ title, severity: "medium", category: "design", path, detail: `${title} detail`, ...extra });
 const ctx = (over: Partial<Parameters<typeof mergeReview>[2]> = {}) => ({ reviewed: new Set(["a.ts"]), existing: new Set(["a.ts", "b.ts"]), fixed: new Set<number>(), wontFix: new Set<string>(), now: "2026-11-03T00:00:00.000Z", ...over });
@@ -53,5 +53,18 @@ describe("review ledger", () => {
     expect(pendingReview(files, hashes, { "src/a.ts": "1", "src/b.ts": "old" }).map((f) => f.path)).toEqual(["src/b.ts", "lib/c.ts"]);
     const batches = planBatches([...files, { path: "src/big.ts", loc: 5000 }], 25, 1000);
     expect(batches.map((b) => b.map((f) => f.path))).toEqual([["lib/c.ts", "src/a.ts", "src/b.ts"], ["src/big.ts"]]);
+  });
+
+  it("follows a finding through chained moves and closes one whose file was deleted", () => {
+    const onDisk = new Set(["src/auth/auth.ts", "keep.ts"]);
+    const prior = [finding("Moved twice", "src/auth.ts"), finding("Deleted", "old.ts"), finding("Untouched", "keep.ts"), finding("Already fixed", "gone.ts")];
+    const moves = [{ from: "src/auth.ts", to: "src/login.ts" }, { from: "src/login.ts", to: "src/auth/auth.ts" }];
+    const { findings, moved, resolved } = followMoves(prior, moves, (rel) => onDisk.has(rel), { fixed: new Set([3]), wontFix: new Set<string>(), now: "2026-11-16T00:00:00.000Z" });
+    expect(findings[0]).toMatchObject({ path: "src/auth/auth.ts" });
+    expect(findings[0]!.resolvedAt).toBeUndefined();
+    expect(findings[1]!.resolvedAt).toBe("2026-11-16T00:00:00.000Z");
+    expect(findings[2]).toBe(prior[2]);
+    expect(findings[3]!.resolvedAt).toBeUndefined();
+    expect({ moved, resolved }).toEqual({ moved: 1, resolved: 1 });
   });
 });

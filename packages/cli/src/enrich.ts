@@ -8,7 +8,7 @@
  * final stream-json result is reported back to the dashboard.
  */
 import { inRepairScope, loadRepairItems } from "./ci.js";
-import { BATCH_MAX_FILES, coveredFiles, hashFiles, keepReviewed, loadCoverage, markReviewed, mergeReview, pendingReview, planBatches, priorFindingsFor, renderReport, reviewIndex, saveCoverage, type ReviewFile, type ReviewRecord } from "./review-ledger.js";
+import { BATCH_MAX_FILES, coveredFiles, followMoves, hashFiles, keepReviewed, loadCoverage, markReviewed, mergeReview, pendingReview, planBatches, priorFindingsFor, renderReport, reviewIndex, saveCoverage, type ReviewFile, type ReviewRecord } from "./review-ledger.js";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { promises as fs, existsSync, statSync } from "node:fs";
 import path from "node:path";
@@ -19,7 +19,7 @@ import { collectChanges, makeWorkspace, NO_CHANGE_REASON } from "./workspace.js"
 import { buildPlanRecord, loadLayoutPlan, moveFiles, planContext, saveLayoutPlan, usableMoves } from "./layout-plan.js";
 import { itemRate, loadFixCosts, recordFixCost, type ItemRate } from "./fix-costs.js";
 import { actionPinFix } from "./action-pins.js";
-import { AuditVerdictsSchema, LayoutPlanSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, renameScannedPaths, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type Finding, type KnowledgeGraph } from "@lens/core";
+import { AuditVerdictsSchema, LayoutPlanSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, renameScannedPaths, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type Finding, type KnowledgeGraph, type PathMove } from "@lens/core";
 
 export type EnrichTask = "domain" | "audit" | "summaries" | "review" | "remediate" | "architecture" | "merge";
 
@@ -1096,6 +1096,7 @@ export class EnrichRunner {
     await saveLayoutPlan(root, plan);
     this.push(job, "Rescanning");
     await renameScannedPaths(root, area.moves);
+    await followFileMoves(root, area.moves);
     await scanAndSave(root);
     job.remediation = { source: "layout", proposed: 1, invalid: 0, skipped: 0, applied: 1 };
     this.finish(job, "done");
@@ -1511,6 +1512,41 @@ function gitDiff(root: string, files: string[]): string {
   } catch {
     return "";
   }
+}
+
+/**
+ * Every rename in the checkout's history since `since`, oldest first, or null when git can't say.
+ * Hosted checkouts are shallow, so history is deepened back to `since` first; a rename older than
+ * the clone would otherwise read as a deleted file and close a finding that still applies.
+ */
+function gitRenames(root: string, since: string | undefined): PathMove[] | null {
+  try {
+    const shallow = execFileSync("git", ["rev-parse", "--is-shallow-repository"], { cwd: root, encoding: "utf8", timeout: 10_000 }).trim() === "true";
+    if (shallow) execFileSync("git", ["fetch", "--quiet", "--no-tags", since ? `--shallow-since=${since}` : "--unshallow", "origin"], { cwd: root, timeout: 120_000 });
+    const out = execFileSync("git", ["log", "-M", "--diff-filter=R", "--name-status", "--format=", "--reverse", "HEAD"], { cwd: root, encoding: "utf8", timeout: 20_000, maxBuffer: 50_000_000 });
+    return out.split("\n").map((line) => line.split("\t")).filter((cols) => cols.length === 3 && cols[0]!.startsWith("R")).map(([, from, to]) => ({ from: from!, to: to! }));
+  } catch (e) {
+    console.error(`[scan] couldn't read renames in ${path.basename(root)}: ${e instanceof Error ? e.message.split("\n")[0] : e}`);
+    return null;
+  }
+}
+
+/**
+ * Keep review findings on files that moved, and close ones whose file is gone. Moves Lens just
+ * made are passed in because they aren't committed yet; otherwise they come from git history.
+ */
+export async function followFileMoves(root: string, moves?: PathMove[]): Promise<void> {
+  const rec = await readJson<ReviewRecord>(reviewPath(root));
+  const exists = (rel: string) => existsSync(path.join(root, rel));
+  const missing = (rec?.findings ?? []).filter((f) => !exists(f.path));
+  if (!rec || !missing.length) return;
+  const oldest = missing.every((f) => f.foundAt) ? missing.map((f) => f.foundAt!).sort()[0] : undefined;
+  const known = moves ?? gitRenames(root, oldest);
+  if (!known) return;
+  const { findings, moved, resolved } = followMoves(rec.findings, known, exists, { ...(await reviewClosed(root)), now: new Date().toISOString() });
+  if (!moved && !resolved) return;
+  await saveReview(root, { ...rec, findings });
+  console.error(`[scan] ${path.basename(root)}: ${moved} review findings followed moved files, ${resolved} closed because their file is gone`);
 }
 
 /** Last commit time in ms, or 0 outside a git repo. */

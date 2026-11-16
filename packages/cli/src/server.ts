@@ -25,7 +25,7 @@ import { grantCheckPermissions } from "./ci-permissions.js";
 import type { AppliedFix } from "./commit-text.js";
 import { FIX_SOURCES, SOURCES, appliedFixIds, applyFixes, discardFixesTouching, isPendingFix, loadRemediation, markFixesMerged, undoFix, undoFixesSince, type FixSource, type RemediationSource } from "./remediate.js";
 import { loadLayoutPlan, reopenLayoutArea, usableMoves } from "./layout-plan.js";
-import { EnrichRunner, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
+import { EnrichRunner, followFileMoves, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import { TestsBroken } from "./local-tests.js";
 import {
   buildBatches, diffImpact, isGitRepo, loadGraph, madeByOtherBuild, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
@@ -117,7 +117,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
     if (!saved || !madeByOtherBuild(saved)) return;
     if (!refreshes.has(p.root)) {
       console.error(`[scan] ${p.root} was scanned by another Lens build, rescanning`);
-      refreshes.set(p.root, scanAndSave(p.root).finally(() => refreshes.delete(p.root)));
+      refreshes.set(p.root, scanAndSave(p.root).then(() => followFileMoves(p.root)).finally(() => refreshes.delete(p.root)));
     }
     await refreshes.get(p.root);
   };
@@ -435,7 +435,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
             console.error(`[github] couldn't move to the latest base before the ${task} run: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
             return false;
           });
-          if (synced) await scanAndSave(proj.root);
+          if (synced) await scanAndSave(proj.root).then(() => followFileMoves(proj.root));
         }
         return send(res, 202, enrich.start(task, proj.root, budget, { source, checkId, note, fixNew: task === "review" && opts.fixNew === true, areaId }));
       }
@@ -519,7 +519,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         if (typeof id !== "string" || !SOURCES.includes(source as RemediationSource)) return send(res, 400, { error: "id and source required" });
         if (prLock.label) return send(res, 409, { error: `wait for ${prLock.label} to finish` });
         await undoFix(proj.root, source as RemediationSource, id);
-        if (source === "layout") await reopenLayoutArea(proj.root, id);
+        if (source === "layout") await followFileMoves(proj.root, await reopenLayoutArea(proj.root, id));
         await scanAndSave(proj.root);
         return send(res, 200, { ok: true });
       }
