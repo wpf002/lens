@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { paths, scanAndSave } from "@lens/core";
-import { countFixRuns, fixAllPlan, nextFixBatch, pickFixBatch, remediationItems, REFACTOR_CHECKS, SAME_CHECK_BATCH, setWontFix } from "../src/enrich.js";
+import { countFixRuns, fixAllPlan, fixPrompt, nextFixBatch, pickFixBatch, remediationItems, REFACTOR_CHECKS, SAME_CHECK_BATCH, setWontFix } from "../src/enrich.js";
 import { itemRate, recordFixCost } from "../src/fix-costs.js";
 
 const FIX = path.resolve(__dirname, "../../core/test/fixtures/vuln-app");
@@ -33,6 +33,14 @@ describe("Remediate scope", () => {
   it("includes low-severity Security findings in an audit run", async () => {
     const items = await remediationItems(dir, "audit", undefined, Infinity);
     expect(items.some((i) => i.title === "Low Finding")).toBe(true);
+  });
+
+  it("puts every open Health item in the Copy Prompt text, with its file and fix", async () => {
+    const items = await remediationItems(dir, "health", undefined, Infinity);
+    const prompt = fixPrompt("health", items);
+    expect(prompt.split("\n").filter((l) => /^\d+\. /.test(l))).toHaveLength(items.length);
+    expect(prompt).toContain("app.js 900 lines");
+    expect(prompt).toContain("Fix: Split it.");
   });
 
   it("prices refactors on top of batch fixes", async () => {

@@ -121,7 +121,7 @@ const MAX_REVIEW_USD = 150;
 /** Per-batch cap passed to Claude, so one batch can't take the whole review's budget. */
 const REVIEW_BATCH_LIMIT_USD = 2;
 /** One thing for Claude to fix, as items.json lists it. */
-interface RemediationItem {
+export interface RemediationItem {
   id: string;
   title: string;
   evidence: string[];
@@ -1689,6 +1689,22 @@ export function nextFixBatch<T extends { id: string }>(left: T[]): T[] {
   return fixes.slice(0, FIX_ALL_BATCH);
 }
 const SEV_RANK = { high: 0, medium: 1, low: 2 } as const;
+const FIX_PROMPT_INTRO: Record<"audit" | "health", string> = {
+  health: "Fix these code health issues in this repo. Make real code changes; don't just reword or suppress a warning. If one needs a decision from me, ask before changing code. Run the typecheck and tests after each fix and commit.",
+  audit: "Fix these security issues in this repo. Make real code changes. If one needs a decision from me or a change in a web console, ask or give me exact steps. Never print secret values. Run the tests after each fix and commit.",
+};
+
+/** A prompt the owner pastes into Claude Code to fix these items on their own plan instead of a paid Lens run. */
+export function fixPrompt(source: "audit" | "health", items: RemediationItem[]): string {
+  const lines = items.map((item, i) => {
+    const out = [`${i + 1}. ${item.title}`];
+    for (const e of item.evidence) out.push(`   - ${e}`);
+    if (item.fix) out.push(`   Fix: ${item.fix}`);
+    return out.join("\n");
+  });
+  return [FIX_PROMPT_INTRO[source], "", ...lines].join("\n");
+}
+
 
 export async function remediationItems(root: string, source: RemediationSource, checkId?: string, limit = FIX_ALL_LIMIT): Promise<RemediationItem[]> {
   if (source === "review") {

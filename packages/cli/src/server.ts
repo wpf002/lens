@@ -25,7 +25,7 @@ import { grantCheckPermissions } from "./ci-permissions.js";
 import type { AppliedFix } from "./commit-text.js";
 import { FIX_SOURCES, SOURCES, appliedFixIds, applyFixes, discardFixesTouching, isPendingFix, loadRemediation, markCommittedFixesMerged, markFixesMerged, SHIPPED_OUTSIDE_LENS, undoFix, undoFixesSince, type FixSource, type RemediationSource } from "./remediate.js";
 import { loadLayoutPlan, reopenLayoutArea, usableMoves } from "./layout-plan.js";
-import { EnrichRunner, followFileMoves, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, remediateBudget, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
+import { EnrichRunner, followFileMoves, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, fixPrompt, remediateBudget, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import { TestsBroken } from "./local-tests.js";
 import {
   buildBatches, diffImpact, isGitRepo, loadGraph, madeByOtherBuild, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
@@ -484,6 +484,13 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         const fix = (await loadRemediation(proj.root, source as RemediationSource))?.fixes.find((f) => f.id === url.searchParams.get("id"));
         if (!fix) return send(res, 404, { error: "fix not found" });
         return send(res, 200, { files: fix.files ?? [] });
+      }
+      if (req.method === "GET" && url.pathname === "/api/remediation/prompt") {
+        if (proj.graphFile) return send(res, 400, { error: "read-only graph" });
+        const source = url.searchParams.get("source");
+        if (source !== "audit" && source !== "health") return send(res, 400, { error: "source must be audit or health" });
+        const items = await remediationItems(proj.root, source, undefined, Infinity);
+        return send(res, 200, { items: items.length, prompt: fixPrompt(source, items) });
       }
       if (req.method === "GET" && url.pathname === "/api/remediation") {
         if (proj.graphFile) return send(res, 200, { remediation: null });

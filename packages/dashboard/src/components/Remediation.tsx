@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { createPullRequest, fetchFixFiles, fixBrokenTests, fixesPatch, mergePullRequest, type ProposedFix, type RemediationSource, type PullRequest, type TestGate } from "../api";
+import { createPullRequest, fetchFixFiles, fetchFixPrompt, fixBrokenTests, fixesPatch, mergePullRequest, type ProposedFix, type RemediationSource, type PullRequest, type TestGate } from "../api";
 import { useStore } from "../store";
 import { costRange, formatDuration } from "../utils/format";
 import { remediateLabel } from "../utils/security";
@@ -199,6 +199,7 @@ export function Remediation({ source }: { source: Source }) {
         <Button size="sm" variant="ghost" onClick={() => useStore.setState({ remediateConfirm: null })}>
           Cancel
         </Button>
+        {plan && <CopyFixPrompt source={source as "audit" | "health"} disabled={!plan.items} />}
         <Button
           size="sm"
           variant="accent"
@@ -353,6 +354,27 @@ export const SAFE = /^(scanner was wrong|already (safe|hardened|handled|fixed))\
 const SAFE_PREFIX = /^scanner was wrong[:.,]?\s*/i;
 
 /** Live row for a running fix job: count and time lead, batch detail sits under the bar. */
+/** Copies every open item as one Claude Code prompt, so the owner can fix them on their own plan instead of a paid run. */
+function CopyFixPrompt({ source, disabled }: { source: "audit" | "health"; disabled: boolean }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const copy = async () => {
+    try {
+      const { prompt } = await fetchFixPrompt(source);
+      await navigator.clipboard.writeText(prompt);
+      setState("copied");
+    } catch (e) {
+      console.error("Copy failed", e);
+      setState("failed");
+    }
+    setTimeout(() => setState("idle"), 2000);
+  };
+  return (
+    <Button size="sm" variant="ghost" disabled={disabled} title={disabled ? "Nothing found yet. Run Remediate first." : "Paste into Claude Code"} onClick={() => void copy()}>
+      {state === "copied" ? "Copied" : state === "failed" ? "Copy Failed" : "Copy Prompt"}
+    </Button>
+  );
+}
+
 function FixProgress() {
   const job = useStore((s) => s.enrichJob);
   const cancel = useStore((s) => s.cancelAI);

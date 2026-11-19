@@ -269,6 +269,8 @@ export const fetchRemediation = () =>
   request<{ records: Record<RemediationSource, RemediationRecord | null>; estimates: Record<RemediationSource, CostEstimate>; fixAll: FixAllPlans; healthBatch: number; healthItems: number; wontFix?: string[] }>("/api/remediation");
 export const fetchFixFiles = (source: RemediationSource, id: string) =>
   request<{ files: Array<{ path: string; diff: string; created: boolean }> }>(`/api/remediation/fix?source=${encodeURIComponent(source)}&id=${encodeURIComponent(id)}`).then((r) => r.files);
+export const fetchFixPrompt = (source: "audit" | "health") =>
+  request<{ items: number; prompt: string }>(`/api/remediation/prompt?source=${encodeURIComponent(source)}`);
 export const applyRemediation = (source: RemediationSource, ids: string[]) =>
   request<{ applied: string[]; failed: Array<{ id: string; error: string }> }>("/api/remediation/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source, ids }) });
 export const undoRemediation = (source: RemediationSource, id: string) =>
