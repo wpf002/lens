@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
+import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { applyFixes, buildRecord, discardFixesTouching, isPendingFix, loadRemediation, markFixesMerged, remediationPath, undoFix } from "../src/remediate.js";
+import { applyFixes, buildRecord, discardFixesTouching, isPendingFix, loadRemediation, markCommittedFixesMerged, markFixesMerged, remediationPath, undoFix } from "../src/remediate.js";
 import { collectChanges, makeWorkspace } from "../src/workspace.js";
 import { writeJsonAtomic } from "@lens/core";
 
@@ -22,6 +23,26 @@ async function proposeTwoFixes(root: string): Promise<[string, string]> {
 }
 
 describe("fixes after a merge", () => {
+  it("marks pending fixes already committed on the base branch as merged, and keeps uncommitted ones pending", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-merged-"));
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: root });
+    git("init", "-q", "-b", "main");
+    await fs.writeFile(path.join(root, ".gitignore"), ".lens\n");
+    await fs.writeFile(path.join(root, "a.ts"), "a\n");
+    await fs.writeFile(path.join(root, "b.ts"), "b\n");
+    git("add", "-A");
+    git("commit", "-qm", "init");
+    const [first, second] = await proposeTwoFixes(root);
+    await applyFixes(root, "health", [first, second]);
+    git("add", "a.ts");
+    git("commit", "-qm", "Lens fixes (#24)");
+
+    expect(await markCommittedFixesMerged(root, 0)).toBe(1);
+    const fixes = (await loadRemediation(root, "health"))!.fixes;
+    expect(fixes.filter(isPendingFix).map((f) => f.id)).toEqual([second]);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
   it("keeps merged fixes out of the next pull request and Undo", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-merged-"));
     await fs.writeFile(path.join(root, "a.ts"), "a\n");

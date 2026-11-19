@@ -309,6 +309,58 @@ export async function markFixesMerged(root: string, pr: number, uncommitted: Rea
   }
 }
 
+/** `mergedIn` for fixes found in the base branch when Lens doesn't know which pull request shipped them. */
+export const SHIPPED_OUTSIDE_LENS = 0;
+
+/** Whether every edit's result is in `read`'s version of the code: replacements in, their old text out, created files there, deleted files gone. */
+export function editsPresent(edits: Edits, read: (rel: string) => string | null): boolean {
+  if (!edits.length) return false;
+  return edits.every((e) => {
+    const text = read(e.path);
+    if (e.delete) return text === null;
+    if (text === null) return false;
+    if (e.find === "") return true;
+    return text.includes(e.replace) && (e.replace.includes(e.find) || !text.includes(e.find));
+  });
+}
+
+/** The commit HEAD points at. */
+export function headCommit(root: string): string {
+  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+}
+
+/** A file as committed at HEAD, or null when HEAD doesn't have it. */
+function readHead(root: string, rel: string): string | null {
+  try {
+    return execFileSync("git", ["show", `HEAD:${rel}`], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
+  } catch {
+    // git show exits non-zero when HEAD has no such path.
+    return null;
+  }
+}
+
+/**
+ * On the base branch, mark pending fixes whose edits are already committed as merged in `pr`.
+ * Those shipped in a pull request Lens didn't see merge, so they'd otherwise sit in the next one.
+ */
+export async function markCommittedFixesMerged(root: string, pr: number): Promise<number> {
+  const heads = new Map<string, string | null>();
+  const read = (rel: string) => {
+    if (!heads.has(rel)) heads.set(rel, readHead(root, rel));
+    return heads.get(rel) ?? null;
+  };
+  let marked = 0;
+  for (const source of SOURCES) {
+    const rec = await loadRemediation(root, source);
+    const shipped = rec?.fixes.filter((f) => isPendingFix(f) && editsPresent(rec.edits[f.id] ?? [], read)) ?? [];
+    if (!rec || !shipped.length) continue;
+    for (const fix of shipped) fix.mergedIn = pr;
+    marked += shipped.length;
+    await writeJsonAtomic(remediationPath(root, source), rec, true);
+  }
+  return marked;
+}
+
 /**
  * Reopen the unmerged fixes a merge with the base threw out by taking the base's version of
  * `files`, so their items show Open again and the next Fix All retries them on the new base.

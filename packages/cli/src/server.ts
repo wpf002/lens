@@ -23,7 +23,7 @@ import { cloneOrUpdate, commitFilesAndPush, type ConflictResolver, type PullRequ
 import { MAX_TEST_REPAIRS, allowAnotherRepair, gateNeedsWork, recordRepairAttempt, repairItems, repairsLeft, saveRepairItems, type TestGate } from "./ci.js";
 import { grantCheckPermissions } from "./ci-permissions.js";
 import type { AppliedFix } from "./commit-text.js";
-import { FIX_SOURCES, SOURCES, appliedFixIds, applyFixes, discardFixesTouching, isPendingFix, loadRemediation, markFixesMerged, undoFix, undoFixesSince, type FixSource, type RemediationSource } from "./remediate.js";
+import { FIX_SOURCES, SOURCES, appliedFixIds, applyFixes, discardFixesTouching, isPendingFix, loadRemediation, headCommit, markCommittedFixesMerged, markFixesMerged, SHIPPED_OUTSIDE_LENS, undoFix, undoFixesSince, type FixSource, type RemediationSource } from "./remediate.js";
 import { loadLayoutPlan, reopenLayoutArea, usableMoves } from "./layout-plan.js";
 import { EnrichRunner, followFileMoves, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, remediateBudget, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import { TestsBroken } from "./local-tests.js";
@@ -163,6 +163,15 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
     const job = enrich.start("merge", root, estimateCost("remediate", files.length).limit, { conflicts: { files, base } });
     while (job.state === "running") await sleep(JOB_POLL_MS);
     if (job.state !== "done") throw new Error(job.error ?? `the conflict run ${job.state}`);
+  };
+  const shippedChecks = new Set<string>();
+  /** Look for already-committed pending fixes once per base commit; the check reads every pending fix's files at HEAD. */
+  const markShippedOnce = async (root: string, pr: number) => {
+    const key = `${root}@${headCommit(root)}`;
+    if (shippedChecks.has(key)) return;
+    shippedChecks.add(key);
+    const marked = await markCommittedFixesMerged(root, pr);
+    if (marked) console.error(`[github] ${marked} pending fix(es) are already in the base branch; marked merged`);
   };
   const conflictTries = new Set<string>();
   /** GitHub can't merge the pull request: merge its base in and resolve the conflicts. Once per head commit. */
@@ -561,6 +570,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         const st = repoName(proj.root) ? await pushState(proj.root) : null;
         // A pull request merged on GitHub, or before Lens recorded merges, still ships its fixes.
         if (st?.pr?.state === "merged") await markFixesMerged(proj.root, st.pr.number, await uncommittedPaths(proj.root));
+        if (repoName(proj.root) && !st?.branch) await markShippedOnce(proj.root, st?.pr?.number ?? SHIPPED_OUTSIDE_LENS);
         const tests = st?.pr?.state === "open" ? st.pr.tests : undefined;
         if (tests && gateNeedsWork(tests)) void watchTests(proj.root);
         if (st?.pr?.state === "open" && st.pr.conflicts && !st.dirty && !enrich.running && !prLock.label) void resolvePrConflicts(proj.root, st.pr);
