@@ -372,7 +372,8 @@ export function HealthView() {
     const counts = { high: 0, medium: 0, low: 0 };
     const open: ScoreGroup[] = [];
     for (const c of checks) {
-      const hits = Math.max(0, c.count - checkHitIds(c).filter((id) => closed.has(id)).length);
+      const ids = checkHitIds(c);
+      const hits = Math.max(0, Math.max(c.count, ids.length) - ids.filter((id) => closed.has(id)).length);
       counts[c.severity] += hits;
       open.push({ severity: c.severity, open: hits });
     }

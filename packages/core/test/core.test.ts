@@ -288,6 +288,19 @@ describe("code health", () => {
     expect(graph.health!.score).toBeLessThan(100);
   });
 
+  // Regression: hits past 40 per check were dropped, so Fix All could never fix them and they stayed Open.
+  it("stores every hit a check counts", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-many-hits-"));
+    await fs.mkdir(path.join(dir, "src"));
+    await fs.writeFile(path.join(dir, "package.json"), JSON.stringify({ name: "m" }));
+    const lines = Array.from({ length: 60 }, (_, i) => `  console.log(${i});`).join("\n");
+    await fs.writeFile(path.join(dir, "src/index.ts"), `export function main() {\n${lines}\n}\n`);
+    const { graph } = await scanProject(dir, { full: true });
+    const debug = graph.health!.checks.find((c) => c.id === "debug-leftovers")!;
+    expect(debug.count).toBe(60);
+    expect(debug.hits).toHaveLength(60);
+  });
+
   // Regression: a route file's register function and each long handler inside it were separate rows.
   it("reports one oversized row per file, naming its longest function", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-oversized-"));

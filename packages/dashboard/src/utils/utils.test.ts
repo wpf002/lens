@@ -407,4 +407,9 @@ describe("issue tallies", () => {
     const finding = tallyItems(1, [{ kind: "safe", reason: "test only" }]);
     expect(sumTallies([check, finding])).toEqual({ open: 51, asking: 1, closed: 3 });
   });
+
+  // Regression: Copy-Pasted Functions counts groups but stores each copy, so fixing one of two copies showed the row as done.
+  it("counts every stored hit when a check stores more hits than its count", () => {
+    expect(tallyItems(1, [{ kind: "fixed", label: "Fixed" }, { kind: "open" }])).toEqual({ open: 1, asking: 0, closed: 1 });
+  });
 });

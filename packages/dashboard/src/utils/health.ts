@@ -30,9 +30,10 @@ export type Tally = { open: number; asking: number; closed: number };
 
 export const needsYou = (st: ItemStatus): boolean => st.kind === "open" && !!st.reason;
 
+/** A check can store more hits than its count (duplicates counts groups, stores each copy), so items are the larger of the two. */
 export function tallyItems(count: number, states: ItemStatus[]): Tally {
   const closed = states.filter((st) => st.kind !== "open").length;
-  return { open: Math.max(0, count - closed), asking: states.filter(needsYou).length, closed };
+  return { open: Math.max(0, Math.max(count, states.length) - closed), asking: states.filter(needsYou).length, closed };
 }
 
 export const sumTallies = (tallies: Tally[]): Tally =>

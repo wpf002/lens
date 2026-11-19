@@ -1,7 +1,8 @@
 /** Constants and helpers every health check shares. */
 import type { HealthHit } from "./health.js";
 
-export const MAX_HITS = 40;
+/** High enough to keep every hit: Fix All can only fix hits the graph stores, and a lower cap left the rest Open with no way to fix them. */
+export const MAX_HITS = 2000;
 export const CODE_LANGS = new Set(["typescript", "tsx", "javascript", "python", "go", "rust", "java", "kotlin", "ruby", "php", "csharp", "swift", "dart"]);
 export const JS_LANGS = new Set(["typescript", "tsx", "javascript"]);
 export const ENTRY_RE = /(^|\/)(src\/)?(index|main|app|server|cli|__main__|__init__|manage|wsgi|asgi|program|Application|conftest|setup|vite\.config|next\.config|tailwind\.config|postcss\.config|eslint\.config|vitest\.config|jest\.config)\.[a-z]+$/i;
