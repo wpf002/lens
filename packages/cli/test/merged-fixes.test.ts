@@ -90,6 +90,33 @@ describe("fixes after a merge", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("keeps only the unshipped fix pending when a shipped one shares its file", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-merged-"));
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: root });
+    git("init", "-q", "-b", "main");
+    await fs.writeFile(path.join(root, ".gitignore"), ".lens\n");
+    await fs.writeFile(path.join(root, "a.ts"), "one\ntwo\nthree\nfour\nfive\n");
+    git("add", "-A");
+    git("commit", "-qm", "init");
+    const fixFile = async (source: "health" | "review", text: string) => {
+      const ws = await makeWorkspace(root);
+      await fs.writeFile(path.join(ws, "a.ts"), text);
+      const { data } = await collectChanges(root, ws, { fixes: [{ itemId: source, title: source, explanation: "x", files: ["a.ts"] }], skipped: [] });
+      const rec = buildRecord(root, source, data, 0, undefined, "t");
+      await writeJsonAtomic(remediationPath(root, source), rec);
+      await fs.rm(ws, { recursive: true, force: true });
+      await applyFixes(root, source, [rec.fixes[0]!.id]);
+    };
+    await fixFile("health", "ONE\ntwo\nthree\nfour\nfive\n");
+    git("commit", "-qam", "Lens fixes (#24)");
+    await fixFile("review", "ONE\ntwo\nthree\nfour\nFIVE\n");
+
+    expect(await markCommittedFixesMerged(root, 0, "HEAD")).toBe(1);
+    expect((await loadRemediation(root, "health"))!.fixes.filter(isPendingFix)).toHaveLength(0);
+    expect((await loadRemediation(root, "review"))!.fixes.filter(isPendingFix)).toHaveLength(1);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
   it("keeps merged fixes out of the next pull request and Undo", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-merged-"));
     await fs.writeFile(path.join(root, "a.ts"), "a\n");
