@@ -250,7 +250,7 @@ async function mergeLatestBase(root: string, branch: string, base: string, resol
  */
 async function stageAll(root: string): Promise<void> {
   await git(root, ["add", "-A"]);
-  await git(root, ["reset", "-q", "--", ".lens"]).catch(() => undefined);
+  await git(root, ["reset", "-q", "--", ".lens"]);
 }
 
 const CONFLICT_MARKER = /^(<<<<<<<|>>>>>>>)( |$)/m;
