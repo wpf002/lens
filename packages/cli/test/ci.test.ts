@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { paths, writeJsonAtomic } from "@lens/core";
-import { MAX_TEST_REPAIRS, allowAnotherRepair, compareRuns, errorExcerpt, failedTests, gateNeedsWork, noChecksState, repairItems, runsOnPullRequests, staleBaseRuns, testWatchStep, type TestGate } from "../src/ci.js";
+import { MAX_TEST_REPAIRS, allowAnotherRepair, compareRuns, errorExcerpt, failedTests, gateNeedsWork, noChecksState, repairItems, runsOnPullRequests, staleBaseRuns, testWatchStep, waitForBase, type TestGate } from "../src/ci.js";
 import { mergeBlock } from "../src/cloud.js";
 
 const PYTEST_LOG = [
@@ -118,5 +118,13 @@ describe("test watcher", () => {
     expect(testWatchStep(gate("new", "broken"), "old")).toBe("repair");
     expect(testWatchStep(gate("new", "passed"), "old")).toBe("stop");
     expect(testWatchStep(gate("new", "running"), "old")).toBe("wait");
+  });
+});
+
+describe("base comparison", () => {
+  it("waits while the base commit's run of a failed check is still going, so its failure isn't blamed on the pull request", () => {
+    expect(waitForBase([{ status: "in_progress" }], undefined, 0)).toBe(true);
+    expect(waitForBase([{ status: "completed" }], undefined, 0)).toBe(false);
+    expect(waitForBase([{ status: "in_progress" }], 0, 24 * 60 * 60_000)).toBe(false);
   });
 });

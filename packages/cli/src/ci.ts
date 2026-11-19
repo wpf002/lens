@@ -205,6 +205,15 @@ export interface GateInput {
   pushedAt?: number;
 }
 
+/**
+ * Whether to hold the verdict until the base commit's runs of the failed checks finish. A failure still running on the base
+ * would otherwise count as Lens breaking it. Re-runs Lens requested get BASE_RERUN_WAIT_MS before comparing without them.
+ */
+export function waitForBase(baseRuns: Array<{ status: string }>, requested: number | undefined, now: number): boolean {
+  if (!baseRuns.some((r) => r.status !== "completed")) return false;
+  return requested === undefined || now - requested < BASE_RERUN_WAIT_MS;
+}
+
 /** Test results for the PR's head commit. Finished results are cached per commit. */
 export async function testGate(root: string, input: GateInput, now = Date.now()): Promise<TestGate> {
   const saved = await readJson<TestGate>(gatePath(root));
@@ -224,8 +233,7 @@ export async function testGate(root: string, input: GateInput, now = Date.now())
   const failedNames = new Set(head.filter((r) => r.failed).map((r) => r.name));
   const allBase = failedNames.size ? (await checkRuns(input.repo, input.baseSha).catch(() => [])).filter((r) => failedNames.has(r.name)) : [];
   const requested = saved?.pr === input.pr && saved.sha === input.headSha ? saved.baseRerunAt : undefined;
-  // Re-runs requested for this head commit are still going.
-  if (requested && now - requested < BASE_RERUN_WAIT_MS && allBase.some((r) => r.status !== "completed")) return base;
+  if (waitForBase(allBase, requested, now)) return base;
   const baseRuns = allBase.filter((r) => r.status === "completed");
   const before = await Promise.all(baseRuns.map((r) => runResult(input.repo, r)));
   const { broken, preexisting } = compareRuns(head, before);
