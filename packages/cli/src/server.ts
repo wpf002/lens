@@ -19,11 +19,11 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { authorizeUrl, configureGithubApp, disconnectGithub, ensureGithubLoaded, finishOAuth, githubAppMode, githubConnected, githubLogin, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
 import { PrBusy, PrLock } from "./pr-lock.js";
-import { cloneOrUpdate, commitFilesAndPush, type ConflictResolver, type PullRequest, createPullRequest, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, syncBeforeFixing, takeDroppedFiles, uncommittedPaths, type PushInfo } from "./cloud.js";
+import { cloneOrUpdate, commitFilesAndPush, type ConflictResolver, type PullRequest, createPullRequest, fetchBaseCommit, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, syncBeforeFixing, takeDroppedFiles, uncommittedPaths, type PushInfo } from "./cloud.js";
 import { MAX_TEST_REPAIRS, allowAnotherRepair, gateNeedsWork, recordRepairAttempt, repairItems, repairsLeft, saveRepairItems, type TestGate } from "./ci.js";
 import { grantCheckPermissions } from "./ci-permissions.js";
 import type { AppliedFix } from "./commit-text.js";
-import { FIX_SOURCES, SOURCES, appliedFixIds, applyFixes, discardFixesTouching, isPendingFix, loadRemediation, headCommit, markCommittedFixesMerged, markFixesMerged, SHIPPED_OUTSIDE_LENS, undoFix, undoFixesSince, type FixSource, type RemediationSource } from "./remediate.js";
+import { FIX_SOURCES, SOURCES, appliedFixIds, applyFixes, discardFixesTouching, isPendingFix, loadRemediation, markCommittedFixesMerged, markFixesMerged, SHIPPED_OUTSIDE_LENS, undoFix, undoFixesSince, type FixSource, type RemediationSource } from "./remediate.js";
 import { loadLayoutPlan, reopenLayoutArea, usableMoves } from "./layout-plan.js";
 import { EnrichRunner, followFileMoves, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, remediateBudget, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import { TestsBroken } from "./local-tests.js";
@@ -46,6 +46,7 @@ const MAX_FILE_BYTES = 2_000_000;
 /** How often the test watcher asks GitHub about a pull request's CI. */
 const TEST_POLL_MS = 30_000;
 const JOB_POLL_MS = 5_000;
+const BASE_FETCH_INTERVAL_MS = 5 * 60_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 
@@ -165,12 +166,16 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
     if (job.state !== "done") throw new Error(job.error ?? `the conflict run ${job.state}`);
   };
   const shippedChecks = new Set<string>();
-  /** Look for already-committed pending fixes once per base commit; the check reads every pending fix's files at HEAD. */
+  const lastBaseFetch = new Map<string, number>();
+  /** Look for pending fixes already in the latest base, once per base commit. The dashboard polls this, so the fetch is throttled. */
   const markShippedOnce = async (root: string, pr: number) => {
-    const key = `${root}@${headCommit(root)}`;
+    if (Date.now() - (lastBaseFetch.get(root) ?? 0) < BASE_FETCH_INTERVAL_MS) return;
+    lastBaseFetch.set(root, Date.now());
+    const base = await fetchBaseCommit(root);
+    const key = `${root}@${base}`;
     if (shippedChecks.has(key)) return;
     shippedChecks.add(key);
-    const marked = await markCommittedFixesMerged(root, pr);
+    const marked = await markCommittedFixesMerged(root, pr, base);
     if (marked) console.error(`[github] ${marked} pending fix(es) are already in the base branch; marked merged`);
   };
   const conflictTries = new Set<string>();
@@ -570,7 +575,9 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         const st = repoName(proj.root) ? await pushState(proj.root) : null;
         // A pull request merged on GitHub, or before Lens recorded merges, still ships its fixes.
         if (st?.pr?.state === "merged") await markFixesMerged(proj.root, st.pr.number, await uncommittedPaths(proj.root));
-        if (repoName(proj.root) && !st?.branch) await markShippedOnce(proj.root, st?.pr?.number ?? SHIPPED_OUTSIDE_LENS);
+        if (repoName(proj.root) && !st?.branch) await markShippedOnce(proj.root, st?.pr?.number ?? SHIPPED_OUTSIDE_LENS).catch((e: unknown) => {
+          console.error(`[github] couldn't check the base for shipped fixes: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+        });
         const tests = st?.pr?.state === "open" ? st.pr.tests : undefined;
         if (tests && gateNeedsWork(tests)) void watchTests(proj.root);
         if (st?.pr?.state === "open" && st.pr.conflicts && !st.dirty && !enrich.running && !prLock.label) void resolvePrConflicts(proj.root, st.pr);

@@ -23,7 +23,7 @@ async function proposeTwoFixes(root: string): Promise<[string, string]> {
 }
 
 describe("fixes after a merge", () => {
-  it("marks pending fixes already committed on the base branch as merged, and keeps uncommitted ones pending", async () => {
+  it("marks pending fixes already in the latest base as merged even when HEAD is behind it, and keeps the rest pending", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-merged-"));
     const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: root });
     git("init", "-q", "-b", "main");
@@ -36,8 +36,11 @@ describe("fixes after a merge", () => {
     await applyFixes(root, "health", [first, second]);
     git("add", "a.ts");
     git("commit", "-qm", "Lens fixes (#24)");
+    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+    git("reset", "-q", "--soft", "HEAD~1");
 
-    expect(await markCommittedFixesMerged(root, 0)).toBe(1);
+    expect(await markCommittedFixesMerged(root, 0, "HEAD")).toBe(0);
+    expect(await markCommittedFixesMerged(root, 0, base)).toBe(1);
     const fixes = (await loadRemediation(root, "health"))!.fixes;
     expect(fixes.filter(isPendingFix).map((f) => f.id)).toEqual([second]);
     await fs.rm(root, { recursive: true, force: true });

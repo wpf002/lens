@@ -632,6 +632,12 @@ export async function syncBeforeFixing(root: string): Promise<boolean> {
   return (await git(root, ["rev-parse", "HEAD"])) !== before;
 }
 
+/** Fetch the base branch and return its latest commit. */
+export async function fetchBaseCommit(root: string): Promise<string> {
+  await git(root, ["fetch", "-q", "--no-tags", "origin", await baseBranch(root)]);
+  return git(root, ["rev-parse", "FETCH_HEAD"]);
+}
+
 /** Commit every change outside .lens on the current branch and return the commit. */
 async function carryCommit(root: string): Promise<string> {
   await stageAll(root);

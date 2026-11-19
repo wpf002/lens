@@ -325,28 +325,25 @@ export function editsPresent(edits: Edits, read: (rel: string) => string | null)
 }
 
 /** The commit HEAD points at. */
-export function headCommit(root: string): string {
-  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-}
-
-/** A file as committed at HEAD, or null when HEAD doesn't have it. */
-function readHead(root: string, rel: string): string | null {
+/** A file as committed at `ref`, or null when `ref` doesn't have it. */
+function readAtRef(root: string, ref: string, rel: string): string | null {
   try {
-    return execFileSync("git", ["show", `HEAD:${rel}`], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
+    return execFileSync("git", ["show", `${ref}:${rel}`], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
   } catch {
-    // git show exits non-zero when HEAD has no such path.
+    // git show exits non-zero when the commit has no such path.
     return null;
   }
 }
 
 /**
- * On the base branch, mark pending fixes whose edits are already committed as merged in `pr`.
+ * Mark pending fixes whose edits are already in the base commit `ref` as merged in `pr`.
  * Those shipped in a pull request Lens didn't see merge, so they'd otherwise sit in the next one.
+ * `ref` is the fetched base, not HEAD: a tree holding pending fixes never moves to the latest base.
  */
-export async function markCommittedFixesMerged(root: string, pr: number): Promise<number> {
+export async function markCommittedFixesMerged(root: string, pr: number, ref: string): Promise<number> {
   const heads = new Map<string, string | null>();
   const read = (rel: string) => {
-    if (!heads.has(rel)) heads.set(rel, readHead(root, rel));
+    if (!heads.has(rel)) heads.set(rel, readAtRef(root, ref, rel));
     return heads.get(rel) ?? null;
   };
   let marked = 0;
