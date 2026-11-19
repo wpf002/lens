@@ -173,8 +173,7 @@ export async function pushFixes(root: string, fixes: AppliedFix[] = [], resolveC
   const tests = await checkLocalTests(root);
   if (tests.state === "broken") throw new TestsBroken(tests);
   if (tests.state === "skipped") console.error(`[tests] not run before push: ${tests.reason}`);
-  await git(root, ["add", "-A"]);
-  await git(root, ["reset", "-q", "--", ".lens"]).catch(() => undefined);
+  await stageAll(root);
   const changed = await stagedPaths(root);
   const files = changed.length;
   let branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -245,6 +244,15 @@ async function mergeLatestBase(root: string, branch: string, base: string, resol
   if ((await git(root, ["rev-parse", "HEAD"])) !== before) await pushWithRetry(root, branch);
 }
 
+/**
+ * Stage every change outside .lens. A `:(exclude).lens` pathspec can't do this: when the repo
+ * gitignores .lens, git add names it as an ignored path and exits 1, which aborted every merge.
+ */
+async function stageAll(root: string): Promise<void> {
+  await git(root, ["add", "-A"]);
+  await git(root, ["reset", "-q", "--", ".lens"]).catch(() => undefined);
+}
+
 const CONFLICT_MARKER = /^(<<<<<<<|>>>>>>>)( |$)/m;
 
 /**
@@ -272,7 +280,7 @@ async function finishMerge(root: string, base: string, resolveConflicts: Conflic
     await git(root, ["checkout", "--theirs", "--", lock]);
     regenerateLockfile(root, lockTargetOf(lock)!);
   }
-  await git(root, ["add", "-A", "--", ".", ":(exclude).lens"]);
+  await stageAll(root);
   return gateMerge(root, base, marked);
 }
 
@@ -328,7 +336,7 @@ export async function findCulprits(files: string[], passes: (reverted: string[])
 async function revertFrom(root: string, snapshot: string, files: string[]): Promise<void> {
   await git(root, ["read-tree", "-u", "--reset", snapshot]);
   await takeBaseVersion(root, files);
-  await git(root, ["add", "-A", "--", ".", ":(exclude).lens"]);
+  await stageAll(root);
 }
 
 /** Fix files whose base version makes the staged merge pass, for failures that name no changed file. */
@@ -369,7 +377,7 @@ async function gateMerge(root: string, base: string, dropped: string[]): Promise
     if (!culprits?.length) return new TestsBroken(tests).message;
     console.error(`[tests] merge with ${base} broke ${culprits.join(", ").slice(0, 300)}; taking ${base}'s version`);
     await takeBaseVersion(root, culprits);
-    await git(root, ["add", "-A", "--", ".", ":(exclude).lens"]);
+    await stageAll(root);
     dropped.push(...culprits);
   }
 }
@@ -626,8 +634,7 @@ export async function syncBeforeFixing(root: string): Promise<boolean> {
 
 /** Commit every change outside .lens on the current branch and return the commit. */
 async function carryCommit(root: string): Promise<string> {
-  await git(root, ["add", "-A"]);
-  await git(root, ["reset", "-q", "--", ".lens"]).catch(() => undefined);
+  await stageAll(root);
   await git(root, ["-c", "user.name=Lens", "-c", "user.email=lens@localhost", "commit", "-q", "--no-verify", "-m", "Carry uncommitted fixes"]);
   return git(root, ["rev-parse", "HEAD"]);
 }

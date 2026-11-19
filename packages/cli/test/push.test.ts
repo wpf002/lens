@@ -215,6 +215,22 @@ describe("pushFixes", () => {
     await fs.rm(tmp, { recursive: true, force: true });
   });
 
+  it("resolves conflicts with the base when the repo gitignores .lens", async () => {
+    const { tmp, remote, root } = await fixesBranchBehindMain({ file: "a.js", content: "main\n" });
+    await fs.appendFile(path.join(root, ".git/info/exclude"), ".lens\n");
+    await fs.mkdir(path.join(root, ".lens"));
+    await fs.writeFile(path.join(root, ".lens/graph.json"), "{}\n");
+    await fs.writeFile(path.join(root, "c.js"), "3\n");
+
+    const { branch } = await pushFixes(root, [], async (dir) => {
+      await fs.writeFile(path.join(dir, "a.js"), "main and 2\n");
+    });
+
+    expect(run(remote, "show", `${branch}:a.js`)).toBe("main and 2");
+    expect(run(remote, "merge-base", "--is-ancestor", "main", branch)).toBe("");
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
   it("takes the base's version of files the resolver leaves conflicted and keeps the other fixes", async () => {
     const { tmp, remote, root } = await fixesBranchBehindMain({ file: "a.js", content: "main\n" });
     await fs.writeFile(path.join(root, "c.js"), "3\n");
