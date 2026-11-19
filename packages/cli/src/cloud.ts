@@ -86,6 +86,25 @@ function scrub(msg: string): string {
   return out.slice(0, 300);
 }
 
+/**
+ * Run `update` with the tracked files under .lens set back to HEAD, then put the local copies back.
+ * Repos that commit .lens otherwise refuse every merge or checkout of the base, and the local copy is the newer scan.
+ */
+async function withLensFilesAside<T>(root: string, update: () => Promise<T>): Promise<T> {
+  const changed = (await git(root, ["diff", "--name-only", "HEAD", "--", ".lens"])).split("\n").filter(Boolean);
+  const saved = await Promise.all(changed.map(async (rel) => ({ rel, content: existsSync(path.join(root, rel)) ? await fs.readFile(path.join(root, rel)) : null })));
+  if (changed.length) await git(root, ["checkout", "HEAD", "--", ...changed]);
+  try {
+    return await update();
+  } finally {
+    for (const { rel, content } of saved) {
+      const abs = path.join(root, rel);
+      if (content === null) await fs.rm(abs, { force: true });
+      else await fs.mkdir(path.dirname(abs), { recursive: true }).then(() => fs.writeFile(abs, content));
+    }
+  }
+}
+
 /** Clone the repo, or fast-forward it when the working tree is clean. Returns its folder. */
 export async function cloneOrUpdate(workspace: string, r: RepoRef): Promise<string> {
   const dir = repoDir(workspace, r);
@@ -99,7 +118,11 @@ export async function cloneOrUpdate(workspace: string, r: RepoRef): Promise<stri
   }
   const dirty = await git(dir, ["status", "--porcelain", "--", ".", ":(exclude).lens"]);
   const branch = await git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "");
-  if (!dirty && !(await isFixesBranch(dir, branch))) await git(dir, ["pull", "--ff-only", "--no-tags"]).catch(() => undefined);
+  if (!dirty && !(await isFixesBranch(dir, branch))) {
+    await withLensFilesAside(dir, () => git(dir, ["pull", "--ff-only", "--no-tags"])).catch((e: unknown) =>
+      console.error(`[github] couldn't update ${r.owner}/${r.name}: ${e instanceof Error ? e.message.slice(0, 200) : e}`),
+    );
+  }
   return dir;
 }
 
@@ -226,21 +249,23 @@ async function mergeLatestBase(root: string, branch: string, base: string, resol
   const author = await authorIdentity(root);
   const identity = ["-c", `user.name=${author.name}`, "-c", `user.email=${author.email}`];
   const before = await git(root, ["rev-parse", "HEAD"]);
-  try {
-    await git(root, [...identity, "merge", "-q", "--no-edit", "FETCH_HEAD"]);
-  } catch (e) {
-    const conflict = e instanceof Error ? e.message.slice(0, 200) : String(e);
-    const unresolved = resolveConflicts ? await finishMerge(root, base, resolveConflicts).catch((err: unknown) => (err instanceof Error ? err.message : String(err))) : conflict;
-    if (unresolved) {
-      await git(root, ["merge", "--abort"]).catch((abortError: unknown) =>
-        console.error(`[github] merge --abort failed on ${branch}: ${abortError instanceof Error ? abortError.message.slice(0, 200) : abortError}`),
-      );
-      console.error(`[github] ${branch} conflicts with ${base}: ${unresolved.slice(0, 300)}`);
-      return;
+  await withLensFilesAside(root, async () => {
+    try {
+      await git(root, [...identity, "merge", "-q", "--no-edit", "FETCH_HEAD"]);
+    } catch (e) {
+      const conflict = e instanceof Error ? e.message.slice(0, 200) : String(e);
+      const unresolved = resolveConflicts ? await finishMerge(root, base, resolveConflicts).catch((err: unknown) => (err instanceof Error ? err.message : String(err))) : conflict;
+      if (unresolved) {
+        await git(root, ["merge", "--abort"]).catch((abortError: unknown) =>
+          console.error(`[github] merge --abort failed on ${branch}: ${abortError instanceof Error ? abortError.message.slice(0, 200) : abortError}`),
+        );
+        console.error(`[github] ${branch} conflicts with ${base}: ${unresolved.slice(0, 300)}`);
+        return;
+      }
+      await git(root, [...identity, "commit", "-q", "--no-edit"]);
+      console.error(`[github] resolved ${branch}'s conflicts with ${base}`);
     }
-    await git(root, [...identity, "commit", "-q", "--no-edit"]);
-    console.error(`[github] resolved ${branch}'s conflicts with ${base}`);
-  }
+  });
   if ((await git(root, ["rev-parse", "HEAD"])) !== before) await pushWithRetry(root, branch);
 }
 
@@ -628,7 +653,7 @@ export async function syncBeforeFixing(root: string): Promise<boolean> {
   if ((await git(root, ["rev-parse", "--abbrev-ref", "HEAD"])) !== base) return false;
   const before = await git(root, ["rev-parse", "HEAD"]);
   await git(root, ["fetch", "-q", "--no-tags", "origin", base]);
-  await git(root, ["merge", "-q", "--ff-only", "FETCH_HEAD"]);
+  await withLensFilesAside(root, () => git(root, ["merge", "-q", "--ff-only", "FETCH_HEAD"]));
   return (await git(root, ["rev-parse", "HEAD"])) !== before;
 }
 
@@ -671,7 +696,7 @@ export async function restartFromBase(root: string, old: string): Promise<void> 
   const carried = dirty ? await carryCommit(root) : null;
   try {
     await git(root, ["fetch", "-q", "--no-tags", "origin", base]);
-    await git(root, ["checkout", "-q", "-B", base, "FETCH_HEAD"]);
+    await withLensFilesAside(root, () => git(root, ["checkout", "-q", "-B", base, "FETCH_HEAD"]));
   } catch (e) {
     await git(root, ["checkout", "-q", "-f", old]);
     if (carried) await git(root, ["reset", "-q", "HEAD~1"]);
@@ -722,8 +747,10 @@ export async function mergePullRequest(root: string): Promise<PullRequest> {
   await githubApi(`/repos/${r.owner}/${r.name}/pulls/${pr.number}/merge`, "PUT", { merge_method: "squash" });
   await githubApi(`/repos/${r.owner}/${r.name}/git/refs/heads/${branch.split("/").map(encodeURIComponent).join("/")}`, "DELETE").catch(() => undefined);
   const base = await baseBranch(root);
-  await git(root, ["checkout", base]);
-  await git(root, ["pull", "--ff-only", "--no-tags", "origin", base]);
+  await withLensFilesAside(root, async () => {
+    await git(root, ["checkout", base]);
+    await git(root, ["pull", "--ff-only", "--no-tags", "origin", base]);
+  });
   await git(root, ["branch", "-D", branch]).catch(() => undefined);
   await forgetBranch(root, branch);
   const mergedAt = new Date().toISOString();

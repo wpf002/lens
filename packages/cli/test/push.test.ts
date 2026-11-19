@@ -438,6 +438,30 @@ describe("syncBeforeFixing", () => {
     await fs.rm(tmp, { recursive: true, force: true });
   });
 
+  it("updates a repo that commits .lens, keeping the local scan", async () => {
+    const { tmp, remote, root } = await behindMain();
+    await fs.mkdir(path.join(root, ".lens"));
+    await fs.writeFile(path.join(root, ".lens/meta.json"), "committed\n");
+    run(root, "add", "-A");
+    run(root, "commit", "-qm", "lens");
+    run(root, "push", "-q", "origin", "HEAD:refs/heads/side");
+    const other = path.join(tmp, "other");
+    run(other, "pull", "-q", "origin", "main");
+    run(other, "fetch", "-q", "origin", "side");
+    run(other, "merge", "-q", "--no-edit", "FETCH_HEAD");
+    await fs.writeFile(path.join(other, ".lens/meta.json"), "from main\n");
+    run(other, "commit", "-qam", "main scan");
+    run(other, "push", "-q", "origin", "HEAD:main");
+    await fs.writeFile(path.join(root, ".lens/meta.json"), "local scan\n");
+
+    expect(await syncBeforeFixing(root)).toBe(true);
+
+    expect(run(root, "rev-parse", "HEAD")).toBe(run(remote, "rev-parse", "main"));
+    expect(await fs.readFile(path.join(root, "a.js"), "utf8")).toBe("main\n");
+    expect(await fs.readFile(path.join(root, ".lens/meta.json"), "utf8")).toBe("local scan\n");
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
   it("leaves unpushed fixes where they are", async () => {
     const { tmp, root } = await behindMain();
     const head = run(root, "rev-parse", "HEAD");
