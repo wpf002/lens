@@ -5,7 +5,7 @@ import path from "node:path";
 import { writeJsonAtomic } from "@lens/core";
 import { applyFixes, remediationPath, undoFix, type RemediationRecord } from "../src/remediate.js";
 
-async function projectWithFix(onDisk: string): Promise<string> {
+async function projectWithFix(onDisk: string, edit = { find: "export const x = 1;", replace: "export const x = 2;" }): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-landed-"));
   await fs.writeFile(path.join(root, "a.ts"), onDisk);
   const record: RemediationRecord = {
@@ -13,7 +13,7 @@ async function projectWithFix(onDisk: string): Promise<string> {
     source: "review",
     fixes: [{ id: "f1", itemId: "review-1", title: "Use 2", explanation: "", files: [{ path: "a.ts", diff: "", created: false }], status: "undone" }],
     skipped: [],
-    edits: { f1: [{ path: "a.ts", find: "export const x = 1;", replace: "export const x = 2;" }] },
+    edits: { f1: [{ path: "a.ts", ...edit }] },
   };
   await writeJsonAtomic(remediationPath(root, "review"), record);
   return root;
@@ -42,6 +42,13 @@ describe("Apply on a fix that's already in the code", () => {
   it("refuses a fix when the file matches neither the original nor the fixed text", async () => {
     const root = await projectWithFix("export const x = 3;\n");
     expect((await applyFixes(root, "review", ["f1"])).failed).toHaveLength(1);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("applies a deletion whose kept text is already on disk", async () => {
+    const root = await projectWithFix("export const x = 1;\nconst BROKEN = true;\n", { find: "export const x = 1;\nconst BROKEN = true;\n", replace: "export const x = 1;\n" });
+    expect((await applyFixes(root, "review", ["f1"])).applied).toEqual(["f1"]);
+    expect(await fs.readFile(path.join(root, "a.ts"), "utf8")).toBe("export const x = 1;\n");
     await fs.rm(root, { recursive: true, force: true });
   });
 });

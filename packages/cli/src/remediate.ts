@@ -117,6 +117,8 @@ export function contentBeforeApplied(root: string, edits: Edits): Map<string, st
       continue;
     }
     if (text === null || text.split(e.replace).length - 1 !== 1) return null;
+    // A deletion's replace is part of its find, so the find still on disk means it hasn't landed.
+    if (text.includes(e.find) && !e.replace.includes(e.find)) return null;
     before.set(e.path, text.replace(e.replace, () => e.find));
   }
   try {

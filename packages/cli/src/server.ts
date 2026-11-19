@@ -17,6 +17,7 @@ import { promises as fs, statSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 import { authorizeUrl, disconnectGithub, ensureGithubLoaded, finishOAuth, githubAppMode, githubConnected, githubLogin, listGithubRepos, oauthAvailable } from "./github.js";
 import { PrBusy, PrLock } from "./pr-lock.js";
 import { cloneOrUpdate, commitFilesAndPush, type ConflictResolver, type PullRequest, createPullRequest, fetchBaseCommit, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, syncBeforeFixing, takeDroppedFiles, uncommittedPaths, type PushInfo } from "./cloud.js";
@@ -43,10 +44,12 @@ export interface ServeOptions {
 }
 
 const MAX_FILE_BYTES = 2_000_000;
+/** LENS_POLL_MS replaces the three intervals below so tests can drive the whole pull request loop in seconds. */
+const pollOverrideMs = process.env.LENS_POLL_MS === undefined ? undefined : z.coerce.number().int().positive().parse(process.env.LENS_POLL_MS);
 /** How often the test watcher asks GitHub about a pull request's CI. */
-const TEST_POLL_MS = 30_000;
-const JOB_POLL_MS = 5_000;
-const BASE_FETCH_INTERVAL_MS = 5 * 60_000;
+const TEST_POLL_MS = pollOverrideMs ?? 30_000;
+const JOB_POLL_MS = pollOverrideMs ?? 5_000;
+const BASE_FETCH_INTERVAL_MS = pollOverrideMs ?? 5 * 60_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 

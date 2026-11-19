@@ -170,6 +170,9 @@ export async function authorIdentity(root: string): Promise<GitIdentity> {
   throw new Error("No commit author for this repo. Connect GitHub or set git user.name and user.email.");
 }
 
+/** The origin URL as configured. `git remote get-url` applies url.insteadOf rewrites, which hide the GitHub repo name. */
+const originUrl = (root: string) => gitConfig(root, "remote.origin.url");
+
 const baseBranch = async (root: string) => (await git(root, ["config", "--get", "lens.base"]).catch(() => "")) || "main";
 
 async function commit(root: string, message: string): Promise<void> {
@@ -217,7 +220,7 @@ export async function pushFixes(root: string, fixes: AppliedFix[] = [], resolveC
   branch = pushed.branch;
   const dropped = pushed.dropped;
   await mergeLatestBase(root, branch, base, resolveConflicts);
-  const origin = await git(root, ["remote", "get-url", "origin"]).catch(() => "");
+  const origin = await originUrl(root);
   const r = parseRepo(origin);
   return { branch, compareUrl: r ? `https://github.com/${r.owner}/${r.name}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}?expand=1` : null, files: files - dropped };
 }
@@ -548,7 +551,7 @@ export interface PushInfo {
 }
 
 async function repoOf(root: string): Promise<RepoRef> {
-  const r = parseRepo(await git(root, ["remote", "get-url", "origin"]).catch(() => ""));
+  const r = parseRepo(await originUrl(root));
   if (!r) throw new Error("This project isn't a GitHub repo.");
   return r;
 }
