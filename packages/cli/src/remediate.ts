@@ -312,19 +312,6 @@ export async function markFixesMerged(root: string, pr: number, uncommitted: Rea
 /** `mergedIn` for fixes found in the base branch when Lens doesn't know which pull request shipped them. */
 export const SHIPPED_OUTSIDE_LENS = 0;
 
-/** Whether every edit's result is in `read`'s version of the code: replacements in, their old text out, created files there, deleted files gone. */
-export function editsPresent(edits: Edits, read: (rel: string) => string | null): boolean {
-  if (!edits.length) return false;
-  return edits.every((e) => {
-    const text = read(e.path);
-    if (e.delete) return text === null;
-    if (text === null) return false;
-    if (e.find === "") return true;
-    return text.includes(e.replace) && (e.replace.includes(e.find) || !text.includes(e.find));
-  });
-}
-
-/** The commit HEAD points at. */
 /** A file as committed at `ref`, or null when `ref` doesn't have it. */
 function readAtRef(root: string, ref: string, rel: string): string | null {
   try {
@@ -335,21 +322,87 @@ function readAtRef(root: string, ref: string, rel: string): string | null {
   }
 }
 
+/** A zero-context change from base: base lines [start, start + count) become `added`. With count 0 it inserts before `start`. */
+interface LineChange {
+  start: number;
+  count: number;
+  added: string[];
+}
+
+/** The zero-context changes `git diff` finds from `before` to `after`. */
+function lineChanges(before: string, after: string): LineChange[] {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "lens-line-diff-"));
+  try {
+    const a = path.join(dir, "a");
+    const b = path.join(dir, "b");
+    writeFileSync(a, before);
+    writeFileSync(b, after);
+    let out = "";
+    try {
+      out = execFileSync("git", ["diff", "--no-index", "--no-color", "-U0", a, b], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    } catch (e) {
+      // git diff --no-index exits 1 when the files differ; the diff is still on stdout.
+      out = String((e as { stdout?: string }).stdout ?? "");
+    }
+    const changes: LineChange[] = [];
+    for (const line of out.split("\n")) {
+      const hunk = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/.exec(line);
+      if (hunk) {
+        const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
+        changes.push({ start: count === 0 ? Number(hunk[1]) : Number(hunk[1]) - 1, count, added: [] });
+      } else if (line.startsWith("+") && !line.startsWith("+++") && changes.length) {
+        changes[changes.length - 1]!.added.push(line.slice(1));
+      }
+    }
+    return changes;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const containsRun = (lines: string[], run: string[]) =>
+  run.length === 0 || lines.some((_, i) => run.every((line, j) => lines[i + j] === line));
+
+/** Whether `theirs` makes `change` too: it replaces every base line the change replaces, and adds the change's lines there. */
+function changeIn(change: LineChange, theirs: LineChange[]): boolean {
+  const end = change.start + change.count;
+  const near = theirs.filter((t) => t.start <= end && change.start <= t.start + t.count);
+  for (let line = change.start; line < end; line++) {
+    if (!near.some((t) => t.start <= line && line < t.start + t.count)) return false;
+  }
+  return (change.count > 0 || near.length > 0) && containsRun(near.flatMap((t) => t.added), change.added);
+}
+
 /**
- * Mark pending fixes whose edits are already in the base commit `ref` as merged in `pr`.
+ * Whether the working tree's `rel` adds nothing to the commit `ref`: every change it makes to HEAD's version, `ref` makes too.
+ * Exact text and patch checks fail once later base commits or later fixes touch nearby lines; this compares changes line by line.
+ */
+function fileInRef(root: string, ref: string, rel: string): boolean {
+  const abs = path.join(root, rel);
+  const ours = existsSync(abs) ? readFileSync(abs, "utf8") : null;
+  const theirs = readAtRef(root, ref, rel);
+  if (ours === theirs) return true;
+  if (ours === null || theirs === null) return false;
+  const base = readAtRef(root, "HEAD", rel) ?? "";
+  const theirChanges = lineChanges(base, theirs);
+  return lineChanges(base, ours).every((change) => changeIn(change, theirChanges));
+}
+
+/**
+ * Mark pending fixes the base commit `ref` already has as merged in `pr`: a pull request would add nothing for them.
  * Those shipped in a pull request Lens didn't see merge, so they'd otherwise sit in the next one.
  * `ref` is the fetched base, not HEAD: a tree holding pending fixes never moves to the latest base.
  */
 export async function markCommittedFixesMerged(root: string, pr: number, ref: string): Promise<number> {
-  const heads = new Map<string, string | null>();
-  const read = (rel: string) => {
-    if (!heads.has(rel)) heads.set(rel, readAtRef(root, ref, rel));
-    return heads.get(rel) ?? null;
+  const checked = new Map<string, boolean>();
+  const shippedFile = (rel: string) => {
+    if (!checked.has(rel)) checked.set(rel, fileInRef(root, ref, rel));
+    return checked.get(rel)!;
   };
   let marked = 0;
   for (const source of SOURCES) {
     const rec = await loadRemediation(root, source);
-    const shipped = rec?.fixes.filter((f) => isPendingFix(f) && editsPresent(rec.edits[f.id] ?? [], read)) ?? [];
+    const shipped = rec?.fixes.filter((f) => isPendingFix(f) && (f.files ?? []).length > 0 && f.files.every((file) => shippedFile(file.path))) ?? [];
     if (!rec || !shipped.length) continue;
     for (const fix of shipped) fix.mergedIn = pr;
     marked += shipped.length;

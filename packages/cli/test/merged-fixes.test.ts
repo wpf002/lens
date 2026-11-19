@@ -46,6 +46,50 @@ describe("fixes after a merge", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("finds a fix in the base when the line it moved still appears there", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-merged-"));
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: root });
+    git("init", "-q", "-b", "main");
+    await fs.writeFile(path.join(root, ".gitignore"), ".lens\n");
+    await fs.writeFile(path.join(root, "main.py"), "import a\nimport b\n\nload()\n\nrun()\n");
+    git("add", "-A");
+    git("commit", "-qm", "init");
+    const ws = await makeWorkspace(root);
+    await fs.writeFile(path.join(ws, "main.py"), "load()\n\nimport a\nimport b\n\nrun()\n");
+    const { data } = await collectChanges(root, ws, { fixes: [{ itemId: "one", title: "Move load", explanation: "x", files: ["main.py"] }], skipped: [] });
+    const rec = buildRecord(root, "health", data, 0, undefined, "t");
+    await writeJsonAtomic(remediationPath(root, "health"), rec);
+    await fs.rm(ws, { recursive: true, force: true });
+    await applyFixes(root, "health", [rec.fixes[0]!.id]);
+    git("commit", "-qam", "Lens fixes (#24)");
+
+    expect(await markCommittedFixesMerged(root, 0, "HEAD")).toBe(1);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("finds a fix in the base after later base commits changed lines next to it", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-merged-"));
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: root });
+    git("init", "-q", "-b", "main");
+    await fs.writeFile(path.join(root, ".gitignore"), ".lens\n");
+    await fs.writeFile(path.join(root, "a.ts"), "one\ntwo\nthree\nfour\n");
+    await fs.writeFile(path.join(root, "b.ts"), "b\n");
+    git("add", "-A");
+    git("commit", "-qm", "init");
+    const [first] = await proposeTwoFixes(root);
+    await applyFixes(root, "health", [first]);
+    const fixed = await fs.readFile(path.join(root, "a.ts"), "utf8");
+    git("stash", "-q");
+    await fs.writeFile(path.join(root, "a.ts"), fixed + "later\n");
+    git("commit", "-qam", "Lens fixes (#24) and a later change");
+    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+    git("reset", "-q", "--hard", "HEAD~1");
+    git("stash", "pop", "-q");
+
+    expect(await markCommittedFixesMerged(root, 0, base)).toBe(1);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
   it("keeps merged fixes out of the next pull request and Undo", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-merged-"));
     await fs.writeFile(path.join(root, "a.ts"), "a\n");
