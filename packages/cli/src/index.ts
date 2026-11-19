@@ -16,6 +16,7 @@ import { startServer, dashboardHtmlPath } from "./server.js";
 import { markVerifiedSafe } from "./enrich.js";
 import { ProbeCommandError, askYesNo, runProbeCommand } from "./probe.js";
 import { cloneOrUpdate, parseRepo, reposDir, sessionToken } from "./cloud.js";
+import { configureGithubApp, loadGithub } from "./github.js";
 import { fileURLToPath } from "node:url";
 
 const VERSION = "0.1.0";
@@ -229,6 +230,10 @@ program
     const login = username && password ? { username, password } : null;
     if (!login) log(pc.yellow("LENS_USERNAME and LENS_PASSWORD aren't set; nobody can sign in."));
     if (password && password.length < 12) fail("LENS_PASSWORD must be at least 12 characters.");
+
+    // Cloning and pulling the repo below need GitHub auth loaded first.
+    configureGithubApp();
+    await loadGithub(workspace);
 
     // Last repo opened, then LENS_REPO, then the bundled demo app.
     const wanted = [(await fs.readFile(path.join(workspace, "last-repo"), "utf8").catch(() => "")).trim(), process.env.LENS_REPO ?? ""];

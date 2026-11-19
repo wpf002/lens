@@ -17,7 +17,7 @@ import { promises as fs, statSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { authorizeUrl, configureGithubApp, disconnectGithub, ensureGithubLoaded, finishOAuth, githubAppMode, githubConnected, githubLogin, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
+import { authorizeUrl, disconnectGithub, ensureGithubLoaded, finishOAuth, githubAppMode, githubConnected, githubLogin, listGithubRepos, oauthAvailable } from "./github.js";
 import { PrBusy, PrLock } from "./pr-lock.js";
 import { cloneOrUpdate, commitFilesAndPush, type ConflictResolver, type PullRequest, createPullRequest, fetchBaseCommit, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, syncBeforeFixing, takeDroppedFiles, uncommittedPaths, type PushInfo } from "./cloud.js";
 import { MAX_TEST_REPAIRS, allowAnotherRepair, gateNeedsWork, recordRepairAttempt, repairItems, repairsLeft, saveRepairItems, testWatchStep, type TestGate } from "./ci.js";
@@ -109,11 +109,6 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
     const parts = rel.split(path.sep);
     return parts.length === 2 && !rel.startsWith("..") ? parts.join("/") : null;
   };
-  // Opening a project can fetch git history, which needs GitHub auth loaded first.
-  if (opts.cloud) {
-    configureGithubApp();
-    await loadGithub(opts.cloud.workspace);
-  }
   let proj = await loadProject(opts.root, opts.graphFile);
 
   /** Rescan a graph saved by an older Lens build once, so changed checks show without reopening the project. */
