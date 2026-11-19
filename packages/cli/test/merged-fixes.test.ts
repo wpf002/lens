@@ -117,6 +117,27 @@ describe("fixes after a merge", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("finds a fix committed at HEAD in a base that later changed its lines", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-merged-"));
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: root });
+    git("init", "-q", "-b", "main");
+    await fs.writeFile(path.join(root, ".gitignore"), ".lens\n");
+    await fs.writeFile(path.join(root, "a.ts"), "a\n");
+    await fs.writeFile(path.join(root, "b.ts"), "b\n");
+    git("add", "-A");
+    git("commit", "-qm", "init");
+    const [first] = await proposeTwoFixes(root);
+    await applyFixes(root, "health", [first]);
+    git("commit", "-qam", "Lens fixes (#24)");
+    await fs.writeFile(path.join(root, "a.ts"), "fixed one, then reworded\n");
+    git("commit", "-qam", "later change");
+    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+    git("reset", "-q", "--hard", "HEAD~1");
+
+    expect(await markCommittedFixesMerged(root, 0, base)).toBe(1);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
   it("keeps merged fixes out of the next pull request and Undo", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-merged-"));
     await fs.writeFile(path.join(root, "a.ts"), "a\n");

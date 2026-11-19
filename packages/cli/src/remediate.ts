@@ -347,18 +347,24 @@ function addedLines(before: string, after: string): Set<string> {
 const fixAddedLines = (diff: string) =>
   diff.split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++") && l.slice(1).trim()).map((l) => l.slice(1));
 
-/** What a pull request from the working tree to `ref` would change in `rel`: whether it differs, and the lines it adds. */
+/** The unshipped part of the working tree's `rel`: whether it has any, and the lines it adds over both HEAD and `ref`. */
 interface FileChange {
   differs: boolean;
   added: Set<string>;
 }
 
+/**
+ * HEAD can trail `ref`, so lines the tree adds over `ref` alone include old text later base commits replaced.
+ * A line is unshipped only when the tree adds it over HEAD too.
+ */
 function changeToRef(root: string, ref: string, rel: string): FileChange {
   const abs = path.join(root, rel);
   const ours = existsSync(abs) ? readFileSync(abs, "utf8") : null;
   const theirs = readAtRef(root, ref, rel);
-  if (ours === theirs) return { differs: false, added: new Set() };
-  return { differs: true, added: addedLines(theirs ?? "", ours ?? "") };
+  const head = readAtRef(root, "HEAD", rel);
+  if (ours === theirs || ours === head) return { differs: false, added: new Set() };
+  const overHead = addedLines(head ?? "", ours ?? "");
+  return { differs: true, added: new Set([...addedLines(theirs ?? "", ours ?? "")].filter((line) => overHead.has(line))) };
 }
 
 /**
