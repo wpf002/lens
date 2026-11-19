@@ -295,4 +295,13 @@ export async function loadRepairItems(root: string): Promise<RepairItem[]> {
 export const gateNeedsWork = (gate: TestGate) =>
   gate.state === "running" || (gate.state === "broken" && (repairsLeft(gate) || gate.broken.some((b) => !!b.permissions?.length)));
 
+/**
+ * What the test watcher does with this gate. Right after a repair is pushed, GitHub can still report the old head commit,
+ * whose broken result would start another repair on failures the pushed one already fixed. Wait until the gate is for a newer commit.
+ */
+export function testWatchStep(gate: TestGate, repairedSha?: string): "wait" | "repair" | "stop" {
+  if (gate.state === "running" || gate.sha === repairedSha) return "wait";
+  return gate.state === "broken" ? "repair" : "stop";
+}
+
 export const brokenCount = (gate: TestGate) => gate.broken.reduce((n, b) => n + Math.max(1, b.tests.length), 0);

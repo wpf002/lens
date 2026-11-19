@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { paths, writeJsonAtomic } from "@lens/core";
-import { MAX_TEST_REPAIRS, allowAnotherRepair, compareRuns, errorExcerpt, failedTests, gateNeedsWork, noChecksState, repairItems, runsOnPullRequests, staleBaseRuns, type TestGate } from "../src/ci.js";
+import { MAX_TEST_REPAIRS, allowAnotherRepair, compareRuns, errorExcerpt, failedTests, gateNeedsWork, noChecksState, repairItems, runsOnPullRequests, staleBaseRuns, testWatchStep, type TestGate } from "../src/ci.js";
 import { mergeBlock } from "../src/cloud.js";
 
 const PYTEST_LOG = [
@@ -107,5 +107,16 @@ describe("test gate", () => {
     expect(gateNeedsWork(saved)).toBe(true);
     expect(await allowAnotherRepair(root, 19)).toBe(false);
     expect(repairItems(saved, [])[0]?.evidence.join("\n")).toMatch(/2 earlier repair attempts/);
+  });
+});
+
+describe("test watcher", () => {
+  const gate = (sha: string, state: TestGate["state"]): TestGate => ({ pr: 27, sha, state, broken: [], preexisting: 0, attempts: 1, version: 2 });
+
+  it("waits for CI on the pushed repair instead of repairing the old commit's failures again", () => {
+    expect(testWatchStep(gate("old", "broken"), "old")).toBe("wait");
+    expect(testWatchStep(gate("new", "broken"), "old")).toBe("repair");
+    expect(testWatchStep(gate("new", "passed"), "old")).toBe("stop");
+    expect(testWatchStep(gate("new", "running"), "old")).toBe("wait");
   });
 });

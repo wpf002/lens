@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { authorizeUrl, configureGithubApp, disconnectGithub, ensureGithubLoaded, finishOAuth, githubAppMode, githubConnected, githubLogin, listGithubRepos, loadGithub, oauthAvailable } from "./github.js";
 import { PrBusy, PrLock } from "./pr-lock.js";
 import { cloneOrUpdate, commitFilesAndPush, type ConflictResolver, type PullRequest, createPullRequest, fetchBaseCommit, fixesPatch, listRepos, mergePullRequest, parseRepo, pullRequestFiles, pushFixes, pushPending, pushState, reposDir, syncBeforeFixing, takeDroppedFiles, uncommittedPaths, type PushInfo } from "./cloud.js";
-import { MAX_TEST_REPAIRS, allowAnotherRepair, gateNeedsWork, recordRepairAttempt, repairItems, repairsLeft, saveRepairItems, type TestGate } from "./ci.js";
+import { MAX_TEST_REPAIRS, allowAnotherRepair, gateNeedsWork, recordRepairAttempt, repairItems, repairsLeft, saveRepairItems, testWatchStep, type TestGate } from "./ci.js";
 import { grantCheckPermissions } from "./ci-permissions.js";
 import type { AppliedFix } from "./commit-text.js";
 import { FIX_SOURCES, SOURCES, appliedFixIds, applyFixes, discardFixesTouching, isPendingFix, loadRemediation, markCommittedFixesMerged, markFixesMerged, SHIPPED_OUTSIDE_LENS, undoFix, undoFixesSince, type FixSource, type RemediationSource } from "./remediate.js";
@@ -217,6 +217,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
   const watchTests = async (root: string) => {
     if (watchingTests === root) return;
     watchingTests = root;
+    let repairedSha: string | undefined;
     try {
       while (proj.root === root) {
         if (enrich.running) {
@@ -226,11 +227,12 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         const st = await pushState(root);
         const gate = st?.pr?.state === "open" ? st.pr.tests : undefined;
         if (!gate || st?.dirty) return;
-        if (gate.state === "running") {
+        const step = testWatchStep(gate, repairedSha);
+        if (step === "wait") {
           await sleep(TEST_POLL_MS);
           continue;
         }
-        if (gate.state !== "broken") return;
+        if (step === "stop") return;
         if (await grantRefusedPermissions(root, gate)) continue;
         if (!repairsLeft(gate)) return;
         const authProblem = await checkClaudeAuth();
@@ -265,6 +267,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
           return true;
         });
         if (!repaired) return;
+        repairedSha = gate.sha;
       }
     } catch (e) {
       console.error(`[tests] ${e instanceof Error ? e.message : e}`);
