@@ -589,6 +589,53 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
     }
   });
 
+  // Regression: items a shared batch left out were marked "Lens couldn't fix this." without ever getting a run of their own.
+  it("Remediate retries items a shared batch leaves out one at a time before calling them unfixable", async () => {
+    const fake = path.join(os.tmpdir(), `fake-partial-${process.pid}.mjs`);
+    const runs = path.join(os.tmpdir(), `fake-partial-runs-${process.pid}.jsonl`);
+    await fs.rm(runs, { force: true });
+    await fs.writeFile(fake, `#!/usr/bin/env node
+import fs from "node:fs";
+const prompt = process.argv[process.argv.indexOf("-p") + 1];
+const get = (k) => new RegExp(k + ": (.+)").exec(prompt)?.[1].trim();
+if (get("Findings path")) fs.writeFileSync(get("Findings path"), JSON.stringify({ findings: [] }));
+else {
+  const items = JSON.parse(fs.readFileSync(get("Items"), "utf8")).items;
+  fs.appendFileSync(${JSON.stringify(runs)}, JSON.stringify(items.map((i) => i.id)) + "\\n");
+  const ws = get("Project copy \\\\(edit files here\\\\)");
+  const answered = items.length > 1 ? items.slice(0, 1) : items;
+  const fixes = answered.map((i, n) => {
+    const file = "PARTIAL_" + Date.now() + "_" + n + ".md";
+    fs.writeFileSync(ws + "/" + file, "# Fixed " + i.id + "\\n");
+    return { itemId: i.id, title: "Add note", explanation: "Adds a note.", files: [file] };
+  });
+  fs.writeFileSync(get("Report path"), JSON.stringify({ fixes, skipped: [] }));
+}
+console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, total_cost_usd: 0.01 }));
+`);
+    await fs.chmod(fake, 0o755);
+    process.env.LENS_CLAUDE_BIN = fake;
+    try {
+      expect((await post(`${base}/api/enrich/remediate`, { source: "health" }, auth())).status).toBe(202);
+      let job: { state: string; error?: string } = { state: "running" };
+      for (let i = 0; i < 600 && job.state === "running"; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        job = JSON.parse((await get(`${base}/api/enrich/status`, auth())).body);
+      }
+      expect(job.error).toBeUndefined();
+      const sent: string[][] = (await fs.readFile(runs, "utf8")).trim().split("\n").map((l) => JSON.parse(l));
+      const shared = sent.find((ids) => ids.length > 1);
+      expect(shared).toBeDefined();
+      const alone = new Set(sent.filter((ids) => ids.length === 1).map((ids) => ids[0]));
+      expect(shared!.slice(1).every((id) => alone.has(id))).toBe(true);
+      const rec = JSON.parse((await get(`${base}/api/remediation`, auth())).body).records.health;
+      const unfixable = rec.skipped.filter((x: { itemId: string; reason: string }) => shared!.includes(x.itemId) && x.reason === "Lens couldn't fix this.");
+      expect(unfixable).toEqual([]);
+    } finally {
+      delete process.env.LENS_CLAUDE_BIN;
+    }
+  }, 40_000);
+
   it("Remediate settles review findings that an older record claims fixed, and rows it never sends", async () => {
     const fake = path.join(os.tmpdir(), `fake-stale-${process.pid}.mjs`);
     await fs.writeFile(fake, `#!/usr/bin/env node

@@ -1319,7 +1319,14 @@ export class EnrichRunner {
           for (const id of retry) retried.add(id);
           await writeJsonAtomic(remediationPath(root, source), merged, true);
         }
-        markUnaddressed(merged, items.map((i) => i.id).filter((id) => !retry.has(id)));
+        const dropped = items.length > 1 ? droppedItems(rec, items).filter((id) => !retry.has(id)) : [];
+        if (dropped.length) this.push(job, `Batch ${batch} left out ${dropped.length} issues. Retrying them one at a time`);
+        for (const i of items) {
+          if (!dropped.includes(i.id)) continue;
+          alone.add(i.id);
+          tried.delete(key(i));
+        }
+        markUnaddressed(merged, items.map((i) => i.id).filter((id) => !retry.has(id) && !dropped.includes(id)));
       });
     };
     // One pass over every untried open item: up to FIX_ALL_CONCURRENCY batches at once, none sharing a file.
@@ -1665,6 +1672,12 @@ export function pickFixBatch<T extends { id: string; evidence: string[] }>(left:
   if (running.some((i) => isRefactorItem(i.id) || alone.has(i.id))) return [];
   const busyFiles = new Set(running.map(itemFile));
   return nextFixBatch(left.filter((i) => !busyFiles.has(itemFile(i))));
+}
+
+/** Items a batch's report neither fixed nor skipped. In a shared batch these get a run of their own before Lens gives up on them. */
+export function droppedItems(rec: Pick<RemediationRecord, "fixes" | "skipped">, items: Array<{ id: string }>): string[] {
+  const answered = new Set([...rec.fixes.map((f) => f.itemId), ...rec.skipped.map((x) => x.itemId)]);
+  return items.map((i) => i.id).filter((id) => !answered.has(id));
 }
 
 export function nextFixBatch<T extends { id: string }>(left: T[]): T[] {
