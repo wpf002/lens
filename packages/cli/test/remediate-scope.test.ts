@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { paths, scanAndSave } from "@lens/core";
-import { countFixRuns, fixAllPlan, fixPrompt, nextFixBatch, pickFixBatch, remediationItems, REFACTOR_CHECKS, SAME_CHECK_BATCH, setWontFix } from "../src/enrich.js";
+import { countFixRuns, fixAllPlan, fixPrompt, nextFixBatch, buildFixPrompt, pickFixBatch, remediationItems, reviewPath, REFACTOR_CHECKS, SAME_CHECK_BATCH, setWontFix } from "../src/enrich.js";
 import { itemRate, recordFixCost } from "../src/fix-costs.js";
 
 const FIX = path.resolve(__dirname, "../../core/test/fixtures/vuln-app");
@@ -41,6 +41,16 @@ describe("Remediate scope", () => {
     expect(prompt.split("\n").filter((l) => /^\d+\. /.test(l))).toHaveLength(items.length);
     expect(prompt).toContain("app.js 900 lines");
     expect(prompt).toContain("Fix: Split it.");
+  });
+
+  it("puts the files waiting for review ahead of the open items", async () => {
+    const saved = await buildFixPrompt(dir, "health");
+    expect(saved.reviewFiles).toBeGreaterThan(0);
+    const review = saved.prompt.indexOf("## Step 1: Review");
+    const fix = saved.prompt.indexOf("## Step 2: Fix");
+    expect(review).toBeGreaterThan(-1);
+    expect(fix).toBeGreaterThan(review);
+    expect(saved.prompt.slice(review, fix).split("\n").filter((l) => l.startsWith("- "))).toHaveLength(saved.reviewFiles);
   });
 
   it("prices refactors on top of batch fixes", async () => {
@@ -138,5 +148,26 @@ describe("countFixRuns", () => {
   it("counts each item marked to run alone as its own run", () => {
     const items = hits("swallowed-errors", 6);
     expect(countFixRuns(items, new Set(items.slice(0, 2).map((i) => i.id)))).toBe(3);
+  });
+});
+
+// Beza's remediation.json predates per-source files: its "review-2" meant the second high or medium finding.
+describe("Copy Prompt with a legacy review record", () => {
+  let dir: string;
+  const finding = (title: string, severity: string) => ({ title, severity, path: "a.ts", line: 1, detail: title, fix: "Fix it." });
+
+  beforeAll(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-legacy-"));
+    await fs.mkdir(paths(dir).dir, { recursive: true });
+    const at = "2026-10-23T15:10:00.000Z";
+    await fs.writeFile(reviewPath(dir), JSON.stringify({ generatedAt: at, stableSince: at, findings: [finding("First", "high"), finding("Second", "high"), finding("Third", "low")] }));
+    const fixes = ["review-1", "review-2"].map((itemId, k) => ({ id: `fix-${k}`, itemId, title: itemId, explanation: "", status: "applied" }));
+    await fs.writeFile(path.join(paths(dir).dir, "remediation.json"), JSON.stringify({ source: "review", generatedAt: "2026-10-23T15:14:00.000Z", fixes, skipped: [] }));
+  });
+  afterAll(async () => fs.rm(dir, { recursive: true, force: true }));
+
+  it("keeps the open low finding the Health tab still shows", async () => {
+    const items = await remediationItems(dir, "health", undefined, Infinity);
+    expect(items.map((i) => i.title)).toEqual(["Third"]);
   });
 });

@@ -192,25 +192,27 @@ export function Remediation({ source }: { source: Source }) {
       ? `${plan.first === "audit" ? "Audit, Then Fix" : plan.first === "review" ? "Review, Then Fix" : `Fix ${plan.items} Issue${plan.items === 1 ? "" : "s"}`}`
       : source === "review" ? "Fix Review Findings" : `Fix ${batch} ${checkTitle ?? "Hits"}`;
     return (
-      <div className={cx(box, "flex flex-wrap items-center gap-2 px-3 py-2.5 text-muted")}>
-        <span className="min-w-0 flex-1">
-          <span className="text-fg">{label}</span> · {costRange(estimates[source])}
-        </span>
-        <Button size="sm" variant="ghost" onClick={() => useStore.setState({ remediateConfirm: null })}>
-          Cancel
-        </Button>
-        {plan && <CopyFixPrompt source={source as "audit" | "health"} disabled={!plan.items} />}
-        <Button
-          size="sm"
-          variant="accent"
-          autoFocus
-          onClick={() => {
-            useStore.setState({ remediateConfirm: null });
-            void run("remediate", { source, checkId: confirm.checkId });
-          }}
-        >
-          Fix
-        </Button>
+      <div className={cx(box, "text-muted")}>
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2.5">
+          <span className="min-w-0 flex-1">
+            <span className="text-fg">{label}</span> · {costRange(estimates[source])}
+          </span>
+          <Button size="sm" variant="ghost" onClick={() => useStore.setState({ remediateConfirm: null })}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            variant="accent"
+            autoFocus
+            onClick={() => {
+              useStore.setState({ remediateConfirm: null });
+              void run("remediate", { source, checkId: confirm.checkId });
+            }}
+          >
+            Fix
+          </Button>
+        </div>
+        {plan && (plan.items > 0 || plan.first === "review") && <FixPromptPreview source={source as "audit" | "health"} />}
       </div>
     );
   }
@@ -353,28 +355,53 @@ export function Remediation({ source }: { source: Source }) {
 export const SAFE = /^(scanner was wrong|already (safe|hardened|handled|fixed))\b/i;
 const SAFE_PREFIX = /^scanner was wrong[:.,]?\s*/i;
 
-/** Live row for a running fix job: count and time lead, batch detail sits under the bar. */
-/** Copies every open item as one Claude Code prompt, so the owner can fix them on their own plan instead of a paid run. */
-function CopyFixPrompt({ source, disabled }: { source: "audit" | "health"; disabled: boolean }) {
-  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
-  const copy = async () => {
+const COPIED_MS = 4000;
+
+type PromptState = { state: "loading" } | { state: "error"; message: string } | { state: "ready"; prompt: string; items: number; reviewFiles: number };
+
+/** The Remediate run as one Claude Code prompt (review the pending files, then fix every open item), shown in full so the owner can read it before copying it to run on their own plan. */
+function FixPromptPreview({ source }: { source: "audit" | "health" }) {
+  const [loaded, setLoaded] = useState<PromptState>({ state: "loading" });
+  const [copied, setCopied] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    fetchFixPrompt(source).then(
+      (p) => live && setLoaded({ state: "ready", ...p }),
+      (e: unknown) => live && setLoaded({ state: "error", message: e instanceof Error ? e.message : String(e) }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [source]);
+  const copy = async (prompt: string) => {
     try {
-      const { prompt } = await fetchFixPrompt(source);
       await navigator.clipboard.writeText(prompt);
-      setState("copied");
+      setCopied("Copied");
     } catch (e) {
       console.error("Copy failed", e);
-      setState("failed");
+      setCopied("Copy Failed");
     }
-    setTimeout(() => setState("idle"), 2000);
+    setTimeout(() => setCopied(null), COPIED_MS);
   };
   return (
-    <Button size="sm" variant="ghost" disabled={disabled} title={disabled ? "Nothing found yet. Run Remediate first." : "Paste into Claude Code"} onClick={() => void copy()}>
-      {state === "copied" ? "Copied" : state === "failed" ? "Copy Failed" : "Copy Prompt"}
-    </Button>
+    <div className="border-t border-line">
+      <div className="flex items-center gap-2 px-3 py-2">
+        <span className="min-w-0 flex-1">
+          <span className="text-fg">Prompt</span>
+          {loaded.state === "ready" && ` · ${loaded.reviewFiles ? `${loaded.reviewFiles} Files + ` : ""}${loaded.items} Issues`}
+        </span>
+        {loaded.state === "loading" && <Spinner size={14} />}
+        <Button size="sm" variant="ghost" disabled={loaded.state !== "ready"} title="Paste into Claude Code" onClick={() => loaded.state === "ready" && void copy(loaded.prompt)}>
+          {copied ?? "Copy Prompt"}
+        </Button>
+      </div>
+      {loaded.state === "error" && <p className="px-3 pb-2.5 text-critical">{loaded.message}</p>}
+      {loaded.state === "ready" && <pre className="max-h-96 overflow-auto whitespace-pre-wrap border-t border-line px-3 py-2.5 font-mono text-[11px] leading-relaxed text-fg">{loaded.prompt}</pre>}
+    </div>
   );
 }
 
+/** Live row for a running fix job: count and time lead, batch detail sits under the bar. */
 function FixProgress() {
   const job = useStore((s) => s.enrichJob);
   const cancel = useStore((s) => s.cancelAI);

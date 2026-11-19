@@ -1477,12 +1477,27 @@ async function saveReview(root: string, record: ReviewRecord): Promise<void> {
 }
 
 /** Review findings Lens fixed or found already safe, and the owner's Won't Fix keys. */
+/**
+ * The remediation record with review ids as the review numbers them now.
+ * A record written before per-source files numbered review fixes from 1 over the high and medium findings only.
+ */
+export async function remediationRecord(root: string, source: RemediationSource): Promise<RemediationRecord | null> {
+  const rec = await loadRemediation(root, source);
+  if (!rec?.legacyIds || source !== "review") return rec;
+  const ids = (await remediationItems(root, "review")).map((i) => i.id);
+  const current = (itemId: string) => {
+    const legacy = /^review-(\d+)$/.exec(itemId);
+    return (legacy && ids[Number(legacy[1]) - 1]) || itemId;
+  };
+  return { ...rec, fixes: rec.fixes.map((f) => ({ ...f, itemId: current(f.itemId) })), skipped: rec.skipped.map((x) => ({ ...x, itemId: current(x.itemId) })) };
+}
+
 export async function reviewClosed(root: string): Promise<{ fixed: Set<number>; wontFix: Set<string> }> {
   const review = await readJson<ReviewRecord>(reviewPath(root));
   const since = review?.stableSince ?? review?.generatedAt;
   const fixed = new Set<number>();
   for (const source of ["review", "health"] as const) {
-    const rec = await loadRemediation(root, source);
+    const rec = await remediationRecord(root, source);
     if (!rec || !since || rec.generatedAt < since) continue;
     const ids = [...rec.fixes.filter((f) => f.status === "applied").map((f) => f.itemId), ...rec.skipped.filter((x) => ALREADY_SAFE.test(x.reason)).map((x) => x.itemId)];
     for (const id of ids) {
@@ -1493,11 +1508,16 @@ export async function reviewClosed(root: string): Promise<{ fixed: Set<number>; 
   return { fixed, wontFix: new Set(await loadWontFix(root)) };
 }
 
-/** Files waiting for review (new or changed since their last review) and what reviewing them costs. */
-export async function reviewPlan(root: string, graph?: KnowledgeGraph | null): Promise<{ files: number; batches: number; estimate: CostEstimate }> {
+/** Files new or changed since their last review. */
+async function pendingReviewFiles(root: string, graph?: KnowledgeGraph | null): Promise<ReviewFile[]> {
   const g = graph ?? (await loadGraph(root));
   const files = g ? reviewFiles(g) : [];
-  const pending = pendingReview(files, await hashFiles(root, files.map((f) => f.path)), await loadCoverage(root));
+  return pendingReview(files, await hashFiles(root, files.map((f) => f.path)), await loadCoverage(root));
+}
+
+/** Files waiting for review (new or changed since their last review) and what reviewing them costs. */
+export async function reviewPlan(root: string, graph?: KnowledgeGraph | null): Promise<{ files: number; batches: number; estimate: CostEstimate }> {
+  const pending = await pendingReviewFiles(root, graph);
   const batches = planBatches(pending).length;
   return { files: pending.length, batches, estimate: reviewEstimate(batches) };
 }
@@ -1694,15 +1714,41 @@ const FIX_PROMPT_INTRO: Record<"audit" | "health", string> = {
   audit: "Fix these security issues in this repo. Make real code changes. If one needs a decision from me or a change in a web console, ask or give me exact steps. Never print secret values. Run the tests after each fix and commit.",
 };
 
-/** A prompt the owner pastes into Claude Code to fix these items on their own plan instead of a paid Lens run. */
-export function fixPrompt(source: "audit" | "health", items: RemediationItem[]): string {
+const REVIEW_STEP_INTRO =
+  "Read each file below and look for real bugs: wrong logic, unhandled errors, lost or corrupted data, race conditions, security holes. Fix each one you find the same way.";
+
+/**
+ * A prompt the owner gives Claude Code to do a Remediate run on their own plan instead of a paid Lens run:
+ * review the files Lens hasn't reviewed yet, then fix every open item.
+ */
+export function fixPrompt(source: "audit" | "health", items: RemediationItem[], reviewPaths: string[] = []): string {
   const lines = items.map((item, i) => {
     const out = [`${i + 1}. ${item.title}`];
     for (const e of item.evidence) out.push(`   - ${e}`);
     if (item.fix) out.push(`   Fix: ${item.fix}`);
     return out.join("\n");
   });
-  return [FIX_PROMPT_INTRO[source], "", ...lines].join("\n");
+  if (!reviewPaths.length) return [FIX_PROMPT_INTRO[source], "", ...lines].join("\n");
+  return [
+    FIX_PROMPT_INTRO[source],
+    "",
+    `## Step 1: Review ${reviewPaths.length} file${reviewPaths.length === 1 ? "" : "s"}`,
+    "",
+    REVIEW_STEP_INTRO,
+    "",
+    ...reviewPaths.map((p) => `- ${p}`),
+    "",
+    `## Step 2: Fix ${items.length} open issue${items.length === 1 ? "" : "s"}`,
+    "",
+    ...lines,
+  ].join("\n");
+}
+
+/** The Remediate prompt for this project, with counts for the dashboard's confirmation. */
+export async function buildFixPrompt(root: string, source: "audit" | "health"): Promise<{ items: number; reviewFiles: number; prompt: string }> {
+  const items = await remediationItems(root, source, undefined, Infinity);
+  const reviewPaths = source === "health" ? (await pendingReviewFiles(root)).map((f) => f.path) : [];
+  return { items: items.length, reviewFiles: reviewPaths.length, prompt: fixPrompt(source, items, reviewPaths) };
 }
 
 

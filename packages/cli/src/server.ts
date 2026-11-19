@@ -26,7 +26,7 @@ import { grantCheckPermissions } from "./ci-permissions.js";
 import type { AppliedFix } from "./commit-text.js";
 import { FIX_SOURCES, SOURCES, appliedFixIds, applyFixes, discardFixesTouching, isPendingFix, loadRemediation, markCommittedFixesMerged, markFixesMerged, SHIPPED_OUTSIDE_LENS, undoFix, undoFixesSince, type FixSource, type RemediationSource } from "./remediate.js";
 import { loadLayoutPlan, reopenLayoutArea, usableMoves } from "./layout-plan.js";
-import { EnrichRunner, followFileMoves, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, fixPrompt, remediateBudget, remediateLimit, remediationItems, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
+import { EnrichRunner, followFileMoves, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, buildFixPrompt, remediateBudget, remediateLimit, remediationItems, remediationRecord, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import { TestsBroken } from "./local-tests.js";
 import {
   buildBatches, diffImpact, isGitRepo, loadGraph, madeByOtherBuild, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
@@ -490,22 +490,14 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         if (proj.graphFile) return send(res, 400, { error: "read-only graph" });
         const source = url.searchParams.get("source");
         if (source !== "audit" && source !== "health") return send(res, 400, { error: "source must be audit or health" });
-        const items = await remediationItems(proj.root, source, undefined, Infinity);
-        return send(res, 200, { items: items.length, prompt: fixPrompt(source, items) });
+        return send(res, 200, await buildFixPrompt(proj.root, source));
       }
       if (req.method === "GET" && url.pathname === "/api/remediation") {
         if (proj.graphFile) return send(res, 200, { remediation: null });
         // Edits stay server-side; the dashboard gets diffs.
         const records: Record<string, unknown> = {};
         for (const s of SOURCES) {
-          const rec = await loadRemediation(proj.root, s);
-          if (rec?.legacyIds && s === "review") {
-            const ids = (await remediationItems(proj.root, "review")).map((i) => i.id); // high/medium, in order
-            for (const f of rec.fixes) {
-              const k = /^review-(\d+)$/.exec(f.itemId);
-              if (k && ids[Number(k[1]) - 1]) f.itemId = ids[Number(k[1]) - 1]!;
-            }
-          }
+          const rec = await remediationRecord(proj.root, s);
           // Records written by older builds can lack files. Diffs load per fix from /api/remediation/fix; with hundreds of fixes they made this response megabytes.
           records[s] = rec && { ...rec, edits: undefined, legacyIds: undefined, fixes: rec.fixes.map((f) => ({ ...f, files: (f.files ?? []).map((file) => ({ ...file, diff: undefined })) })) };
         }
