@@ -20,7 +20,7 @@ function useElapsed(since?: number, running?: boolean): string {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
-/** Compact control under the "Written by Claude" bar in the Overview. */
+/** Compact control under the Summaries bar in the Overview. */
 export function SummarizeAI() {
   const model = useModel();
   const meta = useStore((s) => s.meta);
@@ -92,7 +92,7 @@ export function SummarizeAI() {
   const done = mine && job.state === "done" ? job.summaries : undefined;
   const failed = mine && job.state === "error";
   return (
-    <div className="mt-2 space-y-1 text-[11.5px]">
+    <div className="mt-3 space-y-1 text-[11.5px]">
       {failed && <p className="text-critical">{renderInlineCode(job.error ?? "The run failed.")}</p>}
       {done && done.files > 0 && (
         <p className="text-faint">
@@ -109,8 +109,7 @@ export function SummarizeAI() {
           className="inline-flex items-center gap-1.5 text-[12px] text-accent hover:underline disabled:opacity-50 disabled:hover:no-underline"
           onClick={() => setConfirming(true)}
         >
-          <Mascot size={14} /> {failed ? "Try Again" : done?.stoppedEarly ? "Continue Summarizing" : "Summarize with AI"}
-          <span className="text-muted">· {pending} file{pending === 1 ? "" : "s"}</span>
+          <Mascot size={14} /> {failed ? "Try Again" : done?.stoppedEarly ? "Continue Summarizing" : `Summarize ${pending} File${pending === 1 ? "" : "s"}`}
         </button>
       )}
     </div>

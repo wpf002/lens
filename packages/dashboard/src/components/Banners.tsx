@@ -40,7 +40,7 @@ export function Banners() {
           <span className="font-medium">{model.staleCount} summar{model.staleCount === 1 ? "y is" : "ies are"} out of date.</span>
           <span className="text-muted">
             {canEnrich ? (
-              " Use Summarize with AI in the Overview to refresh them."
+              " Use Summarize in the Overview to refresh them."
             ) : (
               <>
                 {" "}Run <code className="font-mono text-fg">/lens</code> in Claude Code to refresh them.

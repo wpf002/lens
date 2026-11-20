@@ -71,29 +71,32 @@ export function OverviewPanel() {
       </div>
 
       <Section title="Stats">
-        <dl className="grid grid-cols-4 gap-2">
+        <dl className="grid grid-cols-4 divide-x divide-line">
           {(
             [
               ["Files", stats.files],
               ["Nodes", stats.nodes],
               ["Edges", stats.edges],
-              ["LOC", stats.loc],
+              ["Lines", stats.loc],
             ] as const
           ).map(([k, v]) => (
-            <div key={k} className="rounded-md border border-line bg-panel-2 px-2 py-1.5">
-              <dt className="text-[10.5px] text-muted">{k}</dt>
-              <dd className="font-mono text-[15px] font-semibold tabular">{fmtNum(v)}</dd>
+            <div key={k} className="px-3 first:pl-0 last:pr-0">
+              <dt className="text-[10.5px] text-faint">{k}</dt>
+              <dd className="mt-0.5 font-mono text-[17px] font-semibold leading-none text-fg tabular">{fmtNum(v)}</dd>
             </div>
           ))}
         </dl>
-        <div className="mt-3">
-          <div className="mb-1 flex justify-between text-[11px] text-muted">
-            <span>
-              <span className="text-accent">●</span> Written by Claude {pct(stats.llm, stats.nodes)}
+        <div className="mt-4">
+          <div className="mb-1.5 flex items-baseline justify-between text-[11px]">
+            <span className="text-muted">Summaries</span>
+            <span className="flex gap-3 font-mono text-faint tabular">
+              <span>
+                <span className="text-accent">Claude</span> {pct(stats.llm, stats.nodes)}
+              </span>
+              <span>Auto {pct(stats.heuristic, stats.nodes)}</span>
             </span>
-            <span>Automatic {pct(stats.heuristic, stats.nodes)}</span>
           </div>
-          <div className="flex h-1.5 overflow-hidden rounded-full bg-raised" role="img" aria-label={`${pct(stats.llm, stats.nodes)} of summaries written by Claude`}>
+          <div className="flex h-1 overflow-hidden rounded-full bg-raised" role="img" aria-label={`${pct(stats.llm, stats.nodes)} of summaries written by Claude`}>
             <span className="bg-accent" style={{ width: pct(stats.llm, stats.nodes) }} />
           </div>
           <SummarizeAI />
