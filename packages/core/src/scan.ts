@@ -24,7 +24,7 @@ import { parseTsPaths, resolveImport, type ResolverContext } from "./resolve.js"
 import { fileNodeKind, isTestPath } from "./languages.js";
 import { detectEntryPoints, detectMounts, type EntryPoint, type Mount } from "./security/entrypoints.js";
 import { taintRegexFor } from "./security/rules.js";
-import { scanFile, finalizeSecurity, stripComments, type RawFinding } from "./security/analyze.js";
+import { scanFile, finalizeSecurity, stripComments, stripDocstrings, type RawFinding } from "./security/analyze.js";
 import type { FunctionSource } from "./security/taint.js";
 import {
   buildHeuristicLayers, buildHeuristicTour, detectFrameworks, fileComplexity, functionComplexity, heuristicLayer, isFileKind, listPreview,
@@ -214,7 +214,8 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
     if (r.structure && (r.f.lang.id === "typescript" || r.f.lang.id === "javascript")) r.mounts = detectMounts(r.src);
     if (r.structure) {
       // Detect routes on comment-stripped text so documentation examples don't become endpoints.
-      const clean = stripComments(r.src, r.f.lang.id);
+      const uncommented = stripComments(r.src, r.f.lang.id);
+      const clean = r.f.lang.id === "python" ? stripDocstrings(uncommented) : uncommented;
       r.entries = detectEntryPoints({ path: r.f.path, lang: r.f.lang.id, src: clean, lines: clean.split("\n"), symbols: r.structure.symbols }, frameworks);
     }
     if (!opts.noSecurity) {
@@ -483,6 +484,8 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
     const targets = new Set<string>();
     for (const e of edgeMap.values()) if (e.source === r.nodeId && e.kind === "imports" && !isTestPath(nodes.get(e.target)?.path ?? "")) targets.add(e.target);
     for (const cand of ctx.byStem.get(stem) ?? []) if (!isTestPath(cand)) targets.add(byPath.get(cand)!.nodeId);
+    const urls = requestedUrls(r.src);
+    if (urls.length) for (const route of recs) if (!isTestPath(route.f.path) && routeFileIsRequested(route.f.path, route.entries, urls)) targets.add(route.nodeId);
     for (const t of targets) addEdge(t, r.nodeId, "tested_by", "heuristic");
   }
 
@@ -684,6 +687,32 @@ function groupBy<T>(xs: T[], k: (x: T) => string): Map<string, T[]> {
 /** True when a saved codebase graph no longer matches the repo: another Lens build made it, or HEAD has moved since. */
 export function graphIsStale(graph: { kind: string; project: { scannerBuild?: string; gitCommit?: string } }, root: string): boolean {
   return madeByOtherBuild(graph) || (graph.kind === "codebase" && graph.project.gitCommit !== gitHead(root));
+}
+
+const URL_LITERAL = /["'`](\/[\w\-./{}$:]*)(?:\?[^"'`]*)?["'`]/g;
+const URL_PARAM = /\$?\{[^}]*\}/g;
+const ROUTE_PARAM = /\\\{[^}]+\\\}|:\w+/g;
+const SEPARATORS = /[-_/.]+/g;
+
+/** Path literals a test sends requests to, with interpolated segments as `X`. */
+export function requestedUrls(src: string): string[] {
+  return [...src.matchAll(URL_LITERAL)].map((m) => m[1]!.replace(URL_PARAM, "X")).filter((u) => u.length > 1);
+}
+
+/**
+ * A test covers a route file when it requests a URL ending in one of the file's routes and naming the
+ * file, as `/api/alerts/check` does for `@router.post("/check")` in `routes/alerts.py`. Tests that call
+ * routes over HTTP never import the route file, so imports alone miss them.
+ */
+export function routeFileIsRequested(filePath: string, entries: Array<Pick<EntryPoint, "route" | "entryType">>, urls: string[]): boolean {
+  const stem = posix.basename(filePath).replace(/\.[^.]+$/, "").replace(SEPARATORS, "_").toLowerCase();
+  const routes = entries.filter((e) => e.entryType === "http").map((e) => e.route.replace(/\/+$/, ""));
+  if (!routes.length) return false;
+  return urls.some((url) => {
+    const flat = `_${url.replace(SEPARATORS, "_").toLowerCase()}_`;
+    if (!flat.includes(`_${stem}_`)) return false;
+    return routes.some((route) => new RegExp(`${route.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(ROUTE_PARAM, "[^/]+")}/?$`).test(url));
+  });
 }
 
 export function gitHead(root: string): string | undefined {

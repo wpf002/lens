@@ -748,3 +748,25 @@ describe("traceTaint", () => {
     expect(untruncated.findings).toHaveLength(0);
   });
 });
+
+describe("GateSmart false positives", () => {
+  it("doesn't flag docstring routes, counts of named units, domain words in names, or routes tested over HTTP", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-gs-"));
+    for (const d of ["app/core", "app/models", "app/routes", "app/services", "tests"]) await fs.mkdir(path.join(dir, d), { recursive: true });
+    await fs.writeFile(path.join(dir, "requirements.txt"), "fastapi\n");
+    await fs.writeFile(path.join(dir, "app/core/database.py"), `"""\nDatabase setup.\n\nUse:\n    @router.get("/foo")\n    async def foo(db = Depends(get_db)):\n        return db\n"""\n\n\ndef get_db():\n    return None\n`);
+    await fs.writeFile(path.join(dir, "app/models/user.py"), `from app.core.database import get_db\n\n\nclass User:\n    db = get_db\n`);
+    await fs.writeFile(path.join(dir, "app/services/cache.py"), `HOUR = 3600\n\n\ndef ttl():\n    return 6 * HOUR\n`);
+    const routeBody = Array.from({ length: 30 }, (_, i) => `    total_${i} = body.get("k${i}")`).join("\n");
+    await fs.writeFile(path.join(dir, "app/routes/alerts.py"), `from fastapi import APIRouter\n\nrouter = APIRouter()\n\n\n@router.post("/check")\nasync def check(body: dict):\n${routeBody}\n    return {"ok": True}\n\n\n@router.get("/race/{race_id}")\nasync def race(race_id: str):\n    return {"id": race_id}\n`);
+    await fs.writeFile(path.join(dir, "tests/test_final_win_odds.py"), `def test_odds():\n    assert 1 + 1 == 2\n`);
+    await fs.writeFile(path.join(dir, "tests/test_alert_api.py"), `async def test_check(client):\n    r = await client.post("/api/alerts/check", json={})\n    assert r.status_code == 200\n`);
+    const { graph } = await scanProject(dir, { full: true });
+    const by = new Map(graph.health!.checks.map((c) => [c.id, c]));
+    expect(graph.nodes.find((n) => n.path === "app/core/database.py" && n.kind === "file")?.layer).toBe("service");
+    expect(by.get("layer-violations")?.hits ?? []).toEqual([]);
+    expect(by.get("magic-numbers")?.hits.some((h) => h.path === "app/services/cache.py") ?? false).toBe(false);
+    expect(by.get("version-files")?.hits ?? []).toEqual([]);
+    expect(by.get("untested")?.hits.some((h) => h.path === "app/routes/alerts.py") ?? false).toBe(false);
+  });
+});

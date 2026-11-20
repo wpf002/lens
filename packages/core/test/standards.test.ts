@@ -90,6 +90,9 @@ describe("magic numbers", () => {
     expect(magicNumbersInLine("const end = start + s.minutes * 60_000;")).toEqual([]);
     expect(magicNumbersInLine("const days = Math.round((due - today) / 86_400_000);")).toEqual([]);
     expect(magicNumbersInLine("if (attempt >= 3) throw e;")).toEqual(["3"]);
+    expect(magicNumbersInLine("await cache_set(key, payload, ex=6 * HOUR)")).toEqual([]);
+    expect(magicNumbersInLine("ttl = MINUTE * 30,")).toEqual([]);
+    expect(magicNumbersInLine("total = price * 7.5")).toEqual(["7.5"]);
   });
 });
 

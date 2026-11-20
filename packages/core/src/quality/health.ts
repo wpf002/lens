@@ -321,7 +321,8 @@ export function buildHealth(input: HealthInput): HealthReport {
   }
   {
     const hits: HealthHit[] = [];
-    const RE = /(^|[_\-. ])(v\d+|new|old|copy|backup|bak|final|orig|temp|tmp|fixed|updated|improved|enhanced|refactored|working|clean|simple|alt)(?=\.[a-z0-9]+$|[_\-. ])|\s\(\d+\)\.[a-z]+$/i;
+    // A version tag ends the name (`price_v2.ts`, `report_final.py`); the same word inside a name (`final_win_odds`) is domain language.
+    const RE = /[_\-. ](v\d+|new|old|copy|backup|bak|final|orig|temp|tmp|fixed|updated|improved|enhanced|refactored|working|clean|simple|alt)\.[a-z0-9]+$|\s\(\d+\)\.[a-z]+$/i;
     for (const f of code) if (RE.test(path.basename(f.path)) && !/(^|\/)migrations?\//.test(f.path)) push(hits, { path: f.path, detail: "file name suggests a second version of something" });
     add({ id: "version-files", title: "Duplicate Version Files", category: "duplication", severity: "medium", hits, fix: "Merge into the original and delete the extra copy. Git already keeps history." });
   }

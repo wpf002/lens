@@ -40,6 +40,14 @@ export function stripComments(src: string, lang: string): string {
     .join("\n");
 }
 
+/**
+ * Blank out Python docstrings (a triple-quoted string standing alone as a statement) while keeping
+ * line structure. Strings assigned or passed somewhere stay, so SQL in a triple-quoted literal still scans.
+ */
+export function stripDocstrings(src: string): string {
+  return src.replace(/^([ \t]*)[rRuUbB]?("""|''')[\s\S]*?\2/gm, (m, indent: string) => indent + m.slice(indent.length).replace(/[^\n]/g, " "));
+}
+
 function innermost(symbols: SymbolInfo[], line: number): SymbolInfo | undefined {
   return symbols.filter((s) => s.lines[0] <= line && s.lines[1] >= line).sort((a, b) => b.lines[0] - a.lines[0])[0];
 }

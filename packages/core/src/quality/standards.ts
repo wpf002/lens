@@ -48,6 +48,8 @@ const UNIT_FACTORS = new Set(["7", "12", "24", "60", "365", "1000", "1024", "360
 /** Patterns matching a number that multiplies or divides; a unit factor there is a conversion, not a rule. */
 const PRODUCT_PATTERNS = new Set([2, 3]);
 const LITERAL_PRODUCT = new RegExp(String.raw`(?<![\w.$])${NUMBER}(?:\s*[*/]\s*${NUMBER})+(?![\w.])`, "g");
+/** A count times a named unit constant, `6 * HOUR` or `MINUTE * 5`: the constant names what the number counts. */
+const COUNT_OF_NAMED_UNIT = new RegExp(String.raw`(?<![\w.$])${NUMBER}\s*\*\s*[A-Z][A-Z0-9_]*\b|\b[A-Z][A-Z0-9_]*\s*\*\s*${NUMBER}(?![\w.])`, "g");
 /** A JS regex literal: a slash after an operator, bracket, or keyword, so division isn't caught. */
 const REGEX_LITERAL = /(?<=(?:^|[(,=:[!&|?{};+\-*%<>~^]|\breturn|\btypeof)\s*)\/(?![/*])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])+\/[dgimsuvy]*/gm;
 
@@ -62,7 +64,7 @@ function isPlainNumber(literal: string, line: string): boolean {
 
 /** Blank products of literals that include a unit factor, so only the remaining numbers are judged. */
 function blankUnitProducts(line: string): string {
-  return line.replace(LITERAL_PRODUCT, (m) => (m.split(/[*/]/).some((factor) => UNIT_FACTORS.has(normalize(factor.trim()))) ? " ".repeat(m.length) : m));
+  return line.replace(COUNT_OF_NAMED_UNIT, (m) => " ".repeat(m.length)).replace(LITERAL_PRODUCT, (m) => (m.split(/[*/]/).some((factor) => UNIT_FACTORS.has(normalize(factor.trim()))) ? " ".repeat(m.length) : m));
 }
 
 export function magicNumbersInLine(line: string): string[] {
