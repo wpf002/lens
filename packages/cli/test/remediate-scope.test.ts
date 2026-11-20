@@ -43,14 +43,12 @@ describe("Remediate scope", () => {
     expect(prompt).toContain("Fix: Split it.");
   });
 
-  it("puts the files waiting for review ahead of the open items", async () => {
+  it("leaves file review out of the Copy Prompt and the Health Fix All plan", async () => {
     const saved = await buildFixPrompt(dir, "health");
-    expect(saved.reviewFiles).toBeGreaterThan(0);
-    const review = saved.prompt.indexOf("## Step 1: Review");
-    const fix = saved.prompt.indexOf("## Step 2: Fix");
-    expect(review).toBeGreaterThan(-1);
-    expect(fix).toBeGreaterThan(review);
-    expect(saved.prompt.slice(review, fix).split("\n").filter((l) => l.startsWith("- "))).toHaveLength(saved.reviewFiles);
+    expect(saved.prompt).not.toContain("Review");
+    expect(saved.prompt.split("\n").filter((l) => /^\d+\. /.test(l))).toHaveLength(saved.items);
+    const plan = await fixAllPlan(dir, "health");
+    expect(plan.first).toBeNull();
   });
 
   it("prices refactors on top of batch fixes", async () => {

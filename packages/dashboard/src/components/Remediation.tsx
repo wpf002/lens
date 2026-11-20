@@ -191,7 +191,7 @@ export function Remediation({ source }: { source: Source }) {
     const fixAll = source !== "review" && !confirm.checkId;
     const plan = fixAll ? plans?.[source as "audit" | "health"] : undefined;
     const label = plan
-      ? `${plan.first === "audit" ? "Audit, Then Fix" : plan.first === "review" ? "Review, Then Fix" : `Fix ${plan.items} Issue${plan.items === 1 ? "" : "s"}`}`
+      ? `${plan.first === "audit" ? "Audit, Then Fix" : `Fix ${plan.items} Issue${plan.items === 1 ? "" : "s"}`}`
       : source === "review" ? "Fix Review Findings" : `Fix ${batch} ${checkTitle ?? "Hits"}`;
     return (
       <div className={cx(box, "text-muted")}>
@@ -214,7 +214,7 @@ export function Remediation({ source }: { source: Source }) {
             Fix
           </Button>
         </div>
-        {plan && (plan.items > 0 || plan.first === "review") && <FixPromptPreview source={source as "audit" | "health"} />}
+        {plan && plan.items > 0 && <FixPromptPreview source={source as "audit" | "health"} />}
       </div>
     );
   }
@@ -359,7 +359,7 @@ const SAFE_PREFIX = /^scanner was wrong[:.,]?\s*/i;
 
 const COPIED_MS = 4000;
 
-type PromptState = { state: "loading" } | { state: "error"; message: string } | { state: "ready"; prompt: string; items: number; reviewFiles: number };
+type PromptState = { state: "loading" } | { state: "error"; message: string } | { state: "ready"; prompt: string; items: number };
 
 /** The Remediate run as one Claude Code prompt (review the pending files, then fix every open item), shown in full so the owner can read it before copying it to run on their own plan. */
 function FixPromptPreview({ source }: { source: "audit" | "health" }) {
@@ -390,7 +390,7 @@ function FixPromptPreview({ source }: { source: "audit" | "health" }) {
       <div className="flex items-center gap-2 px-3 py-2">
         <span className="min-w-0 flex-1">
           <span className="text-fg">Prompt</span>
-          {loaded.state === "ready" && ` · ${loaded.reviewFiles ? `${loaded.reviewFiles} Files + ` : ""}${loaded.items} Issues`}
+          {loaded.state === "ready" && ` · ${loaded.items} Issues`}
         </span>
         {loaded.state === "loading" && <Spinner size={14} />}
         <Button size="sm" variant="ghost" disabled={loaded.state !== "ready"} title="Paste into Claude Code" onClick={() => loaded.state === "ready" && void copy(loaded.prompt)}>

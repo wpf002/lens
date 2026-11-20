@@ -1221,7 +1221,7 @@ export class EnrichRunner {
     if (plan.first) {
       const saved = job.budgetUsd;
       job.budgetUsd = Math.min(saved, plan.firstLimit);
-      this.push(job, plan.first === "audit" ? "Auditing the code" : "Reviewing the code");
+      this.push(job, "Auditing the code");
       const ok = await this.timed(job, plan.first);
       job.budgetUsd = saved;
       if (!ok) return;
@@ -1550,14 +1550,14 @@ const fencedJson = (text: string): unknown => {
   }
 };
 
-export async function fixAllPlan(root: string, source: "audit" | "health"): Promise<{ first: "audit" | "review" | null; firstLimit: number; items: number; estimate: CostEstimate }> {
+export async function fixAllPlan(root: string, source: "audit" | "health"): Promise<{ first: "audit" | null; firstLimit: number; items: number; estimate: CostEstimate }> {
   const g = await loadGraph(root);
   const files = g?.nodes.filter((n) => n.kind === "file" && n.path).length ?? 0;
-  // The audit runs again when it's missing or older than the latest commit. The review runs whenever a file is new or changed since it was reviewed.
+  // The audit runs again when it's missing or older than the latest commit.
+  // Health fixes only what the checks found. File review is its own action, since every fix commit would queue the changed files for review again.
   const auditAt = source === "audit" ? Date.parse((await readJson<{ generatedAt?: string }>(auditPath(root)))?.generatedAt ?? "") || 0 : 0;
-  const review = source === "health" ? await reviewPlan(root, g) : null;
-  const first = review ? (review.batches ? "review" : null) : auditAt && auditAt >= headCommitTime(root) ? null : "audit";
-  const pre = !first ? { low: 0, high: 0, limit: 0 } : review ? review.estimate : estimateCost("audit", files);
+  const first = source === "health" || (auditAt && auditAt >= headCommitTime(root)) ? null : "audit";
+  const pre = !first ? { low: 0, high: 0, limit: 0 } : estimateCost("audit", files);
   const open = await remediationItems(root, source, undefined, Infinity);
   const items = open.length;
   // Refactors each get their own run and cap, so they're priced apart from batch fixes.
@@ -1714,41 +1714,24 @@ const FIX_PROMPT_INTRO: Record<"audit" | "health", string> = {
   audit: "Fix these security issues in this repo. Make real code changes. If one needs a decision from me or a change in a web console, ask or give me exact steps. Never print secret values. Run the tests after each fix and commit.",
 };
 
-const REVIEW_STEP_INTRO =
-  "Read each file below and look for real bugs: wrong logic, unhandled errors, lost or corrupted data, race conditions, security holes. Fix each one you find the same way.";
-
 /**
  * A prompt the owner gives Claude Code to do a Remediate run on their own plan instead of a paid Lens run:
- * review the files Lens hasn't reviewed yet, then fix every open item.
+ * fix every open item.
  */
-export function fixPrompt(source: "audit" | "health", items: RemediationItem[], reviewPaths: string[] = []): string {
+export function fixPrompt(source: "audit" | "health", items: RemediationItem[]): string {
   const lines = items.map((item, i) => {
     const out = [`${i + 1}. ${item.title}`];
     for (const e of item.evidence) out.push(`   - ${e}`);
     if (item.fix) out.push(`   Fix: ${item.fix}`);
     return out.join("\n");
   });
-  if (!reviewPaths.length) return [FIX_PROMPT_INTRO[source], "", ...lines].join("\n");
-  return [
-    FIX_PROMPT_INTRO[source],
-    "",
-    `## Step 1: Review ${reviewPaths.length} file${reviewPaths.length === 1 ? "" : "s"}`,
-    "",
-    REVIEW_STEP_INTRO,
-    "",
-    ...reviewPaths.map((p) => `- ${p}`),
-    "",
-    `## Step 2: Fix ${items.length} open issue${items.length === 1 ? "" : "s"}`,
-    "",
-    ...lines,
-  ].join("\n");
+  return [FIX_PROMPT_INTRO[source], "", ...lines].join("\n");
 }
 
 /** The Remediate prompt for this project, with counts for the dashboard's confirmation. */
-export async function buildFixPrompt(root: string, source: "audit" | "health"): Promise<{ items: number; reviewFiles: number; prompt: string }> {
+export async function buildFixPrompt(root: string, source: "audit" | "health"): Promise<{ items: number; prompt: string }> {
   const items = await remediationItems(root, source, undefined, Infinity);
-  const reviewPaths = source === "health" ? (await pendingReviewFiles(root)).map((f) => f.path) : [];
-  return { items: items.length, reviewFiles: reviewPaths.length, prompt: fixPrompt(source, items, reviewPaths) };
+  return { items: items.length, prompt: fixPrompt(source, items) };
 }
 
 
