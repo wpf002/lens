@@ -5,7 +5,7 @@ import path from "node:path";
 import { promises as fs, existsSync } from "node:fs";
 import { execFile } from "node:child_process";
 import {
-  scanAndSave, loadGraph, loadMeta, saveGraph, saveMeta, loadConfig, saveConfig, paths, writeJsonAtomic, readJson,
+  graphIsStale, scanAndSave, loadGraph, loadMeta, saveGraph, saveMeta, loadConfig, saveConfig, paths, writeJsonAtomic, readJson,
   applyPatch, PatchValidationError, validateGraph, KnowledgeGraphSchema, formatZodError,
   buildBatches, architectureContext, tourContext, domainContext, securityContext,
   diffImpact, isGitRepo, saveDiff, gitChanges, healthOfChange, scanProject, GraphSearch, indexGraph, neighbors, shortestPath, explain, graphStats, findNode,
@@ -255,7 +255,8 @@ program
         await fs.cp(path.resolve(here, "../../core/test/fixtures/vuln-app"), root, { recursive: true });
       }
     }
-    if (!(await loadGraph(root))) await scanAndSave(root);
+    const saved = await loadGraph(root);
+    if (!saved || graphIsStale(saved, root)) await scanAndSave(root);
     await markVerifiedSafe(root);
 
     const token = login ? await sessionToken(workspace, login) : undefined;

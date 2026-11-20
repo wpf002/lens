@@ -29,7 +29,7 @@ import { loadLayoutPlan, reopenLayoutArea, usableMoves } from "./layout-plan.js"
 import { EnrichRunner, followFileMoves, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, buildFixPrompt, remediateBudget, remediateLimit, remediationItems, remediationRecord, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import { TestsBroken } from "./local-tests.js";
 import {
-  buildBatches, diffImpact, isGitRepo, loadGraph, madeByOtherBuild, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
+  buildBatches, diffImpact, graphIsStale, isGitRepo, loadGraph, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
   type EmbeddingStore, type KnowledgeGraph,
 } from "@lens/core";
 
@@ -114,20 +114,30 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
   };
   let proj = await loadProject(opts.root, opts.graphFile);
 
-  /** Rescan a graph saved by an older Lens build once, so changed checks show without reopening the project. */
+  /** Rescan a graph saved by another Lens build or at an older commit, so Health matches the code as it is now. */
   const refreshes = new Map<string, Promise<unknown>>();
-  const rescanIfOtherBuild = async (p: Project) => {
-    if (p.graphFile) return;
+  const rescanIfStale = async (p: Project): Promise<boolean> => {
+    if (p.graphFile) return false;
     const saved = await loadGraph(p.root);
-    if (!saved || !madeByOtherBuild(saved)) return;
+    if (!saved || !graphIsStale(saved, p.root)) return false;
     if (!refreshes.has(p.root)) {
-      console.error(`[scan] ${p.root} was scanned by another Lens build, rescanning`);
-      refreshes.set(p.root, scanAndSave(p.root).finally(() => refreshes.delete(p.root)));
+      console.error(`[scan] ${p.root} changed since its last scan, rescanning`);
+      refreshes.set(p.root, scanAndSave(p.root).then(() => followFileMoves(p.root)).finally(() => refreshes.delete(p.root)));
     }
     await refreshes.get(p.root);
+    return true;
+  };
+  /** Move a clean cloud clone onto the latest base, then rescan if the code changed since the last scan. */
+  const catchUp = async (p: Project): Promise<boolean> => {
+    if (repoName(p.root)) {
+      await syncBeforeFixing(p.root).catch((e: unknown) => {
+        console.error(`[github] couldn't move to the latest base: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+      });
+    }
+    return rescanIfStale(p);
   };
   const getGraph = async (p: Project = proj) => {
-    if (!p.cache) await rescanIfOtherBuild(p);
+    if (!p.cache) await rescanIfStale(p);
     const st = await fs.stat(p.graphPath);
     if (!p.cache || p.cache.mtime !== st.mtimeMs) {
       const g = p.graphFile ? await readJson<KnowledgeGraph>(p.graphPath) : await loadGraph(p.root);
@@ -447,14 +457,12 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         if (enrich.running) return send(res, 409, { error: "an AI run is already in progress" });
         const authProblem = await checkClaudeAuth();
         if (authProblem) return send(res, 412, { error: authProblem });
-        if (repoName(proj.root)) {
-          const synced = await syncBeforeFixing(proj.root).catch((e: unknown) => {
-            console.error(`[github] couldn't move to the latest base before the ${task} run: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
-            return false;
-          });
-          if (synced) await scanAndSave(proj.root).then(() => followFileMoves(proj.root));
-        }
+        await catchUp(proj);
         return send(res, 202, enrich.start(task, proj.root, budget, { source, checkId, note, fixNew: task === "review" && opts.fixNew === true, areaId }));
+      }
+      if (req.method === "POST" && url.pathname === "/api/sync") {
+        if (enrich.running) return send(res, 200, { changed: false });
+        return send(res, 200, { changed: await catchUp(proj) });
       }
       if (req.method === "GET" && url.pathname === "/api/audit") {
         if (proj.graphFile) return send(res, 200, { audit: null });

@@ -330,6 +330,9 @@ export const fixBrokenTests = () =>
 export const setWontFix = (id: string, on: boolean) =>
   request<{ wontFix: string[] }>("/api/items/wontfix", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, on }) }).then((r) => r.wontFix);
 /** Pull request state, and the pull request change the server is making right now, if any. */
+/** Hosted server: catch the repo up to its latest commit and rescan if the code changed. */
+export const syncRepo = () => request<{ changed: boolean }>("/api/sync", { method: "POST" });
+
 export const fetchPushState = () => request<{ state: PushState; busy: string | null }>("/api/project/push");
 
 /** Hosted server: commit applied fixes to the fixes branch and push it. */

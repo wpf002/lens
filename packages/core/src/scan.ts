@@ -30,7 +30,7 @@ import {
   buildHeuristicLayers, buildHeuristicTour, detectFrameworks, fileComplexity, functionComplexity, heuristicLayer, isFileKind, listPreview,
 } from "./heuristics.js";
 import { loadFingerprints, loadGraph, loadMeta, paths, saveFingerprints, saveGraph, saveMeta, loadConfig, loadArchitectureConfig, type LensMeta } from "./persistence.js";
-import { scannerBuild } from "./scanner-build.js";
+import { madeByOtherBuild, scannerBuild } from "./scanner-build.js";
 
 export interface ScanOptions {
   exclude?: string[];
@@ -679,6 +679,11 @@ function groupBy<T>(xs: T[], k: (x: T) => string): Map<string, T[]> {
   const m = new Map<string, T[]>();
   for (const x of xs) (m.get(k(x)) ?? m.set(k(x), []).get(k(x))!).push(x);
   return m;
+}
+
+/** True when a saved codebase graph no longer matches the repo: another Lens build made it, or HEAD has moved since. */
+export function graphIsStale(graph: { kind: string; project: { scannerBuild?: string; gitCommit?: string } }, root: string): boolean {
+  return madeByOtherBuild(graph) || (graph.kind === "codebase" && graph.project.gitCommit !== gitHead(root));
 }
 
 export function gitHead(root: string): string | undefined {

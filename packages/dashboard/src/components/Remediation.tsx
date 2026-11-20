@@ -22,18 +22,20 @@ export function FixAllButton({ source, onOpen }: { source: "audit" | "health"; o
   const label = remediateLabel(source, job);
   const plan = useStore((s) => s.fixable.plans?.[source]);
   const nothing = !!plan && !plan.items && !plan.first;
+  const syncing = useStore((s) => s.remediateSyncing);
+  const openRemediate = useStore((s) => s.openRemediate);
   return (
     <Button
       size="sm"
       variant="accent"
-      disabled={aiRunning || nothing}
+      disabled={aiRunning || nothing || syncing}
       title={nothing ? "Nothing left to fix" : aiRunning && label !== "Running…" ? "One AI run at a time. Start this when that one finishes." : undefined}
       onClick={() => {
         onOpen?.();
-        useStore.setState({ remediateConfirm: { source }, auditConfirm: false, reviewConfirm: false });
+        void openRemediate(source);
       }}
     >
-      <Mascot size={16} /> {label}
+      <Mascot size={16} /> {syncing ? "Checking Repo…" : label}
     </Button>
   );
 }

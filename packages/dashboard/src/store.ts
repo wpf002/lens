@@ -22,6 +22,7 @@ import {
   type ReviewRecord,
   startAIJob,
   fetchPushState,
+  syncRepo,
   setWontFix,
   type PushState,
   type AuditRecord,
@@ -165,6 +166,10 @@ export interface State {
   refreshPush(): Promise<void>;
   /** Re-fetch graph, remediation and pull request state after the repo changed. */
   reloadProject(): Promise<void>;
+  /** True while Remediate catches the repo up to its latest commit. */
+  remediateSyncing: boolean;
+  /** Catch the repo up and rescan if it moved, then show the Remediate confirm box. */
+  openRemediate(source: RemediationSource): Promise<void>;
   cancelAI(): Promise<void>;
   watchAI(): void;
   openProject(path: string): Promise<void>;
@@ -271,6 +276,7 @@ export const useStore = create<State>((set, get) => ({
   setPrStep: (label) => set({ prStep: label }),
   fixable: { batch: 15, items: 0 },
   remediateConfirm: null,
+  remediateSyncing: false,
   fixOp: { busy: false, error: null },
   menuOpen: false,
   focus: null,
@@ -571,6 +577,19 @@ export const useStore = create<State>((set, get) => ({
   async reloadProject() {
     await reloadGraph();
     await get().refreshRemediation();
+  },
+  async openRemediate(source) {
+    if (get().mode === "server") {
+      set({ remediateSyncing: true });
+      try {
+        if ((await syncRepo()).changed) await get().reloadProject();
+      } catch (err) {
+        set({ fixOp: { busy: false, error: err instanceof Error ? err.message : String(err) } });
+      } finally {
+        set({ remediateSyncing: false });
+      }
+    }
+    set({ remediateConfirm: { source }, auditConfirm: false, reviewConfirm: false });
   },
   async refreshPush() {
     if (!get().meta?.canPush) return set({ push: null });

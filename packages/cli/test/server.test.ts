@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
+import { execFileSync } from "node:child_process";
 import { loadGraph, paths, saveGraph, scanAndSave, scannerBuild } from "@lens/core";
 import { startServer } from "../src/server.js";
 
@@ -929,6 +930,35 @@ describe("lens serve with a graph from an older Lens build", () => {
       const graph = JSON.parse(r.body) as { project: { scannerBuild?: string }; health?: { checks: unknown[] } };
       expect(graph.project.scannerBuild).toBe(scannerBuild());
       expect(graph.health?.checks.length).toBe(saved.health?.checks.length);
+    } finally {
+      await s.close();
+    }
+  });
+});
+
+describe("lens serve after new commits land", () => {
+  it("rescans on Remediate's sync so Health matches the current commit", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-moved-"));
+    await fs.cp(FIX, dir, { recursive: true });
+    const git = (...args: string[]) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { stdio: "pipe" }).toString().trim();
+    git("init", "-q");
+    git("add", "-A");
+    git("commit", "-q", "-m", "start");
+    await scanAndSave(dir, { full: true });
+
+    const s = await startServer({ root: dir, port: 0, host: "127.0.0.1" });
+    const base = s.url.split("/#")[0];
+    const headers = { "X-Lens-Token": s.token };
+    try {
+      expect(JSON.parse((await post(`${base}/api/sync`, {}, headers)).body)).toEqual({ changed: false });
+      await fs.writeFile(path.join(dir, "added.js"), "export const added = 1;\n");
+      git("add", "added.js");
+      git("commit", "-q", "-m", "add a file");
+
+      expect(JSON.parse((await post(`${base}/api/sync`, {}, headers)).body)).toEqual({ changed: true });
+      const graph = JSON.parse((await get(`${base}/api/graph`, headers)).body) as { project: { gitCommit?: string }; nodes: Array<{ path?: string }> };
+      expect(graph.project.gitCommit).toBe(git("rev-parse", "HEAD"));
+      expect(graph.nodes.some((n) => n.path === "added.js")).toBe(true);
     } finally {
       await s.close();
     }
