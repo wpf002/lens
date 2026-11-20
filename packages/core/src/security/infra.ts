@@ -122,7 +122,7 @@ function dockerChecks(lines: string[], report: Report): void {
     if (/^\s*(?:ENTRYPOINT|CMD)\s/i.test(line) && PRIVILEGE_DROP.test(line)) dropsRoot = true;
   });
   if (finalFrom < 0) return;
-  const nonRootImage = /nonroot|rootless/i.test(finalImage);
+  const nonRootImage = /nonroot|rootless|unprivileged/i.test(finalImage);
   if (lastUser && /^(?:root|0)(?::|$)/.test(lastUser.user)) report("docker-root-user", lastUser.index, { message: `The last USER is ${lastUser.user}, so the app runs as root. Switch to a non-root user before CMD.` });
   else if (!lastUser && !nonRootImage && !dropsRoot) report("docker-root-user", finalFrom);
   if (!hasHealthcheck) report("docker-no-healthcheck", finalFrom);

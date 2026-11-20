@@ -42,12 +42,51 @@ export function detectMounts(src: string): Mount[] {
 }
 
 export const AUTH_TOKEN_RE =
-  /\b(?:auth\w*|requireAuth|requireUser|requireLogin|ensureAuth\w*|isAuthenticated|authenticated|authenticate\w*|verifyToken|verifyJwt|jwtAuth|checkJwt|passport\.authenticate|protect(?:ed)?|guard|withAuth|withSession|login_required|permission_required|user_passes_test|permission_classes|IsAuthenticated|Depends\(\s*(?:get_current_\w+|current_user|verify_\w+|auth\w*)|Security\(|@PreAuthorize|@Secured|@RolesAllowed|UseGuards|AuthGuard|authenticate_user!|require_login|before_action\s+:(?:authenticate|require|authorize)\w*|middleware\(\s*['"\[]*auth|clerkMiddleware|getServerSession|currentUser|requireSession|session\.user|req\.user\b|request\.user\.is_authenticated|\[Authorize\])/;
+  /\b(?:auth\w*|requireAuth|requireUser|requireLogin|ensureAuth\w*|isAuthenticated|authenticated|authenticate\w*|verifyToken|verifyJwt|jwtAuth|checkJwt|passport\.authenticate|protect(?:ed)?|guard|withAuth|withSession|login_required|permission_required|user_passes_test|permission_classes|IsAuthenticated|Depends\(\s*(?:get_current_\w+|get_admin\w*|require_\w+|current_user|verify_\w+|auth\w*)|Security\(|@PreAuthorize|@Secured|@RolesAllowed|UseGuards|AuthGuard|authenticate_user!|require_login|before_action\s+:(?:authenticate|require|authorize)\w*|middleware\(\s*['"\[]*auth|clerkMiddleware|getServerSession|currentUser|requireSession|session\.user|req\.user\b|request\.user\.is_authenticated|\[Authorize\])/;
 
 const PUBLIC_ROUTE_RE =
   /(?:^|\/)(?:health\w*|healthz|readyz|livez|status|ping|version|metrics|login|logout|signin|signup|sign-in|sign-up|register|forgot\w*|reset\w*|verify-email|callback|oauth|auth|public|static|assets|docs|openapi|swagger|favicon\.ico|robots\.txt|sitemap\w*|\.well-known)(?:$|\/|\.)/i;
 
+const RATE_LIMIT_RE = /@?\b(?:limiter\.limit|rate_?limit\w*|rateLimit\w*|RateLimit\w*|throttle\w*|Throttle\w*)\s*\(/;
+
 const HTTP_METHODS = "get|post|put|patch|delete|head|options|all|any";
+
+/** The call's top-level arguments after the route, read across lines up to its closing paren. */
+function callArgs(src: string, from: number): string[] {
+  const args: string[] = [];
+  let depth = 0;
+  let quote = "";
+  let current = "";
+  for (let i = from; i < Math.min(src.length, from + CALL_SCAN_CHARS); i++) {
+    const c = src[i]!;
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) quote = "";
+      current += c;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === "`") quote = c;
+    else if ("([{".includes(c)) depth++;
+    else if (")]}".includes(c)) {
+      if (depth === 0) break;
+      depth--;
+    } else if (c === "," && depth === 0) {
+      args.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += c;
+  }
+  args.push(current.trim());
+  return args.filter(Boolean);
+}
+
+const CALL_SCAN_CHARS = 4000;
+
+/** A server route always gets a handler: a function or a named one. A client request gets a body or nothing. */
+function isClientRequest(args: string[]): boolean {
+  return !args.some((a) => /=>|^(?:async\s+)?function\b/.test(a) || /^[A-Za-z_$][\w$.]*$/.test(a) || /^[A-Za-z_$][\w$.]*\(/.test(a));
+}
 
 interface Ctx {
   path: string;
@@ -71,7 +110,7 @@ const qname = (s: SymbolInfo | undefined) => (s ? (s.owner ? `${s.owner}.${s.nam
 function fileLevelGuard(ctx: Ctx, uptoLine: number): string | undefined {
   for (let i = 0; i < Math.min(uptoLine, ctx.lines.length); i++) {
     const l = ctx.lines[i]!;
-    if (/\.(?:use|addHook|register|before_action|middleware)\s*\(|before_action|@UseGuards|\[Authorize\]|permission_classes|dependencies\s*=\s*\[/.test(l) && AUTH_TOKEN_RE.test(l)) {
+    if (/\.(?:use|addHook|register|before_action|middleware)\s*\(|before_action|@UseGuards|\[Authorize\]|permission_classes|(?:APIRouter|FastAPI|include_router)\s*\(.*dependencies\s*=\s*\[/.test(l) && AUTH_TOKEN_RE.test(l)) {
       return `line ${i + 1}: ${l.trim().slice(0, 100)}`;
     }
   }
@@ -83,7 +122,7 @@ function handlerGuard(ctx: Ctx, h: SymbolInfo | undefined): string | undefined {
   const body = ctx.lines.slice(h.lines[0] - 1, Math.min(h.lines[1], h.lines[0] + 25));
   for (let i = 0; i < body.length; i++) {
     const l = body[i]!;
-    if (/\b(?:getServerSession|auth\(\)|currentUser\(|requireUser\(|requireAuth\(|verifyToken\(|getUser\(|getSession\(|validateSession\(|if\s*\(\s*!\s*(?:req\.user|session|user)\b|request\.user\.is_authenticated|abort\(\s*401|status\(\s*401|Unauthorized|HTTPException\(\s*status_code\s*=\s*401|throw\s+new\s+UnauthorizedException)/.test(l)) {
+    if (/\b(?:getServerSession|auth\(\)|currentUser\(|requireUser\(|requireAuth\(|verifyToken\(|getUser\(|getSession\(|validateSession\(|if\s*\(\s*!\s*(?:req\.user|session|user)\b|request\.user\.is_authenticated|abort\(\s*401|status\(\s*401|Unauthorized|HTTPException\(\s*status_code\s*=\s*40[13]|\b_?require_(?:user|admin|login|auth)\w*\(|throw\s+new\s+UnauthorizedException)/.test(l)) {
       return `handler line ${h.lines[0] + i}: ${l.trim().slice(0, 100)}`;
     }
   }
@@ -102,6 +141,9 @@ function classifyAuth(ctx: Ctx, route: string, line: string, lineNo: number, h: 
   const fg = fileLevelGuard(ctx, lineNo);
   if (fg) return { auth: "guarded", authEvidence: `file middleware ${fg}` };
   if (PUBLIC_ROUTE_RE.test(route)) return { auth: "public", authEvidence: "route name suggests a public endpoint" };
+  // A rate limit on a route without a login is a decision to keep it open to guests.
+  const limit = RATE_LIMIT_RE.exec(inline) ?? h?.decorators.map((d) => RATE_LIMIT_RE.exec(d)).find(Boolean);
+  if (limit) return { auth: "public", authEvidence: `rate limited: ${limit[0]}` };
   return { auth: "unguarded" };
 }
 
@@ -149,6 +191,8 @@ export function detectEntryPoints(ctx: Ctx, frameworks: string[]): EntryPoint[] 
       }
     }
     // Express / Fastify / Koa-router / Hono / Elysia style
+    const lineStarts = [0];
+    for (const l of lines) lineStarts.push(lineStarts[lineStarts.length - 1]! + l.length + 1);
     const re = new RegExp(`\\b(\\w+)\\.(${HTTP_METHODS})\\s*\\(\\s*(["'\`])([^"'\`]*)\\3`, "i");
     lines.forEach((l, i) => {
       const m = re.exec(l);
@@ -157,6 +201,7 @@ export function detectEntryPoints(ctx: Ctx, frameworks: string[]): EntryPoint[] 
       if (!/^(app|router|server|fastify|api|r|route|routes|v\d|hono|elysia|instance|koa|express|\w*[Rr]outer|\w*[Aa]pp)$/.test(obj)) return;
       const route = m[4]!;
       if (route && !route.startsWith("/") && route !== "*") return;
+      if (isClientRequest(callArgs(ctx.src, lineStarts[i]! + m.index + m[0].length))) return;
       // handler: last identifier argument on the line, or an inline function starting here
       const argText = l.slice(m.index + m[0].length);
       const ids = [...argText.matchAll(/,\s*([A-Za-z_$][\w$.]*)\s*(?=[,)])/g)].map((x) => x[1]!.split(".").pop()!);

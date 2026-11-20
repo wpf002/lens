@@ -74,7 +74,7 @@ export const RULES: Rule[] = [
   /* ---- SQL / NoSQL injection ---- */
   { id: "sql-template-concat", title: "SQL built with string interpolation", category: "injection", cwe: "CWE-89", severity: "high", confidence: "medium", langs: "*",
     pattern: /(?:`|"|')\s*(?:SELECT\s+[\w*,\s.]+\s+FROM|INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM)\b[^`"'\n]*(?:\$\{|"\s*\+|'\s*\+|%s|\{[a-z_]\w*\}|#\{)/i,
-    unless: /\$\d|\?\s*[,)]|:\w+\b.*(?:params|bind)|(?:\bsql|\$queryRaw|\$executeRaw|\bPrisma\.sql|\bsqlTag|\bSQL)\s*`/, message: "Query text is concatenated or interpolated instead of parameterized.", taintBoost: true },
+    unless: /\$\d|\?\s*[,)]|:\w+\b.*(?:params|bind)|(?:\bsql|\$queryRaw|\$executeRaw|\bPrisma\.sql|\bsqlTag|\bSQL)\s*`|\bSQL\s*\(\s*["']/, message: "Query text is concatenated or interpolated instead of parameterized.", taintBoost: true },
   { id: "py-sql-format", title: "SQL executed with formatted string", category: "injection", cwe: "CWE-89", severity: "high", confidence: "high", langs: PY,
     pattern: /\.execute(?:many)?\s*\(\s*(?:f["']|["'][^"']*["']\s*%\s*|["'][^"']*["']\s*\.format\s*\()/, message: "cursor.execute with an f-string, % formatting, or .format().", taintBoost: true },
   { id: "prisma-raw-unsafe", title: "Prisma raw query (unsafe variant)", category: "injection", cwe: "CWE-89", severity: "high", confidence: "high", langs: JS,

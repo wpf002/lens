@@ -91,7 +91,7 @@ export function scanFile(input: FileScanInput): RawFinding[] {
       for (let i = 0; i < lines.length; i++) {
         const l = lines[i]!;
         if (l.length > 2000 || !rule.pattern.test(l)) continue;
-        if (rule.unless?.test(l)) continue;
+        if (rule.unless?.test([l, lines[i + 1] ?? "", lines[i + 2] ?? ""].join(" "))) continue;
         if (REGEX_DEF.test(l)) continue; // pattern definitions (including this scanner's own rules)
         const tainted = nearTaint(i + 1);
         out.push({
@@ -129,7 +129,7 @@ export function scanFile(input: FileScanInput): RawFinding[] {
       const g = GENERIC_SECRET_RE.exec(l);
       if (g) {
         const val = g[2]!;
-        if (!isPlaceholder(val) && shannonEntropy(val) >= 3.5 && !/process\.env|os\.environ|getenv|\$\{|config\[|settings\./.test(l) && !/^(?:https?:|\/|\.)/.test(val)) {
+        if (!isPlaceholder(val) && !AUTOCOMPLETE_TOKEN.test(val) && shannonEntropy(val) >= 3.5 && !/process\.env|os\.environ|getenv|\$\{|config\[|settings\./.test(l) && !/^(?:https?:|\/|\.)/.test(val)) {
           out.push({
             rule: "secret-generic", title: "Hardcoded credential", category: "secrets", cwe: "CWE-798",
             severity: isTest || isExample ? "low" : "high", confidence: "medium", path, line: i + 1,
@@ -195,6 +195,9 @@ export function scanFile(input: FileScanInput): RawFinding[] {
   return [...best.values(), ...infra];
 }
 
+
+/** HTML autocomplete values for password fields, which read as high-entropy literals. */
+const AUTOCOMPLETE_TOKEN = /^(?:current-password|new-password|one-time-code|username|off|on)$/;
 /* ---------------- graph-level pass ---------------- */
 
 export interface FinalizeInput {

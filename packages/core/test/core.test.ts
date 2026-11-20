@@ -769,4 +769,72 @@ describe("GateSmart false positives", () => {
     expect(by.get("version-files")?.hits ?? []).toEqual([]);
     expect(by.get("untested")?.hits.some((h) => h.path === "app/routes/alerts.py") ?? false).toBe(false);
   });
+
+  it("sees admin dependencies, require helpers and rate limits as guards, and skips client requests, psycopg2 sql, autocomplete tokens, multi-line usedforsecurity and unprivileged images", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-gs-sec-"));
+    for (const d of ["app/routes", "scripts", "web"]) await fs.mkdir(path.join(dir, d), { recursive: true });
+    await fs.writeFile(path.join(dir, "requirements.txt"), "fastapi\npsycopg2\n");
+    await fs.writeFile(path.join(dir, "app/routes/admin.py"), [
+      "from fastapi import APIRouter, Depends, HTTPException, Request",
+      "router = APIRouter()",
+      "",
+      '@router.post("/check", dependencies=[Depends(get_admin_user)])',
+      "async def check():",
+      "    return {}",
+      "",
+      '@router.post("/purge")',
+      "async def purge(dry_run: bool = True, user: User = Depends(get_admin_user)):",
+      "    return {}",
+      "",
+      '@router.post("/watch")',
+      "async def watch(request: Request):",
+      "    uid = _require_user(request)",
+      "    return {}",
+      "",
+      '@router.post("/report")',
+      "async def report(payload: dict, user: User = Depends(get_optional_user)):",
+      "    if not (user and is_admin(user)):",
+      '        raise HTTPException(status_code=403, detail="no")',
+      "    return {}",
+      "",
+      '@router.post("/click")',
+      '@limiter.limit("30/minute")',
+      "async def click(request: Request):",
+      "    return {}",
+      "",
+      '@router.post("/open")',
+      "async def open_route(request: Request):",
+      "    return {}",
+      "",
+    ].join("\n"));
+    await fs.writeFile(path.join(dir, "scripts/ingest.py"), [
+      "from psycopg2 import sql",
+      "def insert_statement(table, cols):",
+      '    return sql.SQL("INSERT INTO {} ({}) VALUES %s ON CONFLICT DO NOTHING").format(sql.Identifier(table), sql.SQL(", ").join(map(sql.Identifier, cols)))',
+      "",
+    ].join("\n"));
+    await fs.writeFile(path.join(dir, "web/api.js"), [
+      "const api = { post: (path, body) => fetch(path, { method: 'POST', body }) };",
+      "export const ask = (question, context) => api.post('/advisor/ask', { question, context });",
+      "export const drop = (id) => api.delete(`/watchlist/${id}`);",
+      "export const save = (raceId) =>",
+      "  api.post('/advisor/scorecard', {",
+      "    race_id: raceId,",
+      "  });",
+      "",
+    ].join("\n"));
+    await fs.writeFile(path.join(dir, "web/Login.jsx"), "export const MODES = {\n  login: {\n    passwordAutoComplete: 'current-password',\n  },\n};\n");
+    await fs.writeFile(path.join(dir, "scripts/memo.py"), "import hashlib\ndef key(text):\n    return hashlib.md5(\n        text.encode(), usedforsecurity=False\n    ).hexdigest()\n");
+    await fs.writeFile(path.join(dir, "web/Dockerfile"), "FROM node:20 AS build\nRUN npm ci\nFROM nginxinc/nginx-unprivileged:alpine\nCOPY --from=build /app/dist /usr/share/nginx/html\nHEALTHCHECK CMD wget -qO- http://localhost:8080/ || exit 1\n");
+    const { graph } = await scanProject(dir, { full: true });
+    const eps = new Map(graph.nodes.filter((n) => n.kind === "endpoint").map((n) => [n.name, n.endpoint!]));
+    for (const r of ["check", "purge", "watch", "report"]) expect(eps.get(`POST /${r}`)?.auth, r).toBe("guarded");
+    expect(eps.get("POST /click")?.auth).toBe("public");
+    expect(eps.get("POST /open")?.auth).toBe("unguarded");
+    expect([...eps.keys()].filter((k) => k.includes("advisor") || k.includes("watchlist"))).toEqual([]);
+    const findings = graph.security!.findings.map((f) => `${f.rule} ${f.path}`);
+    expect(findings).toContain("unauthenticated-mutation app/routes/admin.py");
+    expect(findings.filter((f) => f.startsWith("unauthenticated-mutation"))).toHaveLength(1);
+    expect(findings.filter((f) => f.includes("scripts/") || f.includes("web/"))).toEqual([]);
+  });
 });
