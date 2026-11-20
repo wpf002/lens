@@ -640,23 +640,28 @@ export async function pushPending(root: string, fixes: AppliedFix[] = [], resolv
 }
 
 /**
- * Before an AI run edits the code, move a clean tree onto the latest base, so new fixes are made on
- * the code they'll merge into. A tree holding unpushed fixes stays put; the push carries them over.
- * Returns whether the code changed.
+ * Before an AI run edits the code, and whenever the dashboard opens, move the clone onto the latest
+ * base so scores match the repo on GitHub. Unpushed fixes ride along; a branch with an open pull
+ * request takes the latest base in. Returns whether the code changed.
  */
 export async function syncBeforeFixing(root: string): Promise<boolean> {
-  if (await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"])) return false;
-  const st = await pushState(root);
-  if (st?.branch) {
-    if (!st.pr || st.pr.state === "open") return false;
-    await restartFromBase(root, st.branch);
-    return true;
-  }
-  const base = await baseBranch(root);
-  if ((await git(root, ["rev-parse", "--abbrev-ref", "HEAD"])) !== base) return false;
   const before = await git(root, ["rev-parse", "HEAD"]);
-  await git(root, ["fetch", "-q", "--no-tags", "origin", base]);
-  await withLensFilesAside(root, () => git(root, ["merge", "-q", "--ff-only", "FETCH_HEAD"]));
+  const st = await pushState(root);
+  const base = await baseBranch(root);
+  if (st?.branch && st.pr?.state === "open") {
+    if (st.dirty) return false;
+    await mergeLatestBase(root, st.branch, base);
+  } else if (st?.branch) {
+    await restartFromBase(root, st.branch);
+  } else if ((await git(root, ["rev-parse", "--abbrev-ref", "HEAD"])) !== base) {
+    console.error(`[github] ${root} is on a branch Lens didn't make, leaving it there`);
+    return false;
+  } else if (await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"])) {
+    await moveOntoLatestBase(root, base, base);
+  } else {
+    await git(root, ["fetch", "-q", "--no-tags", "origin", base]);
+    await withLensFilesAside(root, () => git(root, ["merge", "-q", "--ff-only", "FETCH_HEAD"]));
+  }
   return (await git(root, ["rev-parse", "HEAD"])) !== before;
 }
 
@@ -690,8 +695,8 @@ async function moveCarried(root: string, base: string, carried: string): Promise
   await git(root, ["reset", "-q"]);
 }
 
-export async function restartFromBase(root: string, old: string): Promise<void> {
-  const base = await baseBranch(root);
+/** Put the tree on the latest `base`, carrying any uncommitted fixes; on failure go back to `old`. */
+async function moveOntoLatestBase(root: string, base: string, old: string): Promise<void> {
   const dirty = !!(await git(root, ["status", "--porcelain", "--", ".", ":(exclude).lens"]));
   // A patch download leaves new files marked intent-to-add, which git add and cherry-pick refuse.
   await git(root, ["reset", "-q"]);
@@ -706,6 +711,10 @@ export async function restartFromBase(root: string, old: string): Promise<void> 
     throw new Error(`Couldn't fetch the latest ${base}. Try again. (${e instanceof Error ? e.message.slice(0, 200) : e})`);
   }
   if (carried) await moveCarried(root, base, carried);
+}
+
+export async function restartFromBase(root: string, old: string): Promise<void> {
+  await moveOntoLatestBase(root, await baseBranch(root), old);
   await git(root, ["branch", "-D", old]).catch(() => undefined);
   await forgetBranch(root, old);
 }

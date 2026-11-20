@@ -462,15 +462,15 @@ describe("syncBeforeFixing", () => {
     await fs.rm(tmp, { recursive: true, force: true });
   });
 
-  it("leaves unpushed fixes where they are", async () => {
-    const { tmp, root } = await behindMain();
-    const head = run(root, "rev-parse", "HEAD");
-    await fs.writeFile(path.join(root, "a.js"), "fix\n");
+  it("carries unpushed fixes onto the latest base, so scores match GitHub", async () => {
+    const { tmp, remote, root } = await behindMain();
+    await fs.writeFile(path.join(root, "b.js"), "fix\n");
 
-    expect(await syncBeforeFixing(root)).toBe(false);
+    expect(await syncBeforeFixing(root)).toBe(true);
 
-    expect(run(root, "rev-parse", "HEAD")).toBe(head);
-    expect(await fs.readFile(path.join(root, "a.js"), "utf8")).toBe("fix\n");
+    expect(run(root, "rev-parse", "HEAD")).toBe(run(remote, "rev-parse", "main"));
+    expect(await fs.readFile(path.join(root, "a.js"), "utf8")).toBe("main\n");
+    expect(await fs.readFile(path.join(root, "b.js"), "utf8")).toBe("fix\n");
     await fs.rm(tmp, { recursive: true, force: true });
   });
 });

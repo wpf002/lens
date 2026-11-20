@@ -313,6 +313,10 @@ export const useStore = create<State>((set, get) => ({
         void fetchAudit().then((audit) => set({ audit }), () => set({ audit: null }));
         void fetchReview().then((review) => set({ review }), () => set({ review: null }));
         void get().refreshRemediation();
+        void syncRepo().then(
+          ({ changed }) => (changed ? get().reloadProject() : undefined),
+          (err: unknown) => set({ fixOp: { busy: false, error: err instanceof Error ? err.message : String(err) } }),
+        );
       }
     } catch (err) {
       if (err instanceof UnauthorizedError) set({ status: "unauthorized" });
