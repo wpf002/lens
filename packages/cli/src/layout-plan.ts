@@ -128,3 +128,31 @@ export async function reopenLayoutArea(root: string, fixId: string): Promise<Pat
   await renameScannedPaths(root, back);
   return back;
 }
+
+const LAYOUT_PROMPT_INTRO = [
+  "Restructure this repo's layout to fix the architecture findings below. Only move and rename files and folders, then update every import, path, config entry and doc that points at them. Don't change behavior.",
+  "Work one area at a time. After each area, run the build, typecheck and tests, fix anything the move broke, and commit that area on its own.",
+  "If a move needs a decision from me, ask before making it.",
+].join(" ");
+
+/** The Plan step as a Claude Code prompt: the saved plan's open moves when there is one, else the findings to plan from. */
+export function layoutPrompt(graph: KnowledgeGraph, plan: LayoutPlanRecord | null): string {
+  const out = [LAYOUT_PROMPT_INTRO, ""];
+  const open = (plan?.areas ?? []).filter((a) => a.status !== "applied");
+  if (open.length) {
+    out.push("Plan:");
+    open.forEach((a, i) => {
+      out.push(`${i + 1}. ${a.title}: ${a.reason}`);
+      for (const m of a.moves) out.push(`   - ${m.from} -> ${m.to}`);
+    });
+    out.push("");
+  }
+  out.push("Findings:");
+  const checks = (graph.layout?.checks ?? []).filter((c) => c.count > 0);
+  checks.forEach((c, i) => {
+    out.push(`${i + 1}. ${c.title} (${c.severity}, ${c.count})`);
+    for (const h of c.hits) out.push(`   - ${h.path}${h.line ? `:${h.line}` : ""} ${h.detail}`);
+    out.push(`   Fix: ${c.fix}`);
+  });
+  return out.join("\n");
+}

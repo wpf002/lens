@@ -25,7 +25,7 @@ import { MAX_TEST_REPAIRS, allowAnotherRepair, gateNeedsWork, recordRepairAttemp
 import { grantCheckPermissions } from "./ci-permissions.js";
 import type { AppliedFix } from "./commit-text.js";
 import { FIX_SOURCES, SOURCES, appliedFixIds, applyFixes, discardFixesTouching, isPendingFix, loadRemediation, markCommittedFixesMerged, markFixesMerged, SHIPPED_OUTSIDE_LENS, undoFix, undoFixesSince, type FixSource, type RemediationSource } from "./remediate.js";
-import { loadLayoutPlan, reopenLayoutArea, usableMoves } from "./layout-plan.js";
+import { layoutPrompt, loadLayoutPlan, reopenLayoutArea, usableMoves } from "./layout-plan.js";
 import { EnrichRunner, followFileMoves, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, buildFixPrompt, remediateBudget, remediateLimit, remediationItems, remediationRecord, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import { TestsBroken } from "./local-tests.js";
 import {
@@ -432,7 +432,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
         const plan = await loadLayoutPlan(proj.root);
         const files = graph.nodes.filter((n) => isFileKind(n) && n.path).length;
         const areaEstimates = Object.fromEntries((plan?.areas ?? []).map((a) => [a.id, estimateCost("remediate", usableMoves(proj.root, a.moves).length)]));
-        return send(res, 200, { plan, layout: graph.layout ?? null, estimates: { plan: estimateCost("architecture", files), areas: areaEstimates } });
+        return send(res, 200, { plan, layout: graph.layout ?? null, prompt: layoutPrompt(graph, plan), estimates: { plan: estimateCost("architecture", files), areas: areaEstimates } });
       }
       const enrichMatch = /^\/api\/enrich\/(domain|audit|summaries|review|remediate|architecture)$/.exec(url.pathname);
       if (req.method === "POST" && enrichMatch) {

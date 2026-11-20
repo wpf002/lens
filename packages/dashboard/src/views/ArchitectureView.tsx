@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { healthScore, type HealthCheck, type Severity } from "@lens/core/browser";
 import { fetchArchitecture, type ArchitectureState, type CostEstimate, type LayoutArea } from "../api";
 import { IconChevronDown, IconChevronRight } from "../components/icons";
-import { Elapsed, ProgressBar, Remediation } from "../components/Remediation";
+import { Elapsed, ProgressBar, PromptPreview, Remediation } from "../components/Remediation";
 import { Button, EmptyState, SeverityBadge, Spinner, cx, renderInlineCode } from "../components/ui";
 import { useStore } from "../store";
 import { SEVERITY_COLOR } from "../utils/colors";
@@ -29,8 +29,12 @@ function ScoreRing({ score }: { score: number }) {
 }
 
 /** A button that shows the cost and asks once before starting a run. */
-function ConfirmRun({ label, estimate, disabled, onRun }: { label: string; estimate?: CostEstimate; disabled: boolean; onRun: () => void }) {
-  const [asking, setAsking] = useState(false);
+function ConfirmRun({ label, estimate, disabled, onRun, onAsk }: { label: string; estimate?: CostEstimate; disabled: boolean; onRun: () => void; onAsk?: (asking: boolean) => void }) {
+  const [asking, setAskingState] = useState(false);
+  const setAsking = (next: boolean) => {
+    setAskingState(next);
+    onAsk?.(next);
+  };
   if (!asking)
     return (
       <Button size="sm" variant="accent" className="shrink-0" disabled={disabled} onClick={() => setAsking(true)}>
@@ -171,6 +175,7 @@ export function ArchitectureView() {
   const run = useStore((s) => s.runAI);
   const [state, setState] = useState<ArchitectureState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [planAsking, setPlanAsking] = useState(false);
   const live = mode === "server";
   const graph = model.graph;
 
@@ -209,13 +214,18 @@ export function ArchitectureView() {
         </div>
         {canRun && checks.length > 0 && (
           <div className="ml-auto">
-            <ConfirmRun label={state?.plan ? "Plan Again" : "Plan"} estimate={state?.estimates?.plan} disabled={busy} onRun={() => void run("architecture")} />
+            <ConfirmRun label={state?.plan ? "Plan Again" : "Plan"} estimate={state?.estimates?.plan} disabled={busy} onRun={() => void run("architecture")} onAsk={setPlanAsking} />
           </div>
         )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto pb-6">
         {loadError && <p className="px-4 pt-3 text-[12.5px] text-critical">{loadError}</p>}
+        {planAsking && (
+          <div className="mx-4 mt-3 rounded-lg border border-line bg-panel-2 text-[12.5px]">
+            <PromptPreview loaded={state?.prompt ? { state: "ready", prompt: state.prompt } : state ? { state: "error", message: "No prompt for this project." } : { state: "loading" }} />
+          </div>
+        )}
         <RunStatus areas={areas} />
         <div className="mx-1">
           <Remediation source="layout" />

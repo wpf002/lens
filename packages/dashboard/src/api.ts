@@ -261,6 +261,7 @@ export interface LayoutArea {
 export interface ArchitectureState {
   plan: { generatedAt: string; costUsd?: number; summary: string; areas: LayoutArea[] } | null;
   layout: HealthReport | null;
+  prompt?: string;
   estimates?: { plan: CostEstimate; areas: Record<string, CostEstimate> };
 }
 export const fetchArchitecture = () => request<ArchitectureState>("/api/architecture");

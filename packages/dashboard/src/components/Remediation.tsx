@@ -359,12 +359,11 @@ const SAFE_PREFIX = /^scanner was wrong[:.,]?\s*/i;
 
 const COPIED_MS = 4000;
 
-type PromptState = { state: "loading" } | { state: "error"; message: string } | { state: "ready"; prompt: string; items: number };
+export type PromptState = { state: "loading" } | { state: "error"; message: string } | { state: "ready"; prompt: string; items?: number };
 
-/** The Remediate run as one Claude Code prompt (review the pending files, then fix every open item), shown in full so the owner can read it before copying it to run on their own plan. */
+/** The Remediate run as one Claude Code prompt (fix every open item), shown in full so the owner can read it before copying it to run on their own plan. */
 function FixPromptPreview({ source }: { source: "audit" | "health" }) {
   const [loaded, setLoaded] = useState<PromptState>({ state: "loading" });
-  const [copied, setCopied] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
     fetchFixPrompt(source).then(
@@ -375,6 +374,12 @@ function FixPromptPreview({ source }: { source: "audit" | "health" }) {
       live = false;
     };
   }, [source]);
+  return <PromptPreview loaded={loaded} />;
+}
+
+/** A Claude Code prompt in full with a copy button. */
+export function PromptPreview({ loaded }: { loaded: PromptState }) {
+  const [copied, setCopied] = useState<string | null>(null);
   const copy = async (prompt: string) => {
     try {
       await navigator.clipboard.writeText(prompt);
@@ -390,7 +395,7 @@ function FixPromptPreview({ source }: { source: "audit" | "health" }) {
       <div className="flex items-center gap-2 px-3 py-2">
         <span className="min-w-0 flex-1">
           <span className="text-fg">Prompt</span>
-          {loaded.state === "ready" && ` · ${loaded.items} Issues`}
+          {loaded.state === "ready" && loaded.items !== undefined && ` · ${loaded.items} Issues`}
         </span>
         {loaded.state === "loading" && <Spinner size={14} />}
         <Button size="sm" variant="ghost" disabled={loaded.state !== "ready"} title="Paste into Claude Code" onClick={() => loaded.state === "ready" && void copy(loaded.prompt)}>
