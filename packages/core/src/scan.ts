@@ -22,7 +22,7 @@ import { extractStructure, supportsGrammar, type Structure, type SymbolInfo } fr
 import { parseNonCode, type NonCodeInfo } from "./noncode.js";
 import { parseTsPaths, resolveImport, type ResolverContext } from "./resolve.js";
 import { fileNodeKind, isTestPath } from "./languages.js";
-import { detectEntryPoints, detectMounts, type EntryPoint, type Mount } from "./security/entrypoints.js";
+import { applyGlobalAuthGates, detectEntryPoints, detectGlobalAuthGate, detectMounts, detectNextAuthMiddleware, gateScope, type AuthGate, type EntryPoint, type Mount } from "./security/entrypoints.js";
 import { taintRegexFor } from "./security/rules.js";
 import { scanFile, finalizeSecurity, stripComments, stripDocstrings, type RawFinding } from "./security/analyze.js";
 import type { FunctionSource } from "./security/taint.js";
@@ -210,14 +210,25 @@ export async function scanProject(rootIn: string, opts: ScanOptions = {}): Promi
 
   /* ---- entry points + security raw findings ---- */
   if (!opts.noSecurity) progress("security pass");
+  const gates: AuthGate[] = [];
   for (const r of recs) {
     if (r.structure && (r.f.lang.id === "typescript" || r.f.lang.id === "javascript")) r.mounts = detectMounts(r.src);
     if (r.structure) {
       // Detect routes on comment-stripped text so documentation examples don't become endpoints.
       const uncommented = stripComments(r.src, r.f.lang.id);
       const clean = r.f.lang.id === "python" ? stripDocstrings(uncommented) : uncommented;
-      r.entries = detectEntryPoints({ path: r.f.path, lang: r.f.lang.id, src: clean, lines: clean.split("\n"), symbols: r.structure.symbols }, frameworks);
+      const lines = clean.split("\n");
+      r.entries = detectEntryPoints({ path: r.f.path, lang: r.f.lang.id, src: clean, lines, symbols: r.structure.symbols }, frameworks);
+      if ((r.f.lang.id === "typescript" || r.f.lang.id === "javascript") && !isTestPath(r.f.path)) {
+        const hook = detectGlobalAuthGate(lines);
+        if (hook) gates.push({ scope: gateScope(r.f.path), evidence: `app-wide hook in ${r.f.path} ${hook}`, guards: "server" });
+        const middleware = detectNextAuthMiddleware(r.f.path, clean);
+        if (middleware) gates.push({ scope: gateScope(r.f.path), evidence: `Next.js middleware ${middleware}`, guards: "next" });
+      }
     }
+  }
+  applyGlobalAuthGates(recs.map((r) => ({ path: r.f.path, entries: r.entries })), gates);
+  for (const r of recs) {
     if (!opts.noSecurity) {
       r.raw = scanFile({ path: r.f.path, lang: r.f.lang.id, src: r.src, symbols: r.structure?.symbols ?? [], isTest: isTestPath(r.f.path), entryPoints: r.entries });
     }

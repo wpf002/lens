@@ -48,7 +48,9 @@ export const RULES: Rule[] = [
   /* ---- command / code execution ---- */
   { id: "js-exec-shell", title: "Shell command execution", category: "command-exec", cwe: "CWE-78", severity: "high", confidence: "medium", langs: JS,
     pattern: /(?:(?<![.\w$])|\b(?:child_process|childProcess|cp)\.)(?:exec|execSync)\s*\(\s*(?![`'"][^`'"$]*[`'"]\s*[,)])/,
-    message: "child_process.exec runs its argument through a shell. With any request-derived part this is command injection; prefer execFile with an argument array.", taintBoost: true },
+    message: "child_process.exec runs its argument through a shell. With any request-derived part this is command injection; prefer execFile with an argument array.", taintBoost: true,
+    // Components run in the browser, where a bare exec() is an editor command helper, never a shell.
+    pathFilter: /^(?!.*\.[jt]sx$)/ },
   { id: "js-spawn-tainted", title: "Process spawned with request data", category: "command-exec", cwe: "CWE-78", severity: "medium", confidence: "medium", langs: JS,
     pattern: /(?:(?<![.\w$])|\b(?:child_process|childProcess|cp)\.)(?:spawn|spawnSync|execFile|execFileSync|fork)\s*\(/, requireTaint: true,
     message: "A process is started in code that also handles request input. Check that the command and arguments are not attacker-controlled.", taintBoost: true },
@@ -80,7 +82,8 @@ export const RULES: Rule[] = [
   { id: "prisma-raw-unsafe", title: "Prisma raw query (unsafe variant)", category: "injection", cwe: "CWE-89", severity: "high", confidence: "high", langs: JS,
     pattern: /\$(?:queryRawUnsafe|executeRawUnsafe)\s*\(/, message: "$queryRawUnsafe/$executeRawUnsafe do not parameterize. Use the tagged $queryRaw template.", taintBoost: true },
   { id: "js-orm-raw", title: "Raw ORM query with interpolation", category: "injection", cwe: "CWE-89", severity: "high", confidence: "medium", langs: JS,
-    pattern: /\.(?:query|raw|whereRaw|orderByRaw|joinRaw|unsafe)\s*\(\s*`[^`]*\$\{/, message: "Template literal interpolated into a raw query.", taintBoost: true },
+    pattern: /\.(?:query|raw|whereRaw|orderByRaw|joinRaw|unsafe)\s*\(\s*`[^`]*\$\{/, unless: /\$\{\s*[\w$.]*(?:escapeIdentifier|escapeLiteral|quoteIdent\w*)\(/,
+    message: "Template literal interpolated into a raw query.", taintBoost: true },
   { id: "go-sql-sprintf", title: "SQL built with Sprintf/concat", category: "injection", cwe: "CWE-89", severity: "high", confidence: "medium", langs: GO,
     pattern: /\.(?:Query|QueryRow|Exec|QueryContext|ExecContext)\s*\(\s*(?:ctx\s*,\s*)?(?:fmt\.Sprintf\(|"[^"]*"\s*\+)/, message: "database/sql call with a formatted query string.", taintBoost: true },
   { id: "java-sql-concat", title: "JDBC statement with concatenation", category: "injection", cwe: "CWE-89", severity: "high", confidence: "medium", langs: JAVA,
@@ -128,7 +131,9 @@ export const RULES: Rule[] = [
   /* ---- crypto / tls / randomness ---- */
   { id: "weak-hash", title: "Weak hash algorithm", category: "crypto", cwe: "CWE-327", severity: "low", confidence: "medium", langs: "*",
     pattern: /createHash\s*\(\s*["'](?:md5|sha1)["']|hashlib\.(?:md5|sha1)\s*\(|MessageDigest\.getInstance\s*\(\s*"(?:MD5|SHA-?1)"|\bmd5\s*\(|crypto\/(?:md5|sha1)"|Digest::(?:MD5|SHA1)/i,
-    unless: /usedforsecurity\s*=\s*False|etag|checksum|cache|fingerprint/i, message: "MD5/SHA-1 are broken for security use (fine for checksums and cache keys)." },
+    unless: /usedforsecurity\s*=\s*False|etag|checksum|cache|fingerprint/i,
+    // SQL md5() builds ids and dedup keys; databases don't store passwords with it.
+    pathFilter: /^(?!.*\.sql$)/, message: "MD5/SHA-1 are broken for security use (fine for checksums and cache keys)." },
   { id: "weak-cipher", title: "Weak cipher or mode", category: "crypto", cwe: "CWE-327", severity: "medium", confidence: "high", langs: "*",
     pattern: /\b(?:des-|des3|DES\/|DESede|RC4|rc4|Blowfish|aes-\d+-ecb|AES\/ECB|MODE_ECB)\b|createCipher\s*\(/i, message: "DES/RC4/ECB mode or the deprecated createCipher (no IV)." },
   { id: "insecure-random", title: "Non-cryptographic RNG for secrets", category: "crypto", cwe: "CWE-338", severity: "medium", confidence: "medium", langs: "*",
@@ -155,7 +160,7 @@ export const RULES: Rule[] = [
     pattern: /@csrf_exempt|csrf\(\)\.disable\(\)|skip_before_action\s+:verify_authenticity_token|protect_from_forgery\s+with:\s*:null_session|WTF_CSRF_ENABLED\s*=\s*False|csrf\s*:\s*false/, message: "CSRF protection turned off for this route or app." },
   { id: "mass-assignment", title: "Request body persisted wholesale", category: "mass-assignment", cwe: "CWE-915", severity: "medium", confidence: "medium", langs: "*",
     pattern: /\.(?:create|update|updateOne|findByIdAndUpdate|insert|save|upsert|build|new|assign_attributes|update_attributes)\s*\(\s*(?:\{\s*data\s*:\s*)?(?:req\.body|request\.(?:json|data|POST)|params(?!\.require|\[)|ctx\.request\.body|\*\*request\.(?:json|data))\s*[,)}]/,
-    unless: /permit\(|pick\(|parse\(|validated|schema\./, message: "Entire request body written to a model; attackers can set fields like role or isAdmin." },
+    unless: /permit\(|pick\(|parse\(|validated|schema\.|\.(?:messages|completions|responses|chat)\.create\(/, message: "Entire request body written to a model; attackers can set fields like role or isAdmin." },
   { id: "regex-from-input", title: "Regular expression from request", category: "injection", cwe: "CWE-1333", severity: "low", confidence: "medium", langs: JS,
     pattern: /new\s+RegExp\s*\(\s*req\.(?:body|query|params)/, message: "User-supplied regex can cause catastrophic backtracking (ReDoS)." },
   { id: "xxe", title: "XML parser with external entities", category: "injection", cwe: "CWE-611", severity: "high", confidence: "medium", langs: "*",

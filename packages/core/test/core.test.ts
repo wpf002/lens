@@ -260,9 +260,72 @@ describe("false-positive guards", () => {
     expect(eps.get("POST /slack/events")?.entryType).toBe("webhook");
     expect(graph.security!.findings.some((f) => f.rule === "webhook-no-signature" && f.message.includes("/analytics/event"))).toBe(false);
   });
+
+  it("treats routes behind an app-wide auth hook in another file as guarded, in that app only", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-gate-"));
+    const write = async (rel: string, text: string) => {
+      await fs.mkdir(path.dirname(path.join(dir, rel)), { recursive: true });
+      await fs.writeFile(path.join(dir, rel), text);
+    };
+    await write(
+      "apps/api/src/auth/gate.ts",
+      `export function registerSecretGate(app, secret) {\n  app.addHook('onRequest', async (req, reply) => {\n    if (req.headers['x-api-secret'] !== secret) {\n      return reply.code(401).send({ error: 'unauthorized' });\n    }\n  });\n}\n`,
+    );
+    await write("apps/api/src/orders.ts", `export function orderRoutes(app) {\n  app.post('/orders', async (req) => ({ ok: true }));\n}\n`);
+    await write("apps/other/src/notes.ts", `export function noteRoutes(app) {\n  app.post('/notes', async (req) => ({ ok: true }));\n}\n`);
+    const { graph } = await scanProject(dir, { full: true });
+    const unauthed = graph.security!.findings.filter((f) => f.rule === "unauthenticated-mutation").map((f) => f.path);
+    expect(unauthed).toEqual(["apps/other/src/notes.ts"]);
+    const orders = graph.nodes.find((n) => n.kind === "endpoint" && n.name === "POST /orders")!.endpoint!;
+    expect(orders.auth).toBe("guarded");
+    expect(orders.authEvidence).toContain("apps/api/src/auth/gate.ts line 2");
+  });
+
+  it("treats Next.js routes behind a session middleware as guarded", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-next-gate-"));
+    await fs.mkdir(path.join(dir, "web/app/api/notes"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "web/middleware.ts"),
+      `import { NextResponse } from "next/server";\nexport function middleware(req) {\n  if (!req.cookies.get("sid")) return NextResponse.redirect(new URL("/login", req.url));\n  return NextResponse.next();\n}\n`,
+    );
+    await fs.writeFile(path.join(dir, "web/app/api/notes/route.ts"), `export async function POST(req: Request) {\n  return Response.json({ ok: true });\n}\n`);
+    const { graph } = await scanProject(dir, { full: true });
+    expect(graph.security!.findings.filter((f) => f.rule === "unauthenticated-mutation")).toEqual([]);
+  });
+
+  it("skips safe look-alikes of shell, SQL, hash, mass-assignment and webhook findings", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-lookalike-"));
+    await fs.writeFile(path.join(dir, "backup.ts"), "export const drop = (c) => c.query(`DROP DATABASE ${c.escapeIdentifier(name)}`);\n");
+    await fs.writeFile(path.join(dir, "Editor.tsx"), "export const indent = (e) => exec(e.shiftKey ? 'outdent' : 'indent');\n");
+    await fs.writeFile(path.join(dir, "llm.ts"), "export const ask = (client, params) => client.messages.create(params);\n");
+    await fs.writeFile(path.join(dir, "migration.sql"), "INSERT INTO t (id) SELECT 'x_' || md5(\"a\" || \"b\") FROM s;\n");
+    await fs.writeFile(
+      path.join(dir, "hooks.ts"),
+      "export function routes(app) {\n  app.post('/webhooks/loop', async (req, reply) => {\n    if (!loopAuthorized(req.headers.authorization)) return reply.code(401).send({});\n    return { ok: true };\n  });\n}\n",
+    );
+    const { graph } = await scanProject(dir, { full: true });
+    const rules = ["js-orm-raw", "js-exec-shell", "mass-assignment", "weak-hash", "webhook-no-signature"];
+    expect(graph.security!.findings.filter((f) => rules.includes(f.rule)).map((f) => `${f.rule} ${f.path}`)).toEqual([]);
+  });
 });
 
 describe("code health", () => {
+  it("leaves CLI output, tool configs, referenced public files and lone domain names alone", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-health-fp-"));
+    for (const sub of ["scripts", "public", "app", "src"]) await fs.mkdir(path.join(dir, sub));
+    await fs.writeFile(path.join(dir, "scripts/migrate.ts"), `console.log("moved 3 rows");\n`);
+    await fs.writeFile(path.join(dir, "prisma.config.ts"), `export default { schema: "prisma/schema.prisma" };\n`);
+    await fs.writeFile(path.join(dir, "public/nav-boot.js"), `document.documentElement.dataset.nav = "1";\n`);
+    await fs.writeFile(path.join(dir, "app/layout.tsx"), `export default function Layout() {\n  return <script src="/nav-boot.js" />;\n}\n`);
+    await fs.writeFile(path.join(dir, "src/decrypt-backup.ts"), `export const decrypt = (s: string) => s;\n`);
+    const { graph } = await scanProject(dir, { full: true });
+    const by = new Map(graph.health!.checks.map((c) => [c.id, c]));
+    expect(by.get("debug-leftovers")?.hits ?? []).toEqual([]);
+    expect((by.get("dead-files")?.hits ?? []).map((h) => h.path)).not.toContain("prisma.config.ts");
+    expect((by.get("dead-files")?.hits ?? []).map((h) => h.path)).not.toContain("public/nav-boot.js");
+    expect(by.get("version-files")?.hits ?? []).toEqual([]);
+  });
+
   it("flags the habits it's built for and leaves clean code alone", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-health-"));
     await fs.mkdir(path.join(dir, "src"));

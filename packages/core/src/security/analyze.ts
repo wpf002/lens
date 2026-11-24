@@ -156,7 +156,7 @@ export function scanFile(input: FileScanInput): RawFinding[] {
   for (const e of input.entryPoints) {
     const h = e.handler ? symbols.find((s) => (s.owner ? `${s.owner}.${s.name}` : s.name) === e.handler || s.name === e.handler) : undefined;
     const body = h ? rawLines.slice(h.lines[0] - 1, h.lines[1]).join("\n") : rawLines.slice(e.line - 1, e.line + 30).join("\n");
-    if (e.entryType === "webhook" && !/signature|verify|hmac|constructEvent|timingSafeEqual|compare_digest|X-Hub-Signature|svix|validateRequest/i.test(body)) {
+    if (e.entryType === "webhook" && !/signature|verify|hmac|constructEvent|timingSafeEqual|compare_digest|X-Hub-Signature|svix|validateRequest|Authori[sz]ed\s*\(\s*req\.headers/i.test(body)) {
       out.push({
         rule: "webhook-no-signature", title: "Webhook without signature verification", category: "auth", cwe: "CWE-345",
         severity: "high", confidence: "medium", path, line: e.line,

@@ -190,6 +190,9 @@ export function buildHealth(input: HealthInput): HealthReport {
   const { root, files, nodes, edges, deps } = input;
   const code = files.filter((f) => CODE_LANGS.has(f.lang) && !GENERATED.test(f.path));
   const prod = code.filter((f) => !f.isTest);
+  const CLI_SCRIPT_DIR = /(^|\/)(?:scripts|bin)\//;
+  // Tools such as Prisma, Vite and Vitest load `<tool>.config.ts` themselves.
+  const TOOL_CONFIG = /^[\w-]+\.config\.(?:ts|js|mjs|cjs|mts)$/;
   const checks: HealthCheck[] = [];
   const add = (c: Omit<HealthCheck, "count"> & { count?: number }) => checks.push({ ...c, count: c.count ?? c.hits.length, source: "scanner" });
   const byPath = new Map(nodes.filter((n) => n.path && n.id === `${n.kind}:${n.path}`).map((n) => [n.path!, n]));
@@ -228,7 +231,8 @@ export function buildHealth(input: HealthInput): HealthReport {
   {
     const hits: HealthHit[] = [];
     let count = 0;
-    for (const f of prod) {
+    // Command-line scripts print their output on purpose.
+    for (const f of prod.filter((p) => !CLI_SCRIPT_DIR.test(p.path))) {
       const clean = stripComments(f.src, f.lang);
       const re = JS_LANGS.has(f.lang) ? /\bconsole\.(log|debug)\(|\bdebugger\s*;/g : f.lang === "python" ? /\bbreakpoint\(\)|\bpdb\.set_trace\(\)|\bic\(/g : null;
       if (!re) continue;
@@ -321,9 +325,13 @@ export function buildHealth(input: HealthInput): HealthReport {
   }
   {
     const hits: HealthHit[] = [];
-    // A version tag ends the name (`price_v2.ts`, `report_final.py`); the same word inside a name (`final_win_odds`) is domain language.
-    const RE = /[_\-. ](v\d+|new|old|copy|backup|bak|final|orig|temp|tmp|fixed|updated|improved|enhanced|refactored|working|clean|simple|alt)\.[a-z0-9]+$|\s\(\d+\)\.[a-z]+$/i;
-    for (const f of code) if (RE.test(path.basename(f.path)) && !/(^|\/)migrations?\//.test(f.path)) push(hits, { path: f.path, detail: "file name suggests a second version of something" });
+    // A version tag ends the name (`price_v2.ts` beside `price.ts`); without the original beside it (`decrypt-backup.ts`) the word is domain language.
+    const RE = /[_\-. ](?:v\d+|new|old|copy|backup|bak|final|orig|temp|tmp|fixed|updated|improved|enhanced|refactored|working|clean|simple|alt)\.[a-z0-9]+$|\s\(\d+\)\.[a-z]+$/i;
+    const stems = new Set(code.map((f) => f.path.replace(/\.[^./]+$/, "")));
+    for (const f of code) {
+      if (/(^|\/)migrations?\//.test(f.path) || !RE.test(f.path)) continue;
+      if (stems.has(f.path.replace(RE, ""))) push(hits, { path: f.path, detail: "file name suggests a second version of something" });
+    }
     add({ id: "version-files", title: "Duplicate Version Files", category: "duplication", severity: "medium", hits, fix: "Merge into the original and delete the extra copy. Git already keeps history." });
   }
 
@@ -338,7 +346,8 @@ export function buildHealth(input: HealthInput): HealthReport {
       if (!n || importedFiles.has(n.id) || ENTRY_RE.test(f.path) || FRAMEWORK_ROUTE_DIR.test(f.path) || n.tags.includes("has-routes")) continue;
       const base = path.basename(f.path);
       const stem = base.replace(/\.[^.]+$/, "");
-      if (configText.includes(base) || configText.includes(f.path) || (ids.get(stem) ?? 0) > 0) continue;
+      if (configText.includes(base) || configText.includes(f.path) || (ids.get(stem) ?? 0) > 0 || TOOL_CONFIG.test(base)) continue;
+      if (/(^|\/)public\//.test(f.path) && code.some((c) => c.src.includes(`/${base}`))) continue;
       push(hits, { path: f.path, detail: "nothing imports or runs this file" });
     }
     add({ id: "dead-files", title: "Unused Files", category: "dead-code", severity: "medium", hits, fix: "Delete it, or wire it in. Unused files still get read, reviewed, and scanned." });

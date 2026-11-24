@@ -41,6 +41,66 @@ export function detectMounts(src: string): Mount[] {
   return out;
 }
 
+const GLOBAL_HOOK_RE = /\.(?:addHook\s*\(\s*["'](?:onRequest|preParsing|preValidation|preHandler)["']|use\s*\(\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>))/;
+const HOOK_BODY_LINES = 40;
+const REJECTS_CALLER_RE = /\b(?:401|403)\b|\bUnauthorized\b|\bForbidden\b/;
+const READS_CREDENTIAL_RE = /\bheaders\b|\bauthorization\b|\bcookies?\b|\bsession\b|\btoken\b|\bsecret\b|jwtVerify|\bverify\w*\(/i;
+
+/**
+ * A request hook on the whole app that rejects callers without credentials,
+ * like fastify's app.addHook("onRequest", ...) replying 401 when a header or session check fails.
+ * Returns the hook's line as evidence, or undefined when the file has none.
+ */
+export function detectGlobalAuthGate(lines: string[]): string | undefined {
+  for (let i = 0; i < lines.length; i++) {
+    if (!GLOBAL_HOOK_RE.test(lines[i]!)) continue;
+    const body = lines.slice(i, i + HOOK_BODY_LINES).join("\n");
+    if (REJECTS_CALLER_RE.test(body) && READS_CREDENTIAL_RE.test(body)) return `line ${i + 1}: ${lines[i]!.trim().slice(0, 100)}`;
+  }
+  return undefined;
+}
+
+const NEXT_MIDDLEWARE_RE = /(?:^|\/)(?:src\/)?(?:middleware|proxy)\.(?:ts|js|mts|mjs)$/;
+const NEXT_REJECTS_RE = /NextResponse\.redirect|status:\s*40[13]\b|\b40[13]\b/;
+const NEXT_READS_SESSION_RE = /\.cookies\.get\(|getToken\(|auth\(|getSession\(|clerkMiddleware|withAuth/;
+
+/** A Next.js middleware that turns away requests without a session, which runs before every app route it matches. */
+export function detectNextAuthMiddleware(filePath: string, src: string): string | undefined {
+  if (!NEXT_MIDDLEWARE_RE.test(filePath) || !NEXT_REJECTS_RE.test(src)) return undefined;
+  const session = NEXT_READS_SESSION_RE.exec(src);
+  return session ? `${filePath} checks ${session[0]}` : undefined;
+}
+
+/** The app a gate file belongs to: its path up to `src/`, so a gate in apps/api covers apps/api only. */
+export function gateScope(filePath: string): string {
+  if (filePath.startsWith("src/")) return "";
+  const nested = filePath.indexOf("/src/");
+  if (nested >= 0) return filePath.slice(0, nested + 1);
+  return filePath.slice(0, filePath.lastIndexOf("/") + 1);
+}
+
+export interface AuthGate {
+  scope: string;
+  evidence: string;
+  /** Next.js middleware guards app routes; a server hook guards the server's own routes. */
+  guards: "next" | "server";
+}
+
+/** Marks unguarded routes inside a gate's app as guarded, when the gate runs in front of that kind of route. */
+export function applyGlobalAuthGates(files: Array<{ path: string; entries: EntryPoint[] }>, gates: AuthGate[]): void {
+  if (!gates.length) return;
+  for (const file of files) {
+    for (const e of file.entries) {
+      if (e.auth !== "unguarded" || e.entryType !== "http") continue;
+      const kind = e.framework === "next" ? "next" : "server";
+      const gate = gates.find((g) => g.guards === kind && file.path.startsWith(g.scope));
+      if (!gate) continue;
+      e.auth = "guarded";
+      e.authEvidence = gate.evidence;
+    }
+  }
+}
+
 export const AUTH_TOKEN_RE =
   /\b(?:auth\w*|requireAuth|requireUser|requireLogin|ensureAuth\w*|isAuthenticated|authenticated|authenticate\w*|verifyToken|verifyJwt|jwtAuth|checkJwt|passport\.authenticate|protect(?:ed)?|guard|withAuth|withSession|login_required|permission_required|user_passes_test|permission_classes|IsAuthenticated|Depends\(\s*(?:get_current_\w+|get_admin\w*|require_\w+|current_user|verify_\w+|auth\w*)|Security\(|@PreAuthorize|@Secured|@RolesAllowed|UseGuards|AuthGuard|authenticate_user!|require_login|before_action\s+:(?:authenticate|require|authorize)\w*|middleware\(\s*['"\[]*auth|clerkMiddleware|getServerSession|currentUser|requireSession|session\.user|req\.user\b|request\.user\.is_authenticated|\[Authorize\])/;
 
