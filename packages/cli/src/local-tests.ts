@@ -116,9 +116,9 @@ async function ensureInstalled(root: string, plan: TestPlan): Promise<string | n
 }
 
 /** A clean copy of HEAD that reuses the project's installed node_modules, so testing it needs no install. */
-async function headCopy(root: string): Promise<string> {
+async function headCopy(root: string, baseline: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-base-tests-"));
-  await git(root, ["worktree", "add", "-q", "--detach", dir, "HEAD"]);
+  await git(root, ["worktree", "add", "-q", "--detach", dir, baseline]);
   const manifests = (await git(root, ["ls-files", "package.json", "**/package.json"])).split("\n").filter(Boolean);
   for (const manifest of manifests) {
     const modules = path.join(root, path.dirname(manifest), "node_modules");
@@ -158,11 +158,11 @@ export function gateRuns(manager: PackageManager, scripts: Record<string, string
 }
 
 /** Run one check with Lens's edits; on failure, run it without them and report only what the edits broke. */
-async function runGate(root: string, argv: string[]): Promise<LocalTestResult> {
+async function runGate(root: string, argv: string[], baseline: string): Promise<LocalTestResult> {
   const withEdits = await run(root, argv, TEST_TIMEOUT_MS);
   if (withEdits.ok) return { state: "passed" };
   if (withEdits.timedOut) return { state: "broken", tests: [], excerpt: `\`${argv.join(" ")}\` ran past ${TEST_TIMEOUT_MS / 60_000} minutes.` };
-  const base = await headCopy(root);
+  const base = await headCopy(root, baseline);
   try {
     return newFailures(withEdits, await run(base, argv, TEST_TIMEOUT_MS));
   } finally {
@@ -171,8 +171,8 @@ async function runGate(root: string, argv: string[]): Promise<LocalTestResult> {
 }
 
 /** Run the tests, typecheck and build for what Lens's uncommitted edits touch, and report what those edits break. */
-export async function checkLocalTests(root: string): Promise<LocalTestResult> {
-  const changed = await uncommitted(root);
+export async function checkLocalTests(root: string, baseline = "HEAD"): Promise<LocalTestResult> {
+  const changed = baseline === "HEAD" ? await uncommitted(root) : (await git(root, ["diff", "--cached", "--name-only", baseline])).split("\n").filter(Boolean);
   if (!changed.length) return { state: "passed" };
   const plan = await testPlan(root, changed);
   if (!plan) return { state: "skipped", reason: "no test script" };
@@ -180,7 +180,7 @@ export async function checkLocalTests(root: string): Promise<LocalTestResult> {
   if (installProblem) return { state: "skipped", reason: installProblem };
   const manifest = await readJson<{ scripts?: Record<string, string> }>(path.join(root, "package.json"));
   for (const argv of [plan.run, ...gateRuns(plan.manager, manifest?.scripts)]) {
-    const result = await runGate(root, argv);
+    const result = await runGate(root, argv, baseline);
     if (result.state !== "passed") return result;
   }
   return { state: "passed" };

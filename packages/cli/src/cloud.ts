@@ -323,6 +323,8 @@ async function takeBaseVersion(root: string, files: string[]): Promise<void> {
 }
 
 const MERGE_GATE_ROUNDS = 4;
+/** A merge is judged against the base it merges in, as CI judges the pull request, so failures the fixes branch already had still count. */
+const MERGE_BASELINE = "MERGE_HEAD";
 const MAX_PATH_LENGTH = 400;
 
 /** Files named in a failure excerpt that the merge still changes against the base. */
@@ -373,7 +375,7 @@ async function culpritsOf(root: string, changed: string[]): Promise<string[] | n
   const snapshot = await git(root, ["write-tree"]);
   const culprits = await findCulprits(changed, async (reverted) => {
     await revertFrom(root, snapshot, reverted);
-    return (await checkLocalTests(root)).state !== "broken";
+    return (await checkLocalTests(root, MERGE_BASELINE)).state !== "broken";
   });
   await git(root, ["read-tree", "-u", "--reset", snapshot]);
   return culprits;
@@ -393,7 +395,7 @@ export async function takeDroppedFiles(root: string): Promise<string[]> {
  */
 async function gateMerge(root: string, base: string, dropped: string[]): Promise<string | null> {
   for (let round = 0; ; round++) {
-    const tests = await checkLocalTests(root);
+    const tests = await checkLocalTests(root, MERGE_BASELINE);
     if (tests.state === "skipped") console.error(`[tests] not run on the merge with ${base}: ${tests.reason}`);
     if (tests.state !== "broken") {
       for (const file of dropped) await git(root, ["config", "--add", DROPPED_KEY, file]);

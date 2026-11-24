@@ -284,6 +284,33 @@ describe("pushFixes", () => {
     await fs.rm(tmp, { recursive: true, force: true });
   }, 60_000);
 
+  it("drops a fix the branch already carried when it breaks the merge with the base, judging against the base as CI does", async () => {
+    const { tmp, remote, root } = await fixesBranchBehindMain({ file: "a.js", content: "main\n" });
+    const verify = 'if (require("fs").existsSync("c.js")) { console.error("c.js breaks the build"); process.exit(1); }\n';
+    const manifest = JSON.stringify({ name: "x", private: true, scripts: { test: "node verify.cjs" } });
+    const other = path.join(tmp, "other");
+    for (const dir of [root, other]) {
+      await fs.writeFile(path.join(dir, "verify.cjs"), verify);
+      await fs.writeFile(path.join(dir, "package.json"), manifest);
+    }
+    run(other, "add", "-A");
+    run(other, "commit", "-qm", "add tests");
+    run(other, "push", "-q", "origin", "main");
+    await fs.writeFile(path.join(root, "c.js"), "3\n");
+    run(root, "add", "-A");
+    run(root, "commit", "-qm", "earlier fix that breaks the tests");
+    run(root, "push", "-q");
+    await fs.writeFile(path.join(root, "d.js"), "4\n");
+
+    const { branch } = await pushFixes(root, [], async (dir) => fs.writeFile(path.join(dir, "a.js"), "main and 2\n"));
+
+    expect(run(remote, "show", `${branch}:a.js`)).toBe("main and 2");
+    expect(run(remote, "ls-tree", "--name-only", branch).split("\n")).not.toContain("c.js");
+    expect(run(remote, "show", `${branch}:d.js`)).toBe("4");
+    expect(await takeDroppedFiles(root)).toEqual(["c.js"]);
+    await fs.rm(tmp, { recursive: true, force: true });
+  }, 60_000);
+
   it("moves fixes to the base branch after a patch download marked new files intent-to-add, with .lens gitignored", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "lens-push-"));
     const remote = path.join(tmp, "remote.git");
