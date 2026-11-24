@@ -2,6 +2,7 @@
 import { Command, Option } from "commander";
 import pc from "picocolors";
 import path from "node:path";
+import os from "node:os";
 import { promises as fs, existsSync } from "node:fs";
 import { execFile } from "node:child_process";
 import {
@@ -9,7 +10,7 @@ import {
   applyPatch, PatchValidationError, validateGraph, KnowledgeGraphSchema, formatZodError,
   buildBatches, architectureContext, tourContext, domainContext, securityContext,
   diffImpact, isGitRepo, saveDiff, gitChanges, healthOfChange, scanProject, GraphSearch, indexGraph, neighbors, shortestPath, explain, graphStats, findNode,
-  toMermaid, toDot, embedInDashboard, onboardingMarkdown, buildKnowledgeGraph, buildEmbeddings, osvScan, DEFAULT_IGNORES,
+  renderRulesBlock, withRulesBlock, toMermaid, toDot, embedInDashboard, onboardingMarkdown, buildKnowledgeGraph, buildEmbeddings, osvScan, DEFAULT_IGNORES,
   EDGE_KINDS, NODE_KINDS, ProbeRefused, type EdgeKind, type KnowledgeGraph, type NodeKind, type PatchKind, type EmbeddingStore, type Severity,
 } from "@lens/core";
 import { startServer, dashboardHtmlPath } from "./server.js";
@@ -355,6 +356,21 @@ program
         for (const h of c.hits) out(`  ${h.path}${h.line ? `:${h.line}` : ""} ${h.detail}`);
       }
     if (problems.length) process.exitCode = HEALTH_PROBLEMS_EXIT;
+  });
+
+program
+  .command("rules")
+  .description("Every Lens check as a rule for Claude Code; --install writes it into ~/.claude/CLAUDE.md")
+  .option("--install", "write the rules into the CLAUDE.md file, replacing the previous Lens block")
+  .option("--file <path>", "CLAUDE.md to install into", path.join(os.homedir(), ".claude", "CLAUDE.md"))
+  .action(async (o) => {
+    if (!o.install) return out(renderRulesBlock());
+    const existing = existsSync(o.file) ? await fs.readFile(o.file, "utf8") : "";
+    const updated = withRulesBlock(existing);
+    if (updated === existing) return;
+    await fs.mkdir(path.dirname(o.file), { recursive: true });
+    await fs.writeFile(o.file, updated);
+    out(`Lens rules installed in ${o.file}`);
   });
 
 program

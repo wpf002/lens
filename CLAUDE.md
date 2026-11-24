@@ -15,11 +15,11 @@ Codebase → knowledge graph → dashboard, with a security view. pnpm + Turbore
 ## Commands
 - `pnpm install && pnpm build` · `pnpm test` · `pnpm typecheck`
 - `pnpm dev:dashboard` (uses `packages/dashboard/public/sample-graph.json`)
-- `bin/lens scan <dir>` · `bin/lens serve <dir>`
+- `bin/lens scan <dir>` · `bin/lens serve <dir>` · `bin/lens rules --install` (every check as a rule in `~/.claude/CLAUDE.md`)
 
 ## Conventions
 - Graph schema id is `lens/1` (`packages/core/src/types.ts`). Changing a type means updating `schema.ts`, the dashboard, and bumping the schema id if old graphs break.
 - Tree-sitter grammars come from `tree-sitter-wasms` and load through `web-tree-sitter@0.25` (pinned; newer ABI breaks those grammars). Grammars are preloaded before parsing because loading one after the WASM heap grows is slow.
-- New security rules go in `security/rules.ts` with a fixture line in `packages/core/test/fixtures/vuln-app` and an assertion in `core.test.ts`.
+- New security rules go in `security/rules.ts` with a fixture line in `packages/core/test/fixtures/vuln-app` and an assertion in `core.test.ts`. Every new check id also needs a rule in `rules-catalog.ts` (`rules-catalog.test.ts` fails without one).
 - Anything an agent writes is validated by a zod schema with length caps. Keep it that way.
 - Versions: bump `package.json` (root + packages) and `.claude-plugin/plugin.json` together.
