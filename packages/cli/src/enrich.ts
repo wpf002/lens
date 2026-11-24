@@ -1136,7 +1136,7 @@ export class EnrichRunner {
     if (!checkId && source !== "review") return this.runFixAll(job, source);
     if (source === "health" && checkId && REFACTOR_CHECKS.has(checkId)) return this.runFixAll(job, source, (id) => id.startsWith(`${checkId}~`));
     const { root } = job;
-    const rechecked = source === "review" && (await this.recheckFindings(job, checkId));
+    const rechecked = source === "review" && (await this.recheckFindings(job, source, checkId));
     if (rechecked === null) return;
     // Every open review finding: fix them in batches like Fix All, since one Claude run can't settle a hundred.
     if (source === "review" && !checkId) return this.runFixAll(job, "health", (id) => REVIEW_ID.test(id));
@@ -1198,8 +1198,8 @@ export class EnrichRunner {
    * them, re-review the files that changed since, so findings already fixed outside Lens close
    * instead of being sent to Claude. Returns whether a re-check ran, or null when the job stopped.
    */
-  private async recheckFindings(job: EnrichJob, checkId: string | undefined): Promise<boolean | null> {
-    const plan = await recheckPlan(job.root, checkId);
+  private async recheckFindings(job: EnrichJob, source: FixSource, checkId: string | undefined): Promise<boolean | null> {
+    const plan = await recheckPlan(job.root, source, checkId);
     if (!plan.paths.length) return false;
     this.push(job, `Re-checking ${plan.paths.length} changed file${plan.paths.length === 1 ? "" : "s"} before fixing`);
     const found = await this.reviewStep(job, { limitUsd: plan.estimate.limit, recheck: plan.paths });
@@ -1229,6 +1229,8 @@ export class EnrichRunner {
       job.audit = undefined;
       job.review = undefined;
     }
+    // Health includes review findings: close the ones fixed outside Lens before paying to fix them again.
+    if (source === "health" && !only && (await this.recheckFindings(job, source, undefined)) === null) return;
     const total = only ? (await pending()).length : await fixableCount(root, source);
     const progress: FixAllProgress = { attempted: 0, total, fixed: 0, batches: 0 };
     // Items from a batch that ran out of time, retried one per run.
@@ -1524,10 +1526,11 @@ export async function reviewPlan(root: string, graph?: KnowledgeGraph | null): P
 }
 
 /** Files holding the open review findings a fix run targets that changed since their last review, and what re-reviewing them costs. */
-export async function recheckPlan(root: string, checkId?: string, graph?: KnowledgeGraph | null): Promise<{ paths: string[]; estimate: CostEstimate }> {
+export async function recheckPlan(root: string, source: FixSource, checkId?: string, graph?: KnowledgeGraph | null): Promise<{ paths: string[]; estimate: CostEstimate }> {
   const g = graph ?? (await loadGraph(root));
   const ledger = await readJson<ReviewRecord>(reviewPath(root));
-  const targeted = new Set((await remediationItems(root, "review", checkId, Infinity)).map((i) => ledger?.findings[reviewIndex(i.id) ?? -1]?.path));
+  const items = source === "audit" ? [] : await remediationItems(root, source, checkId, Infinity);
+  const targeted = new Set(items.map((i) => ledger?.findings[reviewIndex(i.id) ?? -1]?.path).filter((p) => p !== undefined));
   const files = (g ? reviewFiles(g) : []).filter((f) => targeted.has(f.path));
   const pending = pendingReview(files, await hashFiles(root, files.map((f) => f.path)), await loadCoverage(root));
   return { paths: pending.map((f) => f.path), estimate: reviewEstimate(planBatches(pending).length) };
@@ -1536,7 +1539,7 @@ export async function recheckPlan(root: string, checkId?: string, graph?: Knowle
 /** The spending limit for a Remediate run that isn't a Fix All: re-checking stale review findings, then fixing. */
 export async function remediateBudget(root: string, source: FixSource, checkId?: string): Promise<number> {
   const items = (await remediationItems(root, source, checkId)).length;
-  const recheck = source === "review" ? (await recheckPlan(root, checkId)).estimate.limit : 0;
+  const recheck = source === "review" ? (await recheckPlan(root, source, checkId)).estimate.limit : 0;
   const fixes = source === "review" && !checkId ? Math.min(MAX_FIX_ALL_USD, estimateFixAll(items).limit + FIX_CHECK_RESERVE_USD) : remediateLimit(checkId, items);
   return Math.round((recheck + fixes) * 100) / 100;
 }
@@ -1558,7 +1561,7 @@ export async function fixAllPlan(root: string, source: "audit" | "health"): Prom
   // Health fixes only what the checks found. File review is its own action, since every fix commit would queue the changed files for review again.
   const auditAt = source === "audit" ? Date.parse((await readJson<{ generatedAt?: string }>(auditPath(root)))?.generatedAt ?? "") || 0 : 0;
   const first = source === "health" || (auditAt && auditAt >= headCommitTime(root)) ? null : "audit";
-  const pre = !first ? { low: 0, high: 0, limit: 0 } : estimateCost("audit", files);
+  const pre = first ? estimateCost("audit", files) : source === "health" ? (await recheckPlan(root, source, undefined, g)).estimate : { low: 0, high: 0, limit: 0 };
   const open = await remediationItems(root, source, undefined, Infinity);
   const items = open.length;
   // Refactors each get their own run and cap, so they're priced apart from batch fixes.
