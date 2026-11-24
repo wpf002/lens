@@ -186,12 +186,20 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
     const marked = await markCommittedFixesMerged(root, pr, base);
     if (marked) console.error(`[github] ${marked} pending fix(es) are already in the base branch; marked merged`);
   };
-  const conflictTries = new Set<string>();
-  /** GitHub can't merge the pull request: merge its base in and resolve the conflicts. Once per head commit. */
+  /** Head commit key -> the base commit its last try merged against. */
+  const conflictTries = new Map<string, string>();
+  const lastConflictCheck = new Map<string, number>();
+  /** GitHub can't merge the pull request: merge its base in and resolve the conflicts. Once per head and base commit pair. */
   const resolvePrConflicts = async (root: string, pr: PullRequest) => {
     const key = `${root}#${pr.number}@${pr.tests?.sha ?? ""}`;
-    if (conflictTries.has(key)) return;
-    conflictTries.add(key);
+    if (conflictTries.has(key) && Date.now() - (lastConflictCheck.get(key) ?? 0) < BASE_FETCH_INTERVAL_MS) return;
+    lastConflictCheck.set(key, Date.now());
+    const base = await fetchBaseCommit(root).catch((e: unknown) => {
+      console.error(`[github] couldn't fetch the base for PR #${pr.number}: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+      return "";
+    });
+    if (conflictTries.get(key) === base) return;
+    conflictTries.set(key, base);
     try {
       await prLock.whenFree(JOB_POLL_MS);
       await holdPush("the conflict merge", root, () => pushPending(root, [], resolveConflicts));

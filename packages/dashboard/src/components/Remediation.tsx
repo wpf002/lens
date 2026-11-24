@@ -574,7 +574,7 @@ const needsFixTests = (pr: PullRequest) => pr.tests?.state === "broken" && !pr.t
 /** Test results for an open fixes PR, counting only failures Lens's changes caused. */
 /** Where the pull request's checks stand: label, color token, whether Lens is still working, and the hover detail. */
 function testsStatus(pr: PullRequest): { label: string; color: string; working: boolean; detail?: string } | null {
-  if (pr.conflicts) return { label: "Merge Conflicts", color: "var(--sev-critical)", working: false, detail: "GitHub can't merge these fixes into the base branch. Undo the conflicting fixes and run Fix again." };
+  if (pr.conflicts) return { label: "Merge Conflicts", color: "var(--sev-critical)", working: false, detail: "Lens merges the base branch in and resolves them, keeping the base's version where a fix can't be kept." };
   const t = pr.tests;
   if (!t) return null;
   const broken = t.broken.reduce((n, b) => n + Math.max(1, b.tests.length), 0);

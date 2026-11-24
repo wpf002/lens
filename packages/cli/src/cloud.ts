@@ -292,7 +292,8 @@ async function finishMerge(root: string, base: string, resolveConflicts: Conflic
   if (!conflicted.length) return "the merge stopped without conflicted files";
   const locks = conflicted.filter((file) => lockTargetOf(file));
   const sources = conflicted.filter((file) => !lockTargetOf(file));
-  if (sources.length) await resolveConflicts(root, sources, base);
+  // A failed resolver run leaves the markers in place, so those files take the base's version below instead of aborting the merge.
+  if (sources.length) await resolveConflicts(root, sources, base).catch((e: unknown) => console.error(`[github] conflict resolver failed: ${e instanceof Error ? e.message.slice(0, 200) : e}`));
   const marked: string[] = [];
   for (const file of sources) {
     // A resolution may delete a file; only files still there can hold markers.

@@ -244,6 +244,21 @@ describe("pushFixes", () => {
     await fs.rm(tmp, { recursive: true, force: true });
   });
 
+  it("takes the base's version of conflicted files when the resolver run fails, instead of leaving the pull request in conflict", async () => {
+    const { tmp, remote, root } = await fixesBranchBehindMain({ file: "a.js", content: "main\n" });
+    await fs.writeFile(path.join(root, "c.js"), "3\n");
+
+    const { branch } = await pushFixes(root, [], async () => {
+      throw new Error("AI run failed");
+    });
+
+    expect(run(remote, "show", `${branch}:a.js`)).toBe("main");
+    expect(run(remote, "show", `${branch}:c.js`)).toBe("3");
+    expect(run(remote, "merge-base", "--is-ancestor", "main", branch)).toBe("");
+    expect(run(root, "status", "--porcelain")).toBe("");
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
   it("finds the fix that breaks a test naming no file, drops only that one and records it", async () => {
     const { tmp, remote, root } = await fixesBranchBehindMain({ file: "a.js", content: "main\n" });
     // Fails only when the base's a.js meets the new c.js, and names neither file.
