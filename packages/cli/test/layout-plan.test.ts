@@ -82,14 +82,16 @@ describe("layoutPrompt", () => {
 
   it("lists open findings with their fixes when there's no plan", () => {
     const prompt = layoutPrompt(graph, null);
-    expect(prompt).toContain("1. Crowded folder (medium, 1)\n   - src 42 files\n   Fix: Group the files by feature.");
+    expect(prompt).toContain("Findings:\n- [ ] 1. Crowded folder (medium, 1)\n      - src 42 files\n      Fix: Group the files by feature.");
+    expect(prompt).toContain("checklist of 1 item. Every item is required.");
     expect(prompt).not.toContain("Clean check");
     expect(prompt).not.toContain("Plan:");
   });
 
   it("lists the plan's open moves and leaves out areas already moved", () => {
     const prompt = layoutPrompt(graph, plan);
-    expect(prompt).toContain("Plan:\n1. Auth: Auth files are scattered.\n   - src/login.ts -> src/auth/login.ts");
+    expect(prompt).toContain("Plan:\n- [ ] 1. Auth: Auth files are scattered.\n      - src/login.ts -> src/auth/login.ts");
+    expect(prompt).toContain("Findings:\n- [ ] 2. Crowded folder");
     expect(prompt).not.toContain("src/old.ts");
   });
 });

@@ -38,7 +38,9 @@ describe("Remediate scope", () => {
   it("puts every open Health item in the Copy Prompt text, with its file and fix", async () => {
     const items = await remediationItems(dir, "health", undefined, Infinity);
     const prompt = fixPrompt("health", items);
-    expect(prompt.split("\n").filter((l) => /^\d+\. /.test(l))).toHaveLength(items.length);
+    expect(prompt.split("\n").filter((l) => /^- \[ \] \d+\. /.test(l))).toHaveLength(items.length);
+    expect(prompt).toContain(`checklist of ${items.length} items. Every item is required.`);
+    expect(prompt).toContain("Don't write a plan, checklist, notes or summary .md file.");
     expect(prompt).toContain("app.js 900 lines");
     expect(prompt).toContain("Fix: Split it.");
   });
@@ -46,7 +48,7 @@ describe("Remediate scope", () => {
   it("leaves file review out of the Copy Prompt and the Health Fix All plan", async () => {
     const saved = await buildFixPrompt(dir, "health");
     expect(saved.prompt).not.toContain("Review");
-    expect(saved.prompt.split("\n").filter((l) => /^\d+\. /.test(l))).toHaveLength(saved.items);
+    expect(saved.prompt.split("\n").filter((l) => /^- \[ \] \d+\. /.test(l))).toHaveLength(saved.items);
     const plan = await fixAllPlan(dir, "health");
     expect(plan.first).toBeNull();
   });

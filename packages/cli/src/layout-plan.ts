@@ -8,6 +8,7 @@ import path from "node:path";
 import { isFileKind, paths, readJson, renameScannedPaths, writeJsonAtomic, type KnowledgeGraph, type LayoutPlan, type PathMove } from "@lens/core";
 import { loadRemediation, safeTarget } from "./remediate.js";
 import { isBinary } from "./workspace.js";
+import { checklistPrompt } from "./checklist-prompt.js";
 
 export type AreaStatus = "planned" | "applied";
 export type LayoutMove = LayoutPlan["areas"][number]["moves"][number];
@@ -129,30 +130,23 @@ export async function reopenLayoutArea(root: string, fixId: string): Promise<Pat
   return back;
 }
 
-const LAYOUT_PROMPT_INTRO = [
+const LAYOUT_PROMPT_TASK = [
   "Restructure this repo's layout to fix the architecture findings below. Only move and rename files and folders, then update every import, path, config entry and doc that points at them. Don't change behavior.",
   "Work one area at a time. After each area, run the build, typecheck and tests, fix anything the move broke, and commit that area on its own.",
-  "If a move needs a decision from me, ask before making it.",
 ].join(" ");
 
-/** The Plan step as a Claude Code prompt: the saved plan's open moves when there is one, else the findings to plan from. */
+/** The Plan step as a Claude Code prompt: the saved plan's open moves when there is one, then the findings. */
 export function layoutPrompt(graph: KnowledgeGraph, plan: LayoutPlanRecord | null): string {
-  const out = [LAYOUT_PROMPT_INTRO, ""];
   const open = (plan?.areas ?? []).filter((a) => a.status !== "applied");
-  if (open.length) {
-    out.push("Plan:");
-    open.forEach((a, i) => {
-      out.push(`${i + 1}. ${a.title}: ${a.reason}`);
-      for (const m of a.moves) out.push(`   - ${m.from} -> ${m.to}`);
-    });
-    out.push("");
-  }
-  out.push("Findings:");
   const checks = (graph.layout?.checks ?? []).filter((c) => c.count > 0);
-  checks.forEach((c, i) => {
-    out.push(`${i + 1}. ${c.title} (${c.severity}, ${c.count})`);
-    for (const h of c.hits) out.push(`   - ${h.path}${h.line ? `:${h.line}` : ""} ${h.detail}`);
-    out.push(`   Fix: ${c.fix}`);
-  });
-  return out.join("\n");
+  return checklistPrompt(LAYOUT_PROMPT_TASK, [
+    { heading: "Plan", items: open.map((a) => ({ title: `${a.title}: ${a.reason}`, details: a.moves.map((m) => `- ${m.from} -> ${m.to}`) })) },
+    {
+      heading: "Findings",
+      items: checks.map((c) => ({
+        title: `${c.title} (${c.severity}, ${c.count})`,
+        details: [...c.hits.map((h) => `- ${h.path}${h.line ? `:${h.line}` : ""} ${h.detail}`), `Fix: ${c.fix}`],
+      })),
+    },
+  ]);
 }

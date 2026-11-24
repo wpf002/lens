@@ -21,6 +21,7 @@ import { buildPlanRecord, loadLayoutPlan, moveFiles, planContext, saveLayoutPlan
 import { itemRate, loadFixCosts, recordFixCost, type ItemRate } from "./fix-costs.js";
 import { actionPinFix } from "./action-pins.js";
 import { AuditVerdictsSchema, LayoutPlanSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, renameScannedPaths, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type Finding, type KnowledgeGraph, type PathMove } from "@lens/core";
+import { checklistPrompt } from "./checklist-prompt.js";
 
 export type EnrichTask = "domain" | "audit" | "summaries" | "review" | "remediate" | "architecture" | "merge";
 
@@ -1709,9 +1710,9 @@ export function nextFixBatch<T extends { id: string }>(left: T[]): T[] {
   return fixes.slice(0, FIX_ALL_BATCH);
 }
 const SEV_RANK = { high: 0, medium: 1, low: 2 } as const;
-const FIX_PROMPT_INTRO: Record<"audit" | "health", string> = {
-  health: "Fix these code health issues in this repo. Make real code changes; don't just reword or suppress a warning. If one needs a decision from me, ask before changing code. Run the typecheck and tests after each fix and commit.",
-  audit: "Fix these security issues in this repo. Make real code changes. If one needs a decision from me or a change in a web console, ask or give me exact steps. Never print secret values. Run the tests after each fix and commit.",
+const FIX_PROMPT_TASK: Record<"audit" | "health", string> = {
+  health: "Fix these code health issues in this repo. Make real code changes; don't just reword or suppress a warning. Run the typecheck and tests after each fix and commit.",
+  audit: "Fix these security issues in this repo. Make real code changes. If one needs a change in a web console, give me exact steps. Never print secret values. Run the tests after each fix and commit.",
 };
 
 /**
@@ -1719,13 +1720,8 @@ const FIX_PROMPT_INTRO: Record<"audit" | "health", string> = {
  * fix every open item.
  */
 export function fixPrompt(source: "audit" | "health", items: RemediationItem[]): string {
-  const lines = items.map((item, i) => {
-    const out = [`${i + 1}. ${item.title}`];
-    for (const e of item.evidence) out.push(`   - ${e}`);
-    if (item.fix) out.push(`   Fix: ${item.fix}`);
-    return out.join("\n");
-  });
-  return [FIX_PROMPT_INTRO[source], "", ...lines].join("\n");
+  const checklist = items.map((item) => ({ title: item.title, details: [...item.evidence.map((e) => `- ${e}`), ...(item.fix ? [`Fix: ${item.fix}`] : [])] }));
+  return checklistPrompt(FIX_PROMPT_TASK[source], [{ items: checklist }]);
 }
 
 /** The Remediate prompt for this project, with counts for the dashboard's confirmation. */
