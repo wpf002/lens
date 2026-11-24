@@ -40,6 +40,8 @@ export interface AuditRecord {
   summary?: string;
   report: string;
   items: Array<{ id: string; status: "pass" | "fail" | "unverified" | "na"; evidence: string[]; fix?: string; by?: "you" }>;
+  /** The code has commits newer than the audit. */
+  stale?: boolean;
 }
 
 export interface EnrichJob {

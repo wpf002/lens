@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 import { formatDuration } from "./format";
 import { awaitingRemediation, compareIssues, isNewFinding, sumTallies, tallyItems } from "./health";
 import ELK from "elkjs/lib/elk.bundled.js";
-import type { ImpactReport, KnowledgeGraph } from "@lens/core/browser";
-import type { Meta } from "../api";
+import type { ChecklistItem, ImpactReport, KnowledgeGraph } from "@lens/core/browser";
+import type { AuditRecord, Meta } from "../api";
 import { buildLayers, buildStructure, edgeAccumulator } from "./aggregate";
 import { layerColor, hashColor } from "./colors";
 import { buildDomain } from "./domain";
@@ -15,7 +15,7 @@ import { columnLayout, computeLayout, fallbackElk, shelfPack, type ElkLike } fro
 import { toMermaid } from "./mermaid";
 import { buildModel, commonDir } from "./model";
 import { computeOverlay } from "./overlay";
-import { buildSecurity, DEFAULT_SECURITY_FILTER, filterFindings, findingFocus, inputPath, splitFindings, traceLimitsText, urgentOpenCount } from "./security";
+import { buildSecurity, DEFAULT_SECURITY_FILTER, filterFindings, findingFocus, inputPath, mergeChecklist, splitFindings, traceLimitsText, urgentOpenCount } from "./security";
 import { findingItemId } from "@lens/core/browser";
 import { buildFileTree } from "./tree";
 import { validateGraph } from "./validate";
@@ -411,5 +411,34 @@ describe("issue tallies", () => {
   // Regression: Copy-Pasted Functions counts groups but stores each copy, so fixing one of two copies showed the row as done.
   it("counts every stored hit when a check stores more hits than its count", () => {
     expect(tallyItems(1, [{ kind: "fixed", label: "Fixed" }, { kind: "open" }])).toEqual({ open: 1, asking: 0, closed: 1 });
+  });
+});
+
+describe("mergeChecklist", () => {
+  const base = [
+    { id: "t1-env", title: "Env", tier: 1, status: "pass", evidence: ["gitleaks hook"] },
+    { id: "t2-errors", title: "Errors", tier: 2, status: "unverified", evidence: [] },
+  ] as ChecklistItem[];
+  const audit = (stale: boolean): AuditRecord => ({
+    generatedAt: "2026-11-14T00:00:00.000Z",
+    report: "AUDIT.md",
+    stale,
+    items: [
+      { id: "t1-env", status: "fail", evidence: ["no gitleaks hook"] },
+      { id: "t2-errors", status: "pass", evidence: ["generic 5xx"] },
+    ],
+  });
+
+  it("lets a current audit override the scanner", () => {
+    expect(mergeChecklist(base, audit(false)).map((c) => c.status)).toEqual(["fail", "pass"]);
+  });
+
+  it("keeps the scanner's settled status when commits landed after the audit", () => {
+    expect(mergeChecklist(base, audit(true)).map((c) => c.status)).toEqual(["pass", "pass"]);
+  });
+
+  it("keeps the owner's decision even when the audit is stale", () => {
+    const owned = { ...audit(true), items: [{ id: "t1-env", status: "fail" as const, evidence: ["Marked by you."], by: "you" as const }] };
+    expect(mergeChecklist(base, owned)[0]!.status).toBe("fail");
   });
 });

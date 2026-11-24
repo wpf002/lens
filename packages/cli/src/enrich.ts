@@ -194,13 +194,14 @@ export async function setWontFix(root: string, id: string, on: boolean) {
   await writeJsonAtomic(wontFixPath(root), [...all].slice(-2000), true);
 }
 /** The audit record with the owner's decisions laid over it. */
-export async function auditWithDecisions(root: string): Promise<(AuditRecord & { items: Array<AuditRecord["items"][number] & { by?: "you" }> }) | null> {
+export async function auditWithDecisions(root: string): Promise<(AuditRecord & { items: Array<AuditRecord["items"][number] & { by?: "you" }>; stale: boolean }) | null> {
   const audit = await readJson<AuditRecord>(auditPath(root));
   const decisions = await loadDecisions(root);
   if (!audit && !Object.keys(decisions).length) return null;
   const items: Array<AuditRecord["items"][number] & { by?: "you" }> = (audit?.items ?? []).filter((i) => !(i.id in decisions));
   for (const [id, status] of Object.entries(decisions)) items.push({ id, status, evidence: ["Marked by you."], by: "you" });
-  return { generatedAt: audit?.generatedAt ?? "", costUsd: audit?.costUsd, summary: audit?.summary, report: audit?.report ?? "", items };
+  const stale = !!audit && headCommitTime(root) > (Date.parse(audit.generatedAt) || 0);
+  return { generatedAt: audit?.generatedAt ?? "", costUsd: audit?.costUsd, summary: audit?.summary, report: audit?.report ?? "", items, stale };
 }
 const runTimesPath = (root: string) => path.join(paths(root).dir, "run-times.json");
 type RunTimes = Partial<Record<"audit" | "review", number[]>>;

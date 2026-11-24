@@ -245,7 +245,8 @@ describe("the fix loop", () => {
     const log = (await fs.readFile(claudeLog, "utf8")).split("\n");
     expect(log.filter((l) => l === "fix tests-1")).toHaveLength(1);
 
-    const merged = await call("POST", "/api/project/merge");
+    // The repair still holds the pull request lock for a moment after CI reports the pass.
+    const merged = await until("the repair to release the pull request", () => call("POST", "/api/project/merge"), (r) => r.status !== 409);
     expect(merged.status, JSON.stringify(merged.json)).toBe(200);
     const main = execFileSync("git", ["show", "refs/heads/main:src/app.js"], { cwd: bare, encoding: "utf8" });
     expect(main).not.toContain("console.log");

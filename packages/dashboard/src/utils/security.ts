@@ -70,6 +70,9 @@ export function endpointsOf(model: GraphModel): GraphNode[] {
 
 export type MergedCheck = ChecklistItem & { ai?: boolean; by?: "you" };
 
+/** Scanner statuses a fresh scan settles on its own, so an audit older than the code can't override them. */
+const SCANNER_SETTLED = new Set<ChecklistItem["status"]>(["pass", "fail", "clear", "na"]);
+
 /** Scanner checklist with AI audit verdicts and the owner's own decisions laid over it. */
 export function mergeChecklist(base: ChecklistItem[], audit: AuditRecord | null): MergedCheck[] {
   const ai = new Map((audit?.items ?? []).map((i) => [i.id, i]));
@@ -77,6 +80,7 @@ export function mergeChecklist(base: ChecklistItem[], audit: AuditRecord | null)
     const v = ai.get(c.id);
     // The audit can't settle manual items; only the owner can.
     if (!v || (c.status === "manual" && v.by !== "you")) return c;
+    if (audit?.stale && v.by !== "you" && SCANNER_SETTLED.has(c.status)) return c;
     return { ...c, status: v.status, evidence: v.evidence.length ? v.evidence : c.evidence, fix: v.fix ?? (v.status === "fail" ? c.fix : undefined), ai: v.by !== "you", by: v.by };
   });
 }
