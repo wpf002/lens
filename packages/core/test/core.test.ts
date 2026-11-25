@@ -308,7 +308,7 @@ describe("false-positive guards", () => {
     expect(graph.security!.findings.filter((f) => rules.includes(f.rule)).map((f) => `${f.rule} ${f.path}`)).toEqual([]);
   });
 
-  // Regression: CREATE DATABASE names checked by an anchored regex were reported as SQL injection.
+  // Regression: CREATE DATABASE names checked by an anchored regex, directly or through a same-file helper, were reported as SQL injection.
   it("accepts a raw query whose interpolated name an anchored regex checked first", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-ident-"));
     await fs.writeFile(
@@ -326,11 +326,42 @@ describe("false-positive guards", () => {
         "export async function unchecked(root, name: string) {",
         "  await root.query(`DROP DATABASE \"${name}\"`);",
         "}",
+        "export function identifier(name: string): string {",
+        "  if (!NAME_RE.test(name)) throw new Error(`bad ${JSON.stringify(name)}`);",
+        "  return `\"${name}\"`;",
+        "}",
+        "export function quoted(name: string): string {",
+        "  return `\"${name}\"`;",
+        "}",
+        "export async function dropAll(root, names: string[]) {",
+        "  for (const name of names) await root.query(`DROP DATABASE ${identifier(name)}`);",
+        "  for (const name of names) await root.query(`DROP DATABASE ${quoted(name)}`);",
+        "}",
+        "export async function ensure(root, name: string) {",
+        "  const checked = identifier(name);",
+        "  const unsafe = quoted(name);",
+        "  await root.query(`CREATE DATABASE ${checked}`);",
+        "  await root.query(`CREATE DATABASE ${unsafe}`);",
+        "}",
         "",
       ].join("\n"),
     );
     const { graph } = await scanProject(dir, { full: true });
-    expect(graph.security!.findings.filter((f) => f.rule === "js-orm-raw").map((f) => f.line)).toEqual([11]);
+    expect(graph.security!.findings.filter((f) => f.rule === "js-orm-raw").map((f) => f.line)).toEqual([11, 22, 28]);
+  });
+  // Regression: a project's own limiter, called from its routes, was reported as having no rate limits.
+  it("passes the rate-limit check for a project-defined limiter only when routes call it", async () => {
+    const statusWith = async (routes: string) => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-ratelimit-"));
+      await fs.mkdir(path.join(dir, "lib"));
+      await fs.writeFile(path.join(dir, "lib/ratelimit.ts"), "const hits = new Map<string, number>();\nexport function rateLimit(key: string): boolean {\n  const count = (hits.get(key) ?? 0) + 1;\n  hits.set(key, count);\n  return count > 10;\n}\n");
+      await fs.writeFile(path.join(dir, "routes.ts"), routes);
+      const { graph } = await scanProject(dir, { full: true });
+      return graph.security!.checklist!.find((c) => c.id === "t2-ratelimit")!.status;
+    };
+    const login = (guard: string) => `import { rateLimit } from "./lib/ratelimit";\nexport function routes(app) {\n  app.post("/login", async (req, reply) => {\n${guard}    return { ok: true };\n  });\n}\n`;
+    expect(await statusWith(login("    if (rateLimit(req.ip)) return reply.code(429).send({});\n"))).toBe("pass");
+    expect(await statusWith(login(""))).toBe("fail");
   });
 });
 

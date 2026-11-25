@@ -54,22 +54,51 @@ function innermost(symbols: SymbolInfo[], line: number): SymbolInfo | undefined 
 
 const VALIDATION_LOOKBACK_LINES = 20;
 
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+const VALIDATOR_CALL = /^([A-Za-z_$][\w$]*)\(\s*([A-Za-z_$][\w$]*)\s*\)$/;
+
+function escapeIdentifier(name: string): string {
+  return name.replace(/\$/g, "\\$");
+}
+
+function testedByAnchoredRegex(name: string, text: string, anchoredRegexNames: string[]): boolean {
+  const escaped = escapeIdentifier(name);
+  if (new RegExp(`\\/\\^[^\\n]*\\$\\/[a-z]*\\.test\\(\\s*${escaped}\\s*\\)`).test(text)) return true;
+  return anchoredRegexNames.some((re) => new RegExp(`\\b${re}\\.test\\(\\s*${escaped}\\s*\\)`).test(text));
+}
+
+/** Same-file functions that check their first parameter with an anchored regex before using it. */
+function validatorFunctions(lines: string[], symbols: SymbolInfo[], anchoredRegexNames: string[]): Set<string> {
+  const validators = new Set<string>();
+  for (const sym of symbols) {
+    if (sym.kind !== "function") continue;
+    const body = lines.slice(sym.lines[0] - 1, sym.lines[1]).join("\n");
+    const param = new RegExp(`\\b${escapeIdentifier(sym.name)}\\b[^(]*\\(\\s*([A-Za-z_$][\\w$]*)`).exec(body)?.[1];
+    if (param && testedByAnchoredRegex(param, body, anchoredRegexNames)) validators.add(sym.name);
+  }
+  return validators;
+}
+
 /**
- * True when each `${name}` on the line is a bare identifier that an anchored regex
- * (`/^...$/.test(name)` or `NAME_RE.test(name)`) checks earlier in the same function.
+ * True when each `${...}` on the line is a name an anchored regex (`/^...$/.test(name)` or
+ * `NAME_RE.test(name)`) checks earlier in the same function, a call to a same-file function that
+ * checks its argument that way, or a local assigned from such a call.
  * Postgres can't bind identifiers, so a validated name is the standard way to build CREATE DATABASE.
  */
 export function interpolationsValidated(lines: string[], lineIndex: number, symbols: SymbolInfo[]): boolean {
-  const names = [...lines[lineIndex]!.matchAll(/\$\{\s*([^}]*?)\s*\}/g)].map((m) => m[1]!);
-  if (!names.length || names.some((n) => !/^[A-Za-z_$][\w$]*$/.test(n))) return false;
+  const expressions = [...lines[lineIndex]!.matchAll(/\$\{\s*([^}]*?)\s*\}/g)].map((m) => m[1]!);
+  if (!expressions.length || expressions.some((e) => !IDENTIFIER.test(e) && !VALIDATOR_CALL.test(e))) return false;
   const sym = innermost(symbols, lineIndex + 1);
   const from = sym ? sym.lines[0] - 1 : Math.max(0, lineIndex - VALIDATION_LOOKBACK_LINES);
   const before = lines.slice(from, lineIndex).join("\n");
   const anchoredRegexNames = lines.flatMap((line) => [...line.matchAll(/\b([A-Z][A-Z0-9_]*)\s*=\s*\/\^[^\n]*\$\/[a-z]*/g)].map((m) => m[1]!));
-  return names.every((name) => {
-    const escaped = name.replace(/\$/g, "\\$");
-    if (new RegExp(`\\/\\^[^\\n]*\\$\\/[a-z]*\\.test\\(\\s*${escaped}\\s*\\)`).test(before)) return true;
-    return anchoredRegexNames.some((re) => new RegExp(`\\b${re}\\.test\\(\\s*${escaped}\\s*\\)`).test(before));
+  const validators = validatorFunctions(lines, symbols, anchoredRegexNames);
+  return expressions.every((expression) => {
+    const call = VALIDATOR_CALL.exec(expression);
+    if (call) return validators.has(call[1]!);
+    if (testedByAnchoredRegex(expression, before, anchoredRegexNames)) return true;
+    const assigned = new RegExp(`\\b(?:const|let)\\s+${escapeIdentifier(expression)}\\s*=\\s*([A-Za-z_$][\\w$]*)\\(`).exec(before)?.[1];
+    return assigned !== undefined && validators.has(assigned);
   });
 }
 

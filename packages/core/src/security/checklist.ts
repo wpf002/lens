@@ -77,6 +77,9 @@ function findShallow(root: string, match: (name: string) => boolean): string[] {
 const at = (f: Pick<Finding, "path" | "line">) => `${f.path}:${f.line}`;
 
 /** Find `re` in project files; returns up to `max` file:line hits. */
+/** A project-defined limiter such as `export function rateLimit(key, now)`. */
+const LOCAL_LIMITER_DEFINITION = /\b(?:function\s+rate[lL]imit\w*\s*\(|(?:const|let)\s+rate[lL]imit\w*\s*=\s*(?:async\s*)?\()/;
+
 function grep(files: ChecklistInput["files"], re: RegExp, filter?: (p: string) => boolean, max = 6): string[] {
   const out: string[] = [];
   for (const f of files) {
@@ -208,8 +211,16 @@ export function buildChecklist(input: ChecklistInput): ChecklistItem[] {
   {
     const libs = has(deps, "express-rate-limit", "@fastify/rate-limit", "slowapi", "@upstash/ratelimit", "rate-limiter-flexible", "django-ratelimit", "flask-limiter", "rack-attack", "hono-rate-limiter", "@nestjs/throttler", "limiter");
     const uses = grep(files, /\b(rateLimit|ratelimit|limiter\.limit|@limiter\.limit|Throttle|throttle)\b/, isCode, 4);
-    const status: CheckStatus = !endpoints.length ? "na" : libs.length ? (uses.length ? "pass" : "unverified") : "fail";
-    add({ id: "t2-ratelimit", tier: 2, title: "Rate limits on auth, email sends, and AI endpoints", status, evidence: libs.length ? [...libs.map((d) => `uses ${d}`), ...uses] : endpoints.length ? ["No rate-limiting library found."] : ["No routes detected."], fix: status === "fail" ? "Add a limiter (e.g. express-rate-limit, slowapi, @upstash/ratelimit) to login, signup, reset, email, and AI routes." : undefined, source: "repo" });
+    const ownLimiter = grep(files, LOCAL_LIMITER_DEFINITION, isCode, 1);
+    const ownLimiterFile = ownLimiter[0]?.replace(/:\d+$/, "");
+    const ownLimiterCalls = ownLimiterFile ? grep(files, /\brate[lL]imit\w*\(/, (p) => isCode(p) && p !== ownLimiterFile, 4) : [];
+    const ownLimiterUsed = ownLimiterCalls.length > 0;
+    const status: CheckStatus = !endpoints.length ? "na" : libs.length ? (uses.length ? "pass" : "unverified") : ownLimiterUsed ? "pass" : "fail";
+    const evidence = libs.length
+      ? [...libs.map((d) => `uses ${d}`), ...uses]
+      : ownLimiterUsed ? [`own limiter at ${ownLimiter[0]}`, ...ownLimiterCalls]
+      : endpoints.length ? ["No rate-limiting library found."] : ["No routes detected."];
+    add({ id: "t2-ratelimit", tier: 2, title: "Rate limits on auth, email sends, and AI endpoints", status, evidence, fix: status === "fail" ? "Add a limiter (e.g. express-rate-limit, slowapi, @upstash/ratelimit) to login, signup, reset, email, and AI routes." : undefined, source: "repo" });
   }
   {
     const libs = has(deps, "zod", "pydantic", "joi", "yup", "valibot", "class-validator", "@sinclair/typebox", "ajv", "marshmallow", "superstruct", "arktype");
