@@ -186,11 +186,47 @@ function declaredDeps(root: string, files: HealthFile[], fallback: Record<string
   return [...out];
 }
 
+/** An eslint-disable directive that names no rule. */
+const ESLINT_DISABLE_ALL = /eslint-disable(?:-next-line|-line)?(?=\s*(?:$|\*\/|--))/;
+
+const CLI_SCRIPT_DIR = /(^|\/)(?:scripts|bin)\//;
+const SEED_FILE = /(^|\/)seed[\w-]*\.[cm]?[jt]s$/;
+
+/** Scripts, seeds and anything that reads its own argv print to the terminal by design. */
+function isCommandLineScript(filePath: string, src: string): boolean {
+  return CLI_SCRIPT_DIR.test(filePath) || SEED_FILE.test(filePath) || /\bprocess\.argv\b/.test(src);
+}
+
+/** A TypeScript file that only declares types has no behaviour for a test to check. */
+function declaresTypesOnly(filePath: string, src: string): boolean {
+  return /\.tsx?$/.test(filePath) && !/\b(?:function|class|const|let|var|enum)\b/.test(stripComments(src, "typescript"));
+}
+
+/** The try block ends in a return, so the code after the catch is the failure path. */
+function catchFallsThroughToFallback(src: string, catchIndex: number): boolean {
+  return /\breturn\b[^;{}]*;\s*\}\s*$/.test(src.slice(Math.max(0, catchIndex - 400), catchIndex));
+}
+
+/**
+ * A `.catch(() => value)` that still surfaces the failure: its result goes straight into a
+ * schema parse, it feeds a check on the next lines, or the original promise is returned too.
+ */
+function discardedCatchIsHandled(src: string, catchIndex: number, matchEnd: number): boolean {
+  const lineStart = src.lastIndexOf("\n", catchIndex) + 1;
+  const before = src.slice(lineStart, catchIndex);
+  if (/\b(?:safeParse|parse)\(/.test(before)) return true;
+  const assigned = /\b(?:const|let)\s+(\w+)\s*=\s*(?:await\s+)?([\w$.]+)?/.exec(before);
+  if (!assigned) return false;
+  const after = src.slice(matchEnd, matchEnd + 300);
+  if (new RegExp(`\\bif\\s*\\(\\s*!?${assigned[1]}\\b`).test(after)) return true;
+  const receiver = assigned[2];
+  return !!receiver && /^\w+$/.test(receiver) && new RegExp(`\\breturn\\s+${receiver}\\s*;`).test(src.slice(matchEnd, matchEnd + 600));
+}
+
 export function buildHealth(input: HealthInput): HealthReport {
   const { root, files, nodes, edges, deps } = input;
   const code = files.filter((f) => CODE_LANGS.has(f.lang) && !GENERATED.test(f.path));
   const prod = code.filter((f) => !f.isTest);
-  const CLI_SCRIPT_DIR = /(^|\/)(?:scripts|bin)\//;
   // Tools such as Prisma, Vite and Vitest load `<tool>.config.ts` themselves.
   const TOOL_CONFIG = /^[\w-]+\.config\.(?:ts|js|mjs|cjs|mts)$/;
   const checks: HealthCheck[] = [];
@@ -209,8 +245,8 @@ export function buildHealth(input: HealthInput): HealthReport {
       const res = JS_LANGS.has(f.lang)
         ? [
             { re: /catch\s*(\([^)]*\))?\s*\{\s*\}/g, d: "empty catch block" },
-            { re: /catch\s*\([^)]*\)\s*\{\s*console\.(log|error|warn)\([^;{}]*\);?\s*\}/g, d: "catch only logs to the console" },
-            { re: /\.catch\(\s*\(\s*\w*\s*\)\s*=>\s*(\{\s*\}|null|undefined|\[\]|false)\s*\)/g, d: ".catch() discards the error" },
+            { re: /catch\s*\([^)]*\)\s*\{\s*console\.(log|error|warn)\([^;{}]*\);?\s*\}/g, d: "catch only logs to the console", handled: (m: RegExpMatchArray) => catchFallsThroughToFallback(clean, m.index ?? 0) },
+            { re: /\.catch\(\s*\(\s*\w*\s*\)\s*=>\s*(\{\s*\}|null|undefined|\[\]|false)\s*\)/g, d: ".catch() discards the error", handled: (m: RegExpMatchArray) => discardedCatchIsHandled(clean, m.index ?? 0, (m.index ?? 0) + m[0].length) },
           ]
         : f.lang === "python"
           ? [
@@ -218,8 +254,9 @@ export function buildHealth(input: HealthInput): HealthReport {
               { re: /^[ \t]*except\s*:/gm, d: "bare except catches everything, including KeyboardInterrupt" },
             ]
           : [];
-      for (const { re, d } of res)
+      for (const { re, d, handled } of res as Array<{ re: RegExp; d: string; handled?: (m: RegExpMatchArray) => boolean }>)
         for (const m of clean.matchAll(re)) {
+          if (handled?.(m)) continue;
           count++;
           push(hits, { path: f.path, line: lineOf(clean, m.index ?? 0), detail: d });
         }
@@ -232,7 +269,7 @@ export function buildHealth(input: HealthInput): HealthReport {
     const hits: HealthHit[] = [];
     let count = 0;
     // Command-line scripts print their output on purpose.
-    for (const f of prod.filter((p) => !CLI_SCRIPT_DIR.test(p.path))) {
+    for (const f of prod.filter((p) => !isCommandLineScript(p.path, p.src))) {
       const clean = stripComments(f.src, f.lang);
       const re = JS_LANGS.has(f.lang) ? /\bconsole\.(log|debug)\(|\bdebugger\s*;/g : f.lang === "python" ? /\bbreakpoint\(\)|\bpdb\.set_trace\(\)|\bic\(/g : null;
       if (!re) continue;
@@ -287,7 +324,7 @@ export function buildHealth(input: HealthInput): HealthReport {
         const found: string[] = [];
         if (JS_LANGS.has(f.lang)) {
           if (/@ts-(ignore|nocheck)/.test(l)) found.push(l.includes("nocheck") ? "@ts-nocheck" : "@ts-ignore");
-          if (/eslint-disable(?!-next-line\s+\S)/.test(l) && !/eslint-disable-next-line\s+\S/.test(l)) found.push("eslint-disable (all rules)");
+          if (ESLINT_DISABLE_ALL.test(l)) found.push("eslint-disable (all rules)");
           if (/(:\s*any\b|\bas\s+any\b|<any>)/.test(l.replace(/\/\/.*$/, ""))) found.push("any");
         } else if (f.lang === "python") {
           if (/#\s*type:\s*ignore(?!\[)/.test(l)) found.push("# type: ignore (no error code)");
@@ -420,6 +457,7 @@ export function buildHealth(input: HealthInput): HealthReport {
       const fanIn = new Map<string, number>();
       for (const e of edges) if (e.kind === "imports") fanIn.set(e.target, (fanIn.get(e.target) ?? 0) + 1);
       const untested = prod
+        .filter((f) => !declaresTypesOnly(f.path, f.src))
         .map((f) => byPath.get(f.path))
         .filter((n): n is GraphNode => !!n && n.kind === "file" && !tested.has(n.id) && !/\.(tsx|jsx|vue|svelte)$/.test(n.path!) && !ENTRY_RE.test(n.path!) && (n.metrics?.loc ?? 0) > 30)
         .sort((a, b) => (fanIn.get(b.id) ?? 0) - (fanIn.get(a.id) ?? 0));

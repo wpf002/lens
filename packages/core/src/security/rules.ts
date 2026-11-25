@@ -19,6 +19,8 @@ export interface Rule {
   pattern: RegExp;
   /** Skip the line when this matches (e.g. safe variants). */
   unless?: RegExp;
+  /** Skip the line when every interpolated name is checked against an anchored regex earlier in its function. */
+  skipWhenValidated?: boolean;
   message: string;
   /** Raise severity one level when user input is visible near the sink. */
   taintBoost?: boolean;
@@ -82,7 +84,7 @@ export const RULES: Rule[] = [
   { id: "prisma-raw-unsafe", title: "Prisma raw query (unsafe variant)", category: "injection", cwe: "CWE-89", severity: "high", confidence: "high", langs: JS,
     pattern: /\$(?:queryRawUnsafe|executeRawUnsafe)\s*\(/, message: "$queryRawUnsafe/$executeRawUnsafe do not parameterize. Use the tagged $queryRaw template.", taintBoost: true },
   { id: "js-orm-raw", title: "Raw ORM query with interpolation", category: "injection", cwe: "CWE-89", severity: "high", confidence: "medium", langs: JS,
-    pattern: /\.(?:query|raw|whereRaw|orderByRaw|joinRaw|unsafe)\s*\(\s*`[^`]*\$\{/, unless: /\$\{\s*[\w$.]*(?:escapeIdentifier|escapeLiteral|quoteIdent\w*)\(/,
+    pattern: /\.(?:query|raw|whereRaw|orderByRaw|joinRaw|unsafe)\s*\(\s*`[^`]*\$\{/, unless: /\$\{\s*[\w$.]*(?:escapeIdentifier|escapeLiteral|quoteIdent\w*)\(/, skipWhenValidated: true,
     message: "Template literal interpolated into a raw query.", taintBoost: true },
   { id: "go-sql-sprintf", title: "SQL built with Sprintf/concat", category: "injection", cwe: "CWE-89", severity: "high", confidence: "medium", langs: GO,
     pattern: /\.(?:Query|QueryRow|Exec|QueryContext|ExecContext)\s*\(\s*(?:ctx\s*,\s*)?(?:fmt\.Sprintf\(|"[^"]*"\s*\+)/, message: "database/sql call with a formatted query string.", taintBoost: true },

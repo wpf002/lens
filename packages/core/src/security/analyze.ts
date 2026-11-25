@@ -52,6 +52,27 @@ function innermost(symbols: SymbolInfo[], line: number): SymbolInfo | undefined 
   return symbols.filter((s) => s.lines[0] <= line && s.lines[1] >= line).sort((a, b) => b.lines[0] - a.lines[0])[0];
 }
 
+const VALIDATION_LOOKBACK_LINES = 20;
+
+/**
+ * True when each `${name}` on the line is a bare identifier that an anchored regex
+ * (`/^...$/.test(name)` or `NAME_RE.test(name)`) checks earlier in the same function.
+ * Postgres can't bind identifiers, so a validated name is the standard way to build CREATE DATABASE.
+ */
+export function interpolationsValidated(lines: string[], lineIndex: number, symbols: SymbolInfo[]): boolean {
+  const names = [...lines[lineIndex]!.matchAll(/\$\{\s*([^}]*?)\s*\}/g)].map((m) => m[1]!);
+  if (!names.length || names.some((n) => !/^[A-Za-z_$][\w$]*$/.test(n))) return false;
+  const sym = innermost(symbols, lineIndex + 1);
+  const from = sym ? sym.lines[0] - 1 : Math.max(0, lineIndex - VALIDATION_LOOKBACK_LINES);
+  const before = lines.slice(from, lineIndex).join("\n");
+  const anchoredRegexNames = lines.flatMap((line) => [...line.matchAll(/\b([A-Z][A-Z0-9_]*)\s*=\s*\/\^[^\n]*\$\/[a-z]*/g)].map((m) => m[1]!));
+  return names.every((name) => {
+    const escaped = name.replace(/\$/g, "\\$");
+    if (new RegExp(`\\/\\^[^\\n]*\\$\\/[a-z]*\\.test\\(\\s*${escaped}\\s*\\)`).test(before)) return true;
+    return anchoredRegexNames.some((re) => new RegExp(`\\b${re}\\.test\\(\\s*${escaped}\\s*\\)`).test(before));
+  });
+}
+
 export interface FileScanInput {
   path: string;
   lang: string;
@@ -92,6 +113,7 @@ export function scanFile(input: FileScanInput): RawFinding[] {
         const l = lines[i]!;
         if (l.length > 2000 || !rule.pattern.test(l)) continue;
         if (rule.unless?.test([l, lines[i + 1] ?? "", lines[i + 2] ?? ""].join(" "))) continue;
+        if (rule.skipWhenValidated && interpolationsValidated(lines, i, symbols)) continue;
         if (REGEX_DEF.test(l)) continue; // pattern definitions (including this scanner's own rules)
         const tainted = nearTaint(i + 1);
         out.push({

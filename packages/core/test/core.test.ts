@@ -307,6 +307,31 @@ describe("false-positive guards", () => {
     const rules = ["js-orm-raw", "js-exec-shell", "mass-assignment", "weak-hash", "webhook-no-signature"];
     expect(graph.security!.findings.filter((f) => rules.includes(f.rule)).map((f) => `${f.rule} ${f.path}`)).toEqual([]);
   });
+
+  // Regression: CREATE DATABASE names checked by an anchored regex were reported as SQL injection.
+  it("accepts a raw query whose interpolated name an anchored regex checked first", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-ident-"));
+    await fs.writeFile(
+      path.join(dir, "db.ts"),
+      [
+        "const NAME_RE = /^app_[a-z0-9_]+$/;",
+        "export async function create(root, name: string) {",
+        "  if (!/^app_[a-z0-9_]+$/.test(name)) throw new Error('bad');",
+        "  await root.query(`CREATE DATABASE \"${name}\"`);",
+        "}",
+        "export async function drop(root, name: string) {",
+        "  if (!NAME_RE.test(name)) throw new Error('bad');",
+        "  await root.query(`DROP DATABASE \"${name}\"`);",
+        "}",
+        "export async function unchecked(root, name: string) {",
+        "  await root.query(`DROP DATABASE \"${name}\"`);",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const { graph } = await scanProject(dir, { full: true });
+    expect(graph.security!.findings.filter((f) => f.rule === "js-orm-raw").map((f) => f.line)).toEqual([11]);
+  });
 });
 
 describe("code health", () => {
@@ -324,6 +349,67 @@ describe("code health", () => {
     expect((by.get("dead-files")?.hits ?? []).map((h) => h.path)).not.toContain("prisma.config.ts");
     expect((by.get("dead-files")?.hits ?? []).map((h) => h.path)).not.toContain("public/nav-boot.js");
     expect(by.get("version-files")?.hits ?? []).toEqual([]);
+  });
+
+  // Regression: handled failures and named lint rules were reported as problems on beza.
+  it("leaves handled catches, named lint rules, seeds and type-only files alone", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-health-handled-"));
+    for (const sub of ["src", "prisma"]) await fs.mkdir(path.join(dir, sub));
+    await fs.writeFile(path.join(dir, "package.json"), JSON.stringify({ name: "h" }));
+    await fs.writeFile(path.join(dir, "src/handled.ts"), [
+      "export async function copy(text: string) {",
+      "  try {",
+      "    await navigator.clipboard.writeText(text);",
+      "    return true;",
+      "  } catch (err) {",
+      "    console.warn('blocked', err);",
+      "  }",
+      "  return fallbackCopy(text);",
+      "}",
+      "export async function token(res: Response) {",
+      "  const parsed = reply.safeParse(await res.json().catch(() => null));",
+      "  return parsed;",
+      "}",
+      "export async function up(url: string) {",
+      "  const ok = await fetch(url).then((r) => r.ok).catch(() => false);",
+      "  if (ok) return true;",
+      "  return false;",
+      "}",
+      "export function serial(task: () => Promise<void>) {",
+      "  const run = task();",
+      "  const tail = run.catch(() => undefined);",
+      "  tails.push(tail);",
+      "  return run;",
+      "}",
+      "export function effect() {",
+      "  useEffect(() => load(), []); // eslint-disable-line react-hooks/exhaustive-deps -- runs once",
+      "}",
+      "",
+    ].join("\n"));
+    await fs.writeFile(path.join(dir, "src/swallowed.ts"), [
+      "export async function reload() {",
+      "  try {",
+      "    setRows(await load());",
+      "  } catch (err) {",
+      "    console.warn('reload failed', err);",
+      "  }",
+      "}",
+      "export const items = () => load().catch(() => []);",
+      "// eslint-disable-next-line",
+      "export const x = 1;",
+      "",
+    ].join("\n"));
+    await fs.writeFile(path.join(dir, "prisma/seed.ts"), `export async function seed() {\n  console.log("seeded 3 rows");\n}\n`);
+    await fs.writeFile(path.join(dir, "src/decrypt.ts"), `const [file] = process.argv.slice(2);\nconsole.log(\`decrypted \${file}\`);\n`);
+    const types = Array.from({ length: 40 }, (_, i) => `export interface Row${i} { id: string; total: number }`).join("\n");
+    await fs.writeFile(path.join(dir, "src/types.ts"), `${types}\n`);
+    await fs.writeFile(path.join(dir, "src/handled.test.ts"), `import { copy } from "./handled";\nit("copies", () => copy("x"));\n`);
+    const { graph } = await scanProject(dir, { full: true });
+    const by = new Map(graph.health!.checks.map((c) => [c.id, c]));
+    expect((by.get("swallowed-errors")?.hits ?? []).map((h) => `${h.path}:${h.line}`)).toEqual(["src/swallowed.ts:4", "src/swallowed.ts:8"]);
+    expect((by.get("type-escapes")?.hits ?? []).map((h) => `${h.path}:${h.line}`)).toEqual(["src/swallowed.ts:9"]);
+    expect(by.get("debug-leftovers")?.hits ?? []).toEqual([]);
+    expect((by.get("untested")?.hits ?? []).map((h) => h.path)).not.toContain("src/types.ts");
   });
 
   it("flags the habits it's built for and leaves clean code alone", async () => {
