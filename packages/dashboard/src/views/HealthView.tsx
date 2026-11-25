@@ -64,7 +64,7 @@ function CheckRow({ c, statusOf, canFix }: { c: HealthCheck; statusOf: (id: stri
             <span className="text-faint">Fix: </span>
             {renderInlineCode(c.fix)}
           </p>
-          <ul className="divide-y divide-line border-y border-line">
+          <ul className="divide-y divide-line border-t border-line">
             {rows.map(({ h, id, st }) => (
               <HitRow key={id} h={h} id={id} checkId={c.id} st={st} canFix={canFix} />
             ))}
@@ -111,23 +111,13 @@ function FixCheck({ id, open }: { id: string; open: number }) {
 }
 
 function HitRow({ h, id, checkId, st, canFix }: { h: HealthCheck["hits"][number]; id: string; checkId: string; st: ItemStatus; canFix: boolean }) {
-  const reopen = useStore((s) => s.toggleWontFix);
   const fixing = useStore((s) => s.enrichJob.state === "running" && s.enrichJob.task === "remediate" && (s.enrichJob.checkId === id || (s.enrichJob.checkId === checkId && st.kind === "open")));
   return (
-    <li className="py-1.5">
-      <div className="flex items-start gap-3">
-        <span className={cx("min-w-0 flex-1", st.kind !== "open" && "opacity-60")}>
-          <Hit {...h} />
-        </span>
-        {fixing ? <span className="shrink-0 animate-pulse text-[11.5px] font-medium text-accent">Fixing…</span> : <StatusTag st={st} />}
-      </div>
-      {st.kind === "open" && st.reason && <p className="pt-0.5 text-[11.5px] text-muted">{renderInlineCode(st.reason)}</p>}
-      {st.kind === "open" && canFix && !fixing && <ItemActions source="health" itemId={id} stableId={id} />}
-      {st.kind === "wontfix" && (
-        <button type="button" className="text-[11.5px] text-accent hover:underline" onClick={() => void reopen(id, false)}>
-          Reopen
-        </button>
-      )}
+    <li className="flex min-h-10 items-center gap-3 py-1.5">
+      <span className={cx("min-w-0 flex-1", st.kind !== "open" && "opacity-60")}>
+        <Hit {...h} />
+      </span>
+      <ItemControls source="health" itemId={id} stableId={id} st={st} canFix={canFix} fixing={fixing} />
     </li>
   );
 }
@@ -140,64 +130,77 @@ function StatusTag({ st, count }: { st: ItemStatus; count?: number }) {
   const tone = ask ? "text-accent" : st.kind === "open" ? "text-fg" : st.kind === "wontfix" ? "text-muted" : "text-guarded";
   const dot = ask ? "bg-accent" : st.kind === "open" ? "bg-[var(--sev-medium)]" : st.kind === "wontfix" ? "bg-faint" : "bg-guarded";
   return (
-    <span className={cx("inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11.5px] font-medium", tone)}>
+    <span className={cx("inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11.5px] font-medium", tone)} title={st.kind === "open" || st.kind === "safe" ? st.reason : undefined}>
       <span className={cx("h-1.5 w-1.5 rounded-full", dot)} />
       {label}
     </span>
   );
 }
 
-/** Fix one item with Claude (no size limit, optional decision note), or close it as Won't Fix. */
-function ItemActions({ source, itemId, stableId }: { source: "review" | "health"; itemId: string; stableId: string }) {
-  const job = useStore((s) => s.enrichJob);
+/**
+ * One right-aligned slot per item: actions, then status. Confirming swaps the buttons for the note,
+ * cost, Cancel and Fix in the same slot, so the row keeps its shape in every state.
+ */
+function ItemControls({ source, itemId, stableId, st, canFix, fixing }: { source: "review" | "health"; itemId: string; stableId: string; st: ItemStatus; canFix: boolean; fixing: boolean }) {
+  const busy = useStore((s) => s.enrichJob.state === "running");
   const run = useStore((s) => s.runAI);
-  const wontFix = useStore((s) => s.toggleWontFix);
+  const toggleWontFix = useStore((s) => s.toggleWontFix);
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState("");
-  const busy = job.state === "running";
-  if (asking)
-    return (
-      <div className="flex flex-wrap items-center gap-2 pt-1">
-        <input
-          autoFocus
-          maxLength={600}
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder="Decision For Claude (Optional)"
-          className="h-7 min-w-[220px] flex-1 rounded border border-line bg-panel px-2 text-[12px] text-fg placeholder:text-faint"
-        />
-        <span className="text-[11px] text-faint">{isRefactor(itemId) ? "~$1–4" : "~$0.45–1.20"}</span>
-        <Button size="sm" variant="ghost" onClick={() => setAsking(false)}>
-          Cancel
-        </Button>
-        <Button
-          size="sm"
-          variant="accent"
-          disabled={busy}
-          onClick={() => {
-            setAsking(false);
-            void run("remediate", { source, checkId: itemId, note: note.trim() || undefined });
-          }}
-        >
-          Fix
-        </Button>
-      </div>
-    );
+  if (fixing) return <span className="shrink-0 animate-pulse text-[11.5px] font-medium text-accent">Fixing…</span>;
+  const actions =
+    st.kind === "open" && canFix ? (
+      asking ? (
+        <>
+          <input
+            autoFocus
+            maxLength={600}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Decision For Claude (Optional)"
+            className="h-7 w-56 rounded border border-line bg-panel px-2 text-[12px] text-fg placeholder:text-faint"
+          />
+          <span className="text-[11px] text-faint">{isRefactor(itemId) ? "~$1–4" : "~$0.45–1.20"}</span>
+          <Button size="sm" variant="ghost" onClick={() => setAsking(false)}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            variant="accent"
+            disabled={busy}
+            onClick={() => {
+              setAsking(false);
+              void run("remediate", { source, checkId: itemId, note: note.trim() || undefined });
+            }}
+          >
+            Fix
+          </Button>
+        </>
+      ) : (
+        <>
+          <Button size="sm" variant="accent" disabled={busy} onClick={() => setAsking(true)}>
+            Fix
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => void toggleWontFix(stableId, true)}>
+            Won't Fix
+          </Button>
+        </>
+      )
+    ) : st.kind === "wontfix" ? (
+      <Button size="sm" variant="ghost" onClick={() => void toggleWontFix(stableId, false)}>
+        Reopen
+      </Button>
+    ) : null;
   return (
-    <div className="flex items-center gap-2 pt-1">
-      <Button size="sm" variant="accent" disabled={busy} onClick={() => setAsking(true)}>
-        Fix
-      </Button>
-      <Button size="sm" variant="ghost" onClick={() => void wontFix(stableId, true)}>
-        Won't Fix
-      </Button>
+    <div className="flex shrink-0 items-center gap-2">
+      {actions}
+      {!asking && <StatusTag st={st} />}
     </div>
   );
 }
 
 function FindingRow({ f, i, st, canFix, isNew }: { f: ReviewRecord["findings"][number]; i: number; st: ItemStatus; canFix: boolean; isNew: boolean }) {
   const [open, setOpen] = useState(false);
-  const reopen = useStore((s) => s.toggleWontFix);
   const fixing = useStore((s) => s.enrichJob.state === "running" && s.enrichJob.task === "remediate" && s.enrichJob.checkId === `review-${i}`);
   const closed = st.kind !== "open";
   return (
@@ -232,11 +235,10 @@ function FindingRow({ f, i, st, canFix, isNew }: { f: ReviewRecord["findings"][n
             </p>
           )}
           {st.kind === "safe" && <p className="text-fg">{renderInlineCode(st.reason)}</p>}
-          {st.kind === "open" && canFix && !fixing && <ItemActions source="review" itemId={`review-${i}`} stableId={reviewKey(f)} />}
-          {st.kind === "wontfix" && (
-            <button type="button" className="text-[11.5px] text-accent hover:underline" onClick={() => void reopen(reviewKey(f), false)}>
-              Reopen
-            </button>
+          {(st.kind === "wontfix" || (st.kind === "open" && canFix && !fixing)) && (
+            <div className="flex justify-end pt-1">
+              <ItemControls source="review" itemId={`review-${i}`} stableId={reviewKey(f)} st={st} canFix={canFix} fixing={false} />
+            </div>
           )}
         </div>
       )}
@@ -474,7 +476,7 @@ export function HealthView() {
             {!openRows.length && <p className="px-4 py-3 text-[12.5px] text-guarded">All closed.</p>}
             {closedRows.length > 0 && (
               <>
-                <button type="button" className="eyebrow flex w-full items-center gap-1 border-t border-line px-5 py-2 hover:!text-fg" onClick={() => setShowClosed((v) => !v)} aria-expanded={showClosed}>
+                <button type="button" className="eyebrow flex w-full items-center gap-1 px-5 py-2 hover:!text-fg" onClick={() => setShowClosed((v) => !v)} aria-expanded={showClosed}>
                   {showClosed ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />} Closed <span className="font-mono text-faint">{totals.closed}</span>
                 </button>
                 {showClosed && <ul className="border-t border-line">{closedRows.map(renderRow)}</ul>}
