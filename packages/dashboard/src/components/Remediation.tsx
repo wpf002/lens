@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { createPullRequest, fetchFixFiles, fetchFixPrompt, fixBrokenTests, fixesPatch, mergePullRequest, type ProposedFix, type RemediationSource, type PullRequest, type TestGate } from "../api";
 import { useStore } from "../store";
 import { costRange, formatDuration } from "../utils/format";
@@ -193,28 +193,38 @@ export function Remediation({ source }: { source: Source }) {
     const label = plan
       ? `${plan.first === "audit" ? "Audit, Then Fix" : `Fix ${plan.items} Issue${plan.items === 1 ? "" : "s"}`}`
       : source === "review" ? "Fix Review Findings" : `Fix ${batch} ${checkTitle ?? "Hits"}`;
+    const close = () => useStore.setState({ remediateConfirm: null });
+    const runInLens = () => {
+      close();
+      void run("remediate", { source, checkId: confirm.checkId });
+    };
+    if (plan && plan.items > 0)
+      return (
+        <div className={cx(box, "text-muted")}>
+          <FixPromptPreview
+            source={source as "audit" | "health"}
+            onClose={close}
+            footer={
+              <button type="button" className="text-[11.5px] text-faint hover:text-fg hover:underline" title="Lens fixes these itself on its own AI plan" onClick={runInLens}>
+                Fix in Lens · {costRange(estimates[source])}
+              </button>
+            }
+          />
+        </div>
+      );
     return (
       <div className={cx(box, "text-muted")}>
         <div className="flex flex-wrap items-center gap-2 px-3 py-2.5">
           <span className="min-w-0 flex-1">
             <span className="text-fg">{label}</span> · {costRange(estimates[source])}
           </span>
-          <Button size="sm" variant="ghost" onClick={() => useStore.setState({ remediateConfirm: null })}>
+          <Button size="sm" variant="ghost" onClick={close}>
             Cancel
           </Button>
-          <Button
-            size="sm"
-            variant="accent"
-            autoFocus
-            onClick={() => {
-              useStore.setState({ remediateConfirm: null });
-              void run("remediate", { source, checkId: confirm.checkId });
-            }}
-          >
+          <Button size="sm" variant="accent" autoFocus onClick={runInLens}>
             Fix
           </Button>
         </div>
-        {plan && plan.items > 0 && <FixPromptPreview source={source as "audit" | "health"} />}
       </div>
     );
   }
@@ -362,7 +372,7 @@ const COPIED_MS = 4000;
 export type PromptState = { state: "loading" } | { state: "error"; message: string } | { state: "ready"; prompt: string; items?: number };
 
 /** The Remediate run as one Claude Code prompt (fix every open item), shown in full so the owner can read it before copying it to run on their own plan. */
-function FixPromptPreview({ source }: { source: "audit" | "health" }) {
+function FixPromptPreview({ source, onClose, footer }: { source: "audit" | "health"; onClose: () => void; footer: ReactNode }) {
   const [loaded, setLoaded] = useState<PromptState>({ state: "loading" });
   useEffect(() => {
     let live = true;
@@ -374,11 +384,11 @@ function FixPromptPreview({ source }: { source: "audit" | "health" }) {
       live = false;
     };
   }, [source]);
-  return <PromptPreview loaded={loaded} />;
+  return <PromptPreview loaded={loaded} onClose={onClose} footer={footer} />;
 }
 
 /** A Claude Code prompt in full with a copy button. */
-export function PromptPreview({ loaded }: { loaded: PromptState }) {
+export function PromptPreview({ loaded, onClose, footer }: { loaded: PromptState; onClose?: () => void; footer?: ReactNode }) {
   const [copied, setCopied] = useState<string | null>(null);
   const copy = async (prompt: string) => {
     try {
@@ -391,19 +401,22 @@ export function PromptPreview({ loaded }: { loaded: PromptState }) {
     setTimeout(() => setCopied(null), COPIED_MS);
   };
   return (
-    <div className="border-t border-line">
+    <div className={cx(!onClose && "border-t border-line")}>
       <div className="flex items-center gap-2 px-3 py-2">
-        <span className="min-w-0 flex-1">
-          <span className="text-fg">Prompt</span>
-          {loaded.state === "ready" && loaded.items !== undefined && ` · ${loaded.items} Issues`}
-        </span>
+        <span className="min-w-0 flex-1 text-fg">{loaded.state === "ready" && loaded.items !== undefined ? `${loaded.items} Issues` : "Prompt"}</span>
         {loaded.state === "loading" && <Spinner size={14} />}
-        <Button size="sm" variant="ghost" disabled={loaded.state !== "ready"} title="Paste into Claude Code" onClick={() => loaded.state === "ready" && void copy(loaded.prompt)}>
+        {onClose && (
+          <Button size="sm" variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+        )}
+        <Button size="sm" variant={onClose ? "accent" : "ghost"} disabled={loaded.state !== "ready"} title="Paste into Claude Code" onClick={() => loaded.state === "ready" && void copy(loaded.prompt)}>
           {copied ?? "Copy Prompt"}
         </Button>
       </div>
       {loaded.state === "error" && <p className="px-3 pb-2.5 text-critical">{loaded.message}</p>}
       {loaded.state === "ready" && <pre className="max-h-96 overflow-auto whitespace-pre-wrap border-t border-line px-3 py-2.5 font-mono text-[11px] leading-relaxed text-fg">{loaded.prompt}</pre>}
+      {footer && loaded.state === "ready" && <div className="flex justify-end border-t border-line px-3 py-1.5">{footer}</div>}
     </div>
   );
 }

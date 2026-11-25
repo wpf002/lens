@@ -43,6 +43,8 @@ describe("Remediate scope", () => {
     expect(prompt).toContain("Don't write a plan, checklist, notes or summary .md file.");
     expect(prompt).toContain("app.js 900 lines");
     expect(prompt).toContain("Fix: Split it.");
+    expect(prompt).toContain(`${items[0]!.title} [${items[0]!.id}]`);
+    expect(prompt).toContain('"Lens-Fixed: review-12"');
   });
 
   it("leaves file review out of the Copy Prompt and the Health Fix All plan", async () => {

@@ -175,6 +175,21 @@ export function closeGoneLines(
 }
 
 /** Trimmed lines of a file's text, for checking whether a cited line is still there. */
+/** Commit trailer naming a finding the commit fixed, e.g. "Lens-Fixed: review-12". The Remediate prompt asks for it. */
+export const FIXED_TRAILER = "Lens-Fixed";
+
+/** Close open findings whose id a commit's Lens-Fixed trailer names. */
+export function closeFixedIds(prior: StoredFinding[], fixedIds: string[], ctx: Pick<MergeContext, "fixed" | "wontFix" | "now">): { findings: StoredFinding[]; resolved: number } {
+  const named = new Set(fixedIds.map(reviewIndex).filter((i): i is number => i !== undefined));
+  let resolved = 0;
+  const findings = prior.map((f, i) => {
+    if (!named.has(i) || findingStatus(f, i, ctx) !== "open") return f;
+    resolved += 1;
+    return { ...f, resolvedAt: ctx.now };
+  });
+  return { findings, resolved };
+}
+
 export const trimmedLines = (text: string): Set<string> => new Set(text.split("\n").map((l) => l.trim()));
 
 /** What the reviewer is told about earlier findings in the files it's reviewing. */

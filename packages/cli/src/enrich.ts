@@ -9,7 +9,7 @@
  */
 import { inRepairScope, loadRepairItems } from "./ci.js";
 import { deepenSince } from "./cloud.js";
-import { BATCH_MAX_FILES, closeGoneLines, coveredFiles, followMoves, hashFiles, isReviewed, keepReviewed, loadCoverage, markReviewed, mergeReview, pendingReview, planBatches, priorFindingsFor, renderReport, REVIEW_ID, reviewIndex, saveCoverage, trimmedLines, type ReviewFile, type ReviewRecord, type StoredFinding } from "./review-ledger.js";
+import { BATCH_MAX_FILES, closeFixedIds, closeGoneLines, coveredFiles, FIXED_TRAILER, followMoves, hashFiles, isReviewed, keepReviewed, loadCoverage, markReviewed, mergeReview, pendingReview, planBatches, priorFindingsFor, renderReport, REVIEW_ID, reviewIndex, saveCoverage, trimmedLines, type ReviewFile, type ReviewRecord, type StoredFinding } from "./review-ledger.js";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { promises as fs, existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
@@ -1681,6 +1681,22 @@ export async function closeFindingsOnChangedCode(root: string): Promise<void> {
   console.error(`[scan] ${path.basename(root)}: ${resolved} review findings closed because the code they cite is gone or rewritten`);
 }
 
+/** Close open review findings that a commit since they were found names in a Lens-Fixed trailer. Free: no AI run. */
+export async function closeFindingsFixedInCommits(root: string): Promise<void> {
+  const rec = await readJson<ReviewRecord>(reviewPath(root));
+  const open = (rec?.findings ?? []).filter((f) => f.foundAt && !f.resolvedAt);
+  if (!rec || !open.length) return;
+  const oldest = open.map((f) => f.foundAt!).sort()[0]!;
+  await deepenSince(root, oldest).catch((e: unknown) => console.error(`[scan] couldn't deepen ${path.basename(root)}: ${e instanceof Error ? e.message.split("\n")[0] : e}`));
+  const log = gitOut(root, ["log", `--since=${oldest}`, `--format=%(trailers:key=${FIXED_TRAILER},valueonly)`]);
+  const ids = (log ?? "").split(/[\s,]+/).filter((id) => REVIEW_ID.test(id));
+  if (!ids.length) return;
+  const { findings, resolved } = closeFixedIds(rec.findings, ids, { ...(await reviewClosed(root)), now: new Date().toISOString() });
+  if (!resolved) return;
+  await saveReview(root, { ...rec, findings });
+  console.error(`[scan] ${path.basename(root)}: ${resolved} review findings closed by ${FIXED_TRAILER} commits`);
+}
+
 /** Last commit time in ms, or 0 outside a git repo. */
 function headCommitTime(root: string): number {
   try {
@@ -1767,13 +1783,15 @@ const FIX_PROMPT_TASK: Record<"audit" | "health", string> = {
   audit: "Fix these security issues in this repo. Make real code changes. If one needs a change in a web console, give me exact steps. Never print secret values. Run the tests after each fix and commit.",
 };
 
+const FIX_PROMPT_TRAILER = `Each item ends with its Lens id in brackets. In every fix commit, add one trailer line per item it fixes, like "${FIXED_TRAILER}: review-12", so Lens marks it fixed. Push when you're done.`;
+
 /**
  * A prompt the owner gives Claude Code to do a Remediate run on their own plan instead of a paid Lens run:
  * fix every open item.
  */
 export function fixPrompt(source: "audit" | "health", items: RemediationItem[]): string {
-  const checklist = items.map((item) => ({ title: item.title, details: [...item.evidence.map((e) => `- ${e}`), ...(item.fix ? [`Fix: ${item.fix}`] : [])] }));
-  return checklistPrompt(FIX_PROMPT_TASK[source], [{ items: checklist }]);
+  const checklist = items.map((item) => ({ title: `${item.title} [${item.id}]`, details: [...item.evidence.map((e) => `- ${e}`), ...(item.fix ? [`Fix: ${item.fix}`] : [])] }));
+  return checklistPrompt(`${FIX_PROMPT_TASK[source]} ${FIX_PROMPT_TRAILER}`, [{ items: checklist }]);
 }
 
 /** The Remediate prompt for this project, with counts for the dashboard's confirmation. */

@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { closeFindingsOnChangedCode, followFileMoves, reviewPath, type ReviewRecord } from "../src/enrich.js";
+import { closeFindingsFixedInCommits, closeFindingsOnChangedCode, followFileMoves, reviewPath, type ReviewRecord } from "../src/enrich.js";
 import { hashFiles } from "../src/review-ledger.js";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" }).trim();
@@ -71,5 +71,23 @@ describe("closeFindingsOnChangedCode", () => {
 
     const saved = JSON.parse(await fs.readFile(reviewPath(root), "utf8")) as ReviewRecord;
     expect(saved.findings.map((f) => (f.resolvedAt ? "closed" : "open"))).toEqual(["closed", "open", "open", "open", "closed"]);
+  });
+});
+
+describe("closeFindingsFixedInCommits", () => {
+  it("closes the findings a commit names in a Lens-Fixed trailer and leaves the rest open", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "lens-trailer-"));
+    run(root, "init", "-q", "-b", "main");
+    await fs.mkdir(path.join(root, ".lens"));
+    const record: ReviewRecord = { generatedAt: "2000-01-01T00:00:00.000Z", report: "REVIEW.md", findings: [finding("Gate", "a.ts"), finding("Pay link", "b.ts"), finding("Capacity", "c.ts")] };
+    await fs.writeFile(reviewPath(root), JSON.stringify(record));
+    await fs.writeFile(path.join(root, "a.ts"), "export const a = 1;\n");
+    run(root, "add", "a.ts");
+    run(root, "commit", "-qm", "Tighten the write gate\n\nLens-Fixed: review-0\nLens-Fixed: review-2");
+
+    await closeFindingsFixedInCommits(root);
+
+    const saved = JSON.parse(await fs.readFile(reviewPath(root), "utf8")) as ReviewRecord;
+    expect(saved.findings.map((f) => (f.resolvedAt ? "closed" : "open"))).toEqual(["closed", "open", "closed"]);
   });
 });

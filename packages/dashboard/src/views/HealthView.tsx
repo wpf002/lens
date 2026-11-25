@@ -259,7 +259,7 @@ function ReviewPanel() {
   const mine = job.task === "review";
   const running = mine && job.state === "running";
   const failed = mine && job.state === "error";
-  const setConfirming = (v: boolean) => useStore.setState({ reviewConfirm: v });
+  const setConfirming = (v: boolean) => useStore.setState(v ? { reviewConfirm: true, remediateConfirm: null } : { reviewConfirm: false });
   const box = "mx-4 mt-3 rounded-lg border border-line bg-panel-2 px-3 py-2.5 text-[12px]";
   const mergedPr = push?.pr?.state === "merged" ? push.pr : null;
   const outdated = !!review && !!mergedPr?.mergedAt && mergedPr.mergedAt > review.generatedAt;
