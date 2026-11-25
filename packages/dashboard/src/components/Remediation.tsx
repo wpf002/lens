@@ -124,6 +124,10 @@ export function Remediation({ source }: { source: Source }) {
   const info = useItemInfo();
   const estimates = useStore((s) => s.remediationEstimates);
   const confirm = useStore((s) => (s.remediateConfirm?.source === source ? s.remediateConfirm : null));
+  // Remediate reviews every file changed since the last review before it hands over the prompt, so the prompt covers the whole project.
+  const reviewPending = useStore((s) => s.meta?.reviewPending);
+  const reviewEstimate = useStore((s) => s.meta?.enrichEstimates?.review);
+  const reviewing = job.task === "review" && job.state === "running";
   const checkTitle = useStore((s) => s.model?.graph.health?.checks.find((c) => c.id === (confirm?.checkId ?? mine?.checkId))?.title);
   const batch = useStore((s) => s.fixable.batch);
   const plans = useStore((s) => s.fixable.plans);
@@ -198,6 +202,21 @@ export function Remediation({ source }: { source: Source }) {
       close();
       void run("remediate", { source, checkId: confirm.checkId });
     };
+    if (source === "health" && fixAll && reviewing) return null;
+    if (source === "health" && fixAll && reviewPending?.files)
+      return (
+        <div className={cx(box, "flex flex-wrap items-center gap-2 px-3 py-2.5 text-muted")}>
+          <span className="min-w-0 flex-1">
+            <span className="text-fg">Review {reviewPending.files} Changed Files</span> · {costRange(reviewEstimate)}
+          </span>
+          <Button size="sm" variant="ghost" onClick={close}>
+            Close
+          </Button>
+          <Button size="sm" variant="accent" autoFocus onClick={() => void run("review")}>
+            Review
+          </Button>
+        </div>
+      );
     if (plan && plan.items > 0)
       return (
         <div className={cx(box, "text-muted")}>
