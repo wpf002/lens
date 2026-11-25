@@ -154,6 +154,24 @@ export function findingItemId(f: Pick<Finding, "rule" | "path" | "message"> & Pa
   return `finding-${fnv(`${f.rule}|${f.path}|${anchor}`)}`;
 }
 
+/**
+ * Checklist checks a fix closes until the audit looks again. One fix rarely covers every place a check
+ * fails, so the audit decides: a fix counts only when it's newer than the audit. Fixes named in a commit
+ * trailer carry their own time; Lens's own fixes date from the record they were written in.
+ */
+export function checksFixedSinceAudit(
+  record: { generatedAt: string; fixes: Array<{ itemId: string; status: string; fixedAt?: string }> } | null | undefined,
+  auditAt: string | undefined,
+): Set<string> {
+  const audited = Date.parse(auditAt ?? "") || 0;
+  const recordAt = Date.parse(record?.generatedAt ?? "") || 0;
+  return new Set(
+    (record?.fixes ?? [])
+      .filter((f) => f.status === "applied" && !f.itemId.startsWith("finding-") && (f.fixedAt ? Date.parse(f.fixedAt) || 0 : recordAt) > audited)
+      .map((f) => f.itemId),
+  );
+}
+
 function fnv(s: string): string {
   let h = 0x811c9dc5;
   for (const ch of s) h = Math.imul(h ^ ch.charCodeAt(0), 0x01000193) >>> 0;

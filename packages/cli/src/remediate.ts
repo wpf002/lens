@@ -21,6 +21,8 @@ export interface ProposedFix {
   status: "proposed" | "applied" | "undone" | "discarded";
   /** The pull request that merged this applied fix. It stays Fixed but leaves the next pull request. */
   mergedIn?: number;
+  /** When a commit named this item in a Lens-Fixed trailer. */
+  fixedAt?: string;
 }
 
 export interface RemediationRecord {

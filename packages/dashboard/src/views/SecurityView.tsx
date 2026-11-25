@@ -57,7 +57,7 @@ export function SecurityView() {
   const audit = useStore((s) => s.audit);
   const remediation = useStore((s) => s.remediation.audit);
   const loadingFixes = useStore(awaitingRemediation);
-  const checklist = useMemo(() => mergeChecklist(model.graph.security?.checklist ?? [], audit), [model, audit]);
+  const checklist = useMemo(() => mergeChecklist(model.graph.security?.checklist ?? [], audit, remediation), [model, audit, remediation]);
   const failingChecks = checklist.filter((c) => checkGroup(c.status) === "fix").length;
   const needsYou = checklist.filter((c) => checkGroup(c.status) === "you").length;
   const fixed = useMemo(() => appliedFixItemIds(remediation), [remediation]);

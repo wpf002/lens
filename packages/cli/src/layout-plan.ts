@@ -9,6 +9,7 @@ import { isFileKind, paths, readJson, renameScannedPaths, writeJsonAtomic, type 
 import { loadRemediation, safeTarget } from "./remediate.js";
 import { isBinary } from "./workspace.js";
 import { checklistPrompt } from "./checklist-prompt.js";
+import { FIXED_TRAILER } from "./review-ledger.js";
 
 export type AreaStatus = "planned" | "applied";
 export type LayoutMove = LayoutPlan["areas"][number]["moves"][number];
@@ -32,6 +33,9 @@ export interface LayoutPlanRecord {
 
 /** Most paths the plan context lists, so a huge repo still fits in the agent's context. */
 const MAX_CONTEXT_FILES = 6000;
+
+/** The item id an area's fix and its Lens-Fixed trailer use. */
+export const areaItemId = (area: Pick<LayoutArea, "id">) => `layout-${area.id}`;
 
 export const layoutPlanPath = (root: string) => path.join(paths(root).dir, "layout-plan.json");
 
@@ -121,7 +125,7 @@ async function removeEmptyParents(workspace: string, dir: string): Promise<void>
 export async function reopenLayoutArea(root: string, fixId: string): Promise<PathMove[]> {
   const fix = (await loadRemediation(root, "layout"))?.fixes.find((f) => f.id === fixId);
   const plan = await loadLayoutPlan(root);
-  const area = fix && plan?.areas.find((a) => `layout-${a.id}` === fix.itemId);
+  const area = fix && plan?.areas.find((a) => areaItemId(a) === fix.itemId);
   if (!plan || !area) return [];
   area.status = "planned";
   await saveLayoutPlan(root, plan);
@@ -133,6 +137,7 @@ export async function reopenLayoutArea(root: string, fixId: string): Promise<Pat
 const LAYOUT_PROMPT_TASK = [
   "Restructure this repo's layout to fix the architecture findings below. Only move and rename files and folders, then update every import, path, config entry and doc that points at them. Don't change behavior.",
   "Work one area at a time. After each area, run the build, typecheck and tests, fix anything the move broke, and commit that area on its own.",
+  `Each plan area ends with its Lens id in brackets. In the commit for an area, add a trailer line like "${FIXED_TRAILER}: layout-api", so Lens marks it moved. Push when you're done.`,
 ].join(" ");
 
 /** The Plan step as a Claude Code prompt: the saved plan's open moves when there is one, then the findings. */
@@ -140,7 +145,7 @@ export function layoutPrompt(graph: KnowledgeGraph, plan: LayoutPlanRecord | nul
   const open = (plan?.areas ?? []).filter((a) => a.status !== "applied");
   const checks = (graph.layout?.checks ?? []).filter((c) => c.count > 0);
   return checklistPrompt(LAYOUT_PROMPT_TASK, [
-    { heading: "Plan", items: open.map((a) => ({ title: `${a.title}: ${a.reason}`, details: a.moves.map((m) => `- ${m.from} -> ${m.to}`) })) },
+    { heading: "Plan", items: open.map((a) => ({ title: `${a.title}: ${a.reason} [${areaItemId(a)}]`, details: a.moves.map((m) => `- ${m.from} -> ${m.to}`) })) },
     {
       heading: "Findings",
       items: checks.map((c) => ({

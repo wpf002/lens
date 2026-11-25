@@ -553,7 +553,8 @@ export const useStore = create<State>((set, get) => ({
         if (job.task === "audit") set({ audit: await fetchAudit().catch(() => null) });
         if (job.task === "review") set({ review: await fetchReview().catch(() => null) });
         // A post-merge review also fixes what it found (job.fixAll).
-        if (job.task === "remediate" || job.task === "architecture" || job.fixAll) await get().refreshRemediation(); // Fix changed files: reload below
+        // An audit changes what Remediate on Security has left to fix.
+        if (job.task === "remediate" || job.task === "architecture" || job.task === "audit" || job.fixAll) await get().refreshRemediation(); // Fix changed files: reload below
         await reloadGraph();
       }
     };

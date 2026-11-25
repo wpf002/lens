@@ -1,4 +1,4 @@
-import { effectiveAuth, findingItemId, healthScore, publicByTriage, type ScoreGroup, type ChecklistItem, type EndpointMeta, type Finding, type ExposurePath, type GraphNode, type Severity, type TaintLimit } from "@lens/core/browser";
+import { checksFixedSinceAudit, effectiveAuth, findingItemId, healthScore, publicByTriage, type ScoreGroup, type ChecklistItem, type EndpointMeta, type Finding, type ExposurePath, type GraphNode, type Severity, type TaintLimit } from "@lens/core/browser";
 import type { AuditRecord, EnrichJob, RemediationRecord } from "../api";
 import type { VEdge, VNode, ViewModel } from "../types";
 import { SEVERITY_RANK, layerColor } from "./colors";
@@ -68,21 +68,32 @@ export function endpointsOf(model: GraphModel): GraphNode[] {
   return [...ids].map((id) => model.idx.nodes.get(id)).filter((n): n is GraphNode => !!n);
 }
 
-export type MergedCheck = ChecklistItem & { ai?: boolean; by?: "you" };
+export type MergedCheck = ChecklistItem & { ai?: boolean; by?: "you"; fixed?: boolean };
 
 /** Scanner statuses a fresh scan settles on its own, so an audit older than the code can't override them. */
 const SCANNER_SETTLED = new Set<ChecklistItem["status"]>(["pass", "fail", "clear", "na"]);
 
-/** Scanner checklist with AI audit verdicts and the owner's own decisions laid over it. */
-export function mergeChecklist(base: ChecklistItem[], audit: AuditRecord | null): MergedCheck[] {
+/**
+ * Scanner checklist with AI audit verdicts and the owner's own decisions laid over it.
+ * Checks the audit remediation record fixed since the audit show as fixed until the next audit, unless the scanner still fails them.
+ */
+export function mergeChecklist(base: ChecklistItem[], audit: AuditRecord | null, remediation?: RemediationRecord | null): MergedCheck[] {
   const ai = new Map((audit?.items ?? []).map((i) => [i.id, i]));
+  const fixed = checksFixedSinceAudit(remediation, audit?.generatedAt);
   return base.map((c) => {
-    const v = ai.get(c.id);
-    // The audit can't settle manual items; only the owner can.
-    if (!v || (c.status === "manual" && v.by !== "you")) return c;
-    if (audit?.stale && v.by !== "you" && SCANNER_SETTLED.has(c.status)) return c;
-    return { ...c, status: v.status, evidence: v.evidence.length ? v.evidence : c.evidence, fix: v.fix ?? (v.status === "fail" ? c.fix : undefined), ai: v.by !== "you", by: v.by };
+    const merged = withVerdict(c, ai.get(c.id), !!audit?.stale);
+    if (merged.status !== "fail" || c.status === "fail" || !fixed.has(c.id)) return merged;
+    return { ...merged, status: "pass", evidence: [FIXED_EVIDENCE], fix: undefined, ai: false, fixed: true };
   });
+}
+
+const FIXED_EVIDENCE = "Fixed in a commit. The next audit checks it again.";
+
+function withVerdict(c: ChecklistItem, v: AuditRecord["items"][number] | undefined, stale: boolean): MergedCheck {
+  // The audit can't settle manual items; only the owner can.
+  if (!v || (c.status === "manual" && v.by !== "you")) return c;
+  if (stale && v.by !== "you" && SCANNER_SETTLED.has(c.status)) return c;
+  return { ...c, status: v.status, evidence: v.evidence.length ? v.evidence : c.evidence, fix: v.fix ?? (v.status === "fail" ? c.fix : undefined), ai: v.by !== "you", by: v.by };
 }
 
 /** What the owner does with a check: Lens fixes it, the owner settles it, or nothing. */

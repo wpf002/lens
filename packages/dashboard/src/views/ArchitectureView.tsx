@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { healthScore, type HealthCheck, type Severity } from "@lens/core/browser";
 import { fetchArchitecture, type ArchitectureState, type CostEstimate, type LayoutArea } from "../api";
 import { IconChevronDown, IconChevronRight } from "../components/icons";
+import { Mascot } from "../components/Mascot";
 import { Elapsed, ProgressBar, PromptPreview, Remediation } from "../components/Remediation";
 import { Button, EmptyState, SeverityBadge, Spinner, cx, renderInlineCode } from "../components/ui";
 import { useStore } from "../store";
@@ -29,12 +30,8 @@ function ScoreRing({ score }: { score: number }) {
 }
 
 /** A button that shows the cost and asks once before starting a run. */
-function ConfirmRun({ label, estimate, disabled, onRun, onAsk }: { label: string; estimate?: CostEstimate; disabled: boolean; onRun: () => void; onAsk?: (asking: boolean) => void }) {
-  const [asking, setAskingState] = useState(false);
-  const setAsking = (next: boolean) => {
-    setAskingState(next);
-    onAsk?.(next);
-  };
+function ConfirmRun({ label, estimate, disabled, onRun }: { label: string; estimate?: CostEstimate; disabled: boolean; onRun: () => void }) {
+  const [asking, setAsking] = useState(false);
   if (!asking)
     return (
       <Button size="sm" variant="accent" className="shrink-0" disabled={disabled} onClick={() => setAsking(true)}>
@@ -175,7 +172,7 @@ export function ArchitectureView() {
   const run = useStore((s) => s.runAI);
   const [state, setState] = useState<ArchitectureState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [planAsking, setPlanAsking] = useState(false);
+  const [remediating, setRemediating] = useState(false);
   const live = mode === "server";
   const graph = model.graph;
 
@@ -195,6 +192,12 @@ export function ArchitectureView() {
   const areas = state?.plan?.areas ?? [];
   const canRun = live && canEnrich;
   const busy = job.state === "running";
+  const openAreas = areas.filter((a) => a.status !== "applied").length;
+  const issues = counts.high + counts.medium + counts.low;
+  const planInLens = () => {
+    setRemediating(false);
+    void run("architecture");
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -212,18 +215,30 @@ export function ArchitectureView() {
             </span>
           ))}
         </div>
-        {canRun && checks.length > 0 && (
+        {live && (
           <div className="ml-auto">
-            <ConfirmRun label={state?.plan ? "Plan Again" : "Plan"} estimate={state?.estimates?.plan} disabled={busy} onRun={() => void run("architecture")} onAsk={setPlanAsking} />
+            <Button size="sm" variant="accent" disabled={busy || !state || (!issues && !openAreas)} title={!issues && !openAreas ? "Nothing left to fix" : undefined} onClick={() => setRemediating((r) => !r)}>
+              <Mascot size={16} /> Remediate
+            </Button>
           </div>
         )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto pb-6">
         {loadError && <p className="px-4 pt-3 text-[12.5px] text-critical">{loadError}</p>}
-        {planAsking && (
-          <div className="mx-4 mt-3 rounded-lg border border-line bg-panel-2 text-[12.5px]">
-            <PromptPreview loaded={state?.prompt ? { state: "ready", prompt: state.prompt } : state ? { state: "error", message: "No prompt for this project." } : { state: "loading" }} />
+        {remediating && !busy && (
+          <div className="mx-4 mt-3 rounded-lg border border-line bg-panel-2 text-[12px] text-muted">
+            <PromptPreview
+              loaded={state?.prompt ? { state: "ready", prompt: state.prompt, items: issues } : state ? { state: "error", message: "No prompt for this project." } : { state: "loading" }}
+              onClose={() => setRemediating(false)}
+              footer={
+                canRun && issues > 0 ? (
+                  <button type="button" className="text-[11.5px] text-faint hover:text-fg hover:underline" title="Lens plans the moves on its own AI plan, then you move each area" onClick={planInLens}>
+                    {state?.plan ? "Plan Again" : "Plan"} in Lens · {costRange(state?.estimates?.plan)}
+                  </button>
+                ) : undefined
+              }
+            />
           </div>
         )}
         <RunStatus areas={areas} />

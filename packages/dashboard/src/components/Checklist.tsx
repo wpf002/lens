@@ -62,6 +62,7 @@ function Row({ item, extra }: { item: Merged; extra?: ReactNode }) {
         {open ? <IconChevronDown size={13} className="shrink-0 text-faint" /> : <IconChevronRight size={13} className="shrink-0 text-faint" />}
         <span className={cx("min-w-0 flex-1 text-[12.5px]", item.status === "na" ? "text-muted" : "text-fg")}>{item.title}</span>
         {item.status === "na" && <span className="shrink-0 text-[11px] text-faint">N/A</span>}
+        {item.fixed && <span className="shrink-0 rounded border border-guarded/40 px-1 font-mono text-[9.5px] text-guarded">Fixed</span>}
         {item.ai && (
           <span className="shrink-0 rounded border border-accent/40 px-1 font-mono text-[9.5px] text-accent" title="Status from the AI audit">
             AI
@@ -167,7 +168,8 @@ function Decide({ item }: { item: Merged }) {
 export function Checklist() {
   const model = useModel();
   const audit = useStore((s) => s.audit);
-  const items: Merged[] = useMemo(() => mergeChecklist(model.graph.security?.checklist ?? [], audit), [model, audit]);
+  const remediation = useStore((s) => s.remediation.audit);
+  const items: Merged[] = useMemo(() => mergeChecklist(model.graph.security?.checklist ?? [], audit, remediation), [model, audit, remediation]);
   const [showDone, setShowDone] = useState(false);
 
   if (!items.length) {

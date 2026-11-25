@@ -5,7 +5,7 @@ import { formatDuration } from "./format";
 import { awaitingRemediation, compareIssues, isNewFinding, sumTallies, tallyItems } from "./health";
 import ELK from "elkjs/lib/elk.bundled.js";
 import type { ChecklistItem, ImpactReport, KnowledgeGraph } from "@lens/core/browser";
-import type { AuditRecord, Meta } from "../api";
+import type { AuditRecord, Meta, RemediationRecord } from "../api";
 import { buildLayers, buildStructure, edgeAccumulator } from "./aggregate";
 import { layerColor, hashColor } from "./colors";
 import { buildDomain } from "./domain";
@@ -440,5 +440,27 @@ describe("mergeChecklist", () => {
   it("keeps the owner's decision even when the audit is stale", () => {
     const owned = { ...audit(true), items: [{ id: "t1-env", status: "fail" as const, evidence: ["Marked by you."], by: "you" as const }] };
     expect(mergeChecklist(base, owned)[0]!.status).toBe("fail");
+  });
+
+  const fixedIn = (fixedAt: string): RemediationRecord => ({
+    generatedAt: "2000-01-01T00:00:00.000Z",
+    source: "audit",
+    fixes: [{ id: "trailer-abc-t1-env", itemId: "t1-env", title: "Env", explanation: "Fixed in commit abc1234.", files: [], status: "applied", fixedAt }],
+    skipped: [],
+    edits: {},
+  });
+
+  it("shows a check a commit fixed after the audit as fixed", () => {
+    const [env] = mergeChecklist(base, audit(false), fixedIn("2026-11-15T00:00:00.000Z"));
+    expect(env).toMatchObject({ status: "pass", fixed: true });
+  });
+
+  it("keeps a check failing when its fix predates the audit", () => {
+    expect(mergeChecklist(base, audit(false), fixedIn("2026-11-13T00:00:00.000Z"))[0]).toMatchObject({ status: "fail" });
+  });
+
+  it("keeps a check failing when the scanner still fails it", () => {
+    const failing = base.map((c) => (c.id === "t1-env" ? { ...c, status: "fail" as const } : c));
+    expect(mergeChecklist(failing, audit(false), fixedIn("2026-11-15T00:00:00.000Z"))[0]).toMatchObject({ status: "fail" });
   });
 });

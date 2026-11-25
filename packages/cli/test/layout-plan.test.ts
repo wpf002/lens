@@ -90,8 +90,14 @@ describe("layoutPrompt", () => {
 
   it("lists the plan's open moves and leaves out areas already moved", () => {
     const prompt = layoutPrompt(graph, plan);
-    expect(prompt).toContain("Plan:\n- [ ] 1. Auth: Auth files are scattered.\n      - src/login.ts -> src/auth/login.ts");
+    expect(prompt).toContain("Plan:\n- [ ] 1. Auth: Auth files are scattered. [layout-auth]\n      - src/login.ts -> src/auth/login.ts");
     expect(prompt).toContain("Findings:\n- [ ] 2. Crowded folder");
     expect(prompt).not.toContain("src/old.ts");
+  });
+
+  it("tags each open area with the Lens id its Lens-Fixed trailer names", () => {
+    const prompt = layoutPrompt(graph, plan);
+    expect(prompt).toContain("1. Auth: Auth files are scattered. [layout-auth]");
+    expect(prompt).toContain('"Lens-Fixed: layout-api"');
   });
 });

@@ -15,12 +15,12 @@ import { promises as fs, existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { fileURLToPath } from "node:url";
-import { applyFixes, buildRecord, confineFixes, loadRemediation, markUnaddressed, remediationPath, type FixSource, type RemediationRecord, type RemediationSource } from "./remediate.js";
+import { applyFixes, buildRecord, confineFixes, loadRemediation, markUnaddressed, remediationPath, SHIPPED_OUTSIDE_LENS, type FixSource, type RemediationRecord, type RemediationSource } from "./remediate.js";
 import { collectChanges, makeWorkspace, NO_CHANGE_REASON } from "./workspace.js";
-import { buildPlanRecord, loadLayoutPlan, moveFiles, planContext, saveLayoutPlan, usableMoves } from "./layout-plan.js";
+import { areaItemId, buildPlanRecord, loadLayoutPlan, moveFiles, planContext, saveLayoutPlan, usableMoves } from "./layout-plan.js";
 import { itemRate, loadFixCosts, recordFixCost, type ItemRate } from "./fix-costs.js";
 import { actionPinFix } from "./action-pins.js";
-import { AuditVerdictsSchema, LayoutPlanSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, renameScannedPaths, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type Finding, type KnowledgeGraph, type PathMove } from "@lens/core";
+import { AuditVerdictsSchema, LayoutPlanSchema, PatchValidationError, WorkspaceReportSchema, type Remediation, ReviewFindingsSchema, applyPatch, buildBatches, checkHitIds, checksFixedSinceAudit, reviewKey, findingItemId, scanAndSave, domainContext, formatZodError, loadGraph, loadMeta, paths, readJson, renameScannedPaths, saveGraph, saveMeta, writeJsonAtomic, type AuditVerdicts, type Finding, type KnowledgeGraph, type PathMove } from "@lens/core";
 import { checklistPrompt } from "./checklist-prompt.js";
 
 export type EnrichTask = "domain" | "audit" | "summaries" | "review" | "remediate" | "architecture" | "merge";
@@ -1082,7 +1082,7 @@ export class EnrichRunner {
       // A run that stopped partway leaves some imports pointing at old paths, so nothing from it is applied.
       if (resultError || code) throw new Error(resultError ?? `Claude Code exited with code ${code}: ${stderr.trim().split("\n").pop() ?? ""}`);
       this.push(job, "Checking the changes");
-      const report = { summary: area.title, fixes: [{ itemId: `layout-${area.id}`, title: area.title, explanation: area.reason, files: [] }], skipped: [] };
+      const report = { summary: area.title, fixes: [{ itemId: areaItemId(area), title: area.title, explanation: area.reason, files: [] }], skipped: [] };
       ({ data } = await collectChanges(root, ws, report));
     } finally {
       await fs.rm(ws, { recursive: true, force: true });
@@ -1681,20 +1681,85 @@ export async function closeFindingsOnChangedCode(root: string): Promise<void> {
   console.error(`[scan] ${path.basename(root)}: ${resolved} review findings closed because the code they cite is gone or rewritten`);
 }
 
-/** Close open review findings that a commit since they were found names in a Lens-Fixed trailer. Free: no AI run. */
+interface FixedTrailer {
+  sha: string;
+  /** Commit time, ISO. */
+  at: string;
+  ids: string[];
+}
+
+/** Commits since `since` with the item ids their Lens-Fixed trailers name. */
+function fixedTrailers(root: string, since: string): FixedTrailer[] {
+  const log = gitOut(root, ["log", `--since=${since}`, `--format=%x1e%H%x00%cI%x00%(trailers:key=${FIXED_TRAILER},valueonly)`]);
+  return (log ?? "")
+    .split("\x1e")
+    .map((entry) => entry.split("\0"))
+    .filter((parts): parts is [string, string, string] => parts.length === 3)
+    .map(([sha, at, values]) => ({ sha, at, ids: values.split(/[\s,]+/).filter(Boolean) }))
+    .filter((c) => c.ids.length > 0);
+}
+
+/** Git prints commit times with the committer's offset, so compare instants, not strings. */
+const after = (at: string, than: string) => (Date.parse(at) || 0) > (Date.parse(than) || 0);
+
+/**
+ * Close items that a commit names in a Lens-Fixed trailer, for owners who fix with the Copy Prompt on their own plan. Free: no AI run.
+ * Review findings and Architecture areas close outright. Failing checklist checks close until the next audit looks again.
+ * Static hits and findings need nothing here: the rescan drops them once the code is fixed.
+ */
 export async function closeFindingsFixedInCommits(root: string): Promise<void> {
   const rec = await readJson<ReviewRecord>(reviewPath(root));
-  const open = (rec?.findings ?? []).filter((f) => f.foundAt && !f.resolvedAt);
-  if (!rec || !open.length) return;
-  const oldest = open.map((f) => f.foundAt!).sort()[0]!;
-  await deepenSince(root, oldest).catch((e: unknown) => console.error(`[scan] couldn't deepen ${path.basename(root)}: ${e instanceof Error ? e.message.split("\n")[0] : e}`));
-  const log = gitOut(root, ["log", `--since=${oldest}`, `--format=%(trailers:key=${FIXED_TRAILER},valueonly)`]);
-  const ids = (log ?? "").split(/[\s,]+/).filter((id) => REVIEW_ID.test(id));
-  if (!ids.length) return;
-  const { findings, resolved } = closeFixedIds(rec.findings, ids, { ...(await reviewClosed(root)), now: new Date().toISOString() });
-  if (!resolved) return;
-  await saveReview(root, { ...rec, findings });
-  console.error(`[scan] ${path.basename(root)}: ${resolved} review findings closed by ${FIXED_TRAILER} commits`);
+  const openReview = (rec?.findings ?? []).filter((f) => f.foundAt && !f.resolvedAt);
+  const auditAt = (await readJson<{ generatedAt?: string }>(auditPath(root)))?.generatedAt;
+  const plan = await loadLayoutPlan(root);
+  const openAreas = (plan?.areas ?? []).some((a) => a.status !== "applied");
+  const since = [...openReview.map((f) => f.foundAt!), ...(auditAt ? [auditAt] : []), ...(openAreas && plan ? [plan.generatedAt] : [])].sort()[0];
+  if (!since) return;
+  await deepenSince(root, since).catch((e: unknown) => console.error(`[scan] couldn't deepen ${path.basename(root)}: ${e instanceof Error ? e.message.split("\n")[0] : e}`));
+  const commits = fixedTrailers(root, since);
+  if (!commits.length) return;
+  const name = path.basename(root);
+  const reviewIds = commits.flatMap((c) => c.ids).filter((id) => REVIEW_ID.test(id));
+  if (rec && openReview.length && reviewIds.length) {
+    const { findings, resolved } = closeFixedIds(rec.findings, reviewIds, { ...(await reviewClosed(root)), now: new Date().toISOString() });
+    if (resolved) {
+      await saveReview(root, { ...rec, findings });
+      console.error(`[scan] ${name}: ${resolved} review findings closed by ${FIXED_TRAILER} commits`);
+    }
+  }
+  if (auditAt) {
+    const checks = await recordTrailerFixedChecks(root, commits.filter((c) => after(c.at, auditAt)));
+    if (checks) console.error(`[scan] ${name}: ${checks} security checks marked fixed by ${FIXED_TRAILER} commits`);
+  }
+  if (plan && openAreas) {
+    const named = new Set(commits.filter((c) => after(c.at, plan.generatedAt)).flatMap((c) => c.ids));
+    const moved = plan.areas.filter((a) => a.status !== "applied" && named.has(areaItemId(a)));
+    for (const area of moved) area.status = "applied";
+    if (moved.length) {
+      await saveLayoutPlan(root, plan);
+      console.error(`[scan] ${name}: ${moved.length} architecture areas marked moved by ${FIXED_TRAILER} commits`);
+    }
+  }
+}
+
+/** Record failing checks named in trailers as applied fixes that shipped outside Lens. Returns how many it added. */
+async function recordTrailerFixedChecks(root: string, commits: FixedTrailer[]): Promise<number> {
+  if (!commits.length) return 0;
+  const open = new Map((await remediationItems(root, "audit", undefined, Infinity)).filter((i) => !i.id.startsWith("finding-")).map((i) => [i.id, i]));
+  const rec: RemediationRecord = (await loadRemediation(root, "audit")) ?? { generatedAt: new Date(0).toISOString(), source: "audit", fixes: [], skipped: [], edits: {} };
+  const known = new Set(rec.fixes.map((f) => f.id));
+  let added = 0;
+  for (const commit of commits)
+    for (const itemId of commit.ids) {
+      const item = open.get(itemId);
+      const id = `trailer-${commit.sha.slice(0, 12)}-${itemId}`;
+      if (!item || known.has(id)) continue;
+      known.add(id);
+      rec.fixes.push({ id, itemId, title: item.title, explanation: `Fixed in commit ${commit.sha.slice(0, 7)}.`, files: [], status: "applied", mergedIn: SHIPPED_OUTSIDE_LENS, fixedAt: commit.at });
+      added++;
+    }
+  if (added) await writeJsonAtomic(remediationPath(root, "audit"), rec, true);
+  return added;
 }
 
 /** Last commit time in ms, or 0 outside a git repo. */
@@ -1887,9 +1952,13 @@ export async function remediationItems(root: string, source: RemediationSource, 
     })
     .filter((c) => c.status === "fail")
     .map((c) => ({ id: c.id, title: c.title, evidence: c.evidence, fix: c.fix }));
-  // The audit decides when a check is done. A fix or "already safe" skip hides a check only until the
-  // next audit re-checks it; one fix rarely covers every place a check fails.
+  // The audit decides when a check is done. A fix or "already safe" skip hides a check only until the next audit re-checks it.
   const awaitingAudit = (Date.parse(rem?.generatedAt ?? "") || 0) > (Date.parse(audit?.generatedAt ?? "") || 0);
-  const openChecks = checks.filter((c) => !(awaitingAudit && applied.has(c.id)));
+  // A Lens fix waits for the next audit; a commit trailer can't outvote the scanner, which re-checks on every scan.
+  const lensFixed = checksFixedSinceAudit(rem && { ...rem, fixes: rem.fixes.filter((f) => !f.fixedAt) }, audit?.generatedAt);
+  const trailerFixed = checksFixedSinceAudit(rem && { ...rem, fixes: rem.fixes.filter((f) => f.fixedAt) }, audit?.generatedAt);
+  const safeSkips = new Set((rem?.skipped ?? []).filter((x) => ALREADY_SAFE.test(x.reason)).map((x) => x.itemId));
+  const scannerFails = new Set((g?.security?.checklist ?? []).filter((c) => c.status === "fail").map((c) => c.id));
+  const openChecks = checks.filter((c) => !lensFixed.has(c.id) && !(trailerFixed.has(c.id) && !scannerFails.has(c.id)) && !(awaitingAudit && safeSkips.has(c.id)));
   return [...openChecks, ...findings.filter((f) => !applied.has(f.id))].slice(0, limit);
 }

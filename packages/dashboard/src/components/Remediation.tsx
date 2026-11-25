@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { createPullRequest, fetchFixFiles, fetchFixPrompt, fixBrokenTests, fixesPatch, mergePullRequest, type ProposedFix, type RemediationSource, type PullRequest, type TestGate } from "../api";
 import { useStore } from "../store";
-import { costRange, formatDuration } from "../utils/format";
+import { costRange, formatDuration, plural } from "../utils/format";
 import { remediateLabel } from "../utils/security";
 import { IconChevronDown, IconChevronRight } from "./icons";
 import { Mascot } from "./Mascot";
@@ -128,6 +128,9 @@ export function Remediation({ source }: { source: Source }) {
   const reviewPending = useStore((s) => s.meta?.reviewPending);
   const reviewEstimate = useStore((s) => s.meta?.enrichEstimates?.review);
   const reviewing = job.task === "review" && job.state === "running";
+  // Security does the same with the audit: the prompt lists what an audit of the current code found.
+  const auditEstimate = useStore((s) => s.meta?.enrichEstimates?.audit);
+  const auditing = job.task === "audit" && job.state === "running";
   const checkTitle = useStore((s) => s.model?.graph.health?.checks.find((c) => c.id === (confirm?.checkId ?? mine?.checkId))?.title);
   const batch = useStore((s) => s.fixable.batch);
   const plans = useStore((s) => s.fixable.plans);
@@ -214,6 +217,21 @@ export function Remediation({ source }: { source: Source }) {
           </Button>
           <Button size="sm" variant="accent" autoFocus onClick={() => void run("review")}>
             Review
+          </Button>
+        </div>
+      );
+    if (source === "audit" && fixAll && auditing) return null;
+    if (source === "audit" && fixAll && plan?.first === "audit")
+      return (
+        <div className={cx(box, "flex flex-wrap items-center gap-2 px-3 py-2.5 text-muted")}>
+          <span className="min-w-0 flex-1">
+            <span className="text-fg">Audit Changed Code</span> · {costRange(auditEstimate)}
+          </span>
+          <Button size="sm" variant="ghost" onClick={close}>
+            Close
+          </Button>
+          <Button size="sm" variant="accent" autoFocus onClick={() => void run("audit")}>
+            Audit
           </Button>
         </div>
       );
@@ -422,7 +440,7 @@ export function PromptPreview({ loaded, onClose, footer }: { loaded: PromptState
   return (
     <div className={cx(!onClose && "border-t border-line")}>
       <div className="flex items-center gap-2 px-3 py-2">
-        <span className="min-w-0 flex-1 text-fg">{loaded.state === "ready" && loaded.items !== undefined ? `${loaded.items} Issues` : "Prompt"}</span>
+        <span className="min-w-0 flex-1 text-fg">{loaded.state === "ready" && loaded.items !== undefined ? plural(loaded.items, "Issue") : "Prompt"}</span>
         {loaded.state === "loading" && <Spinner size={14} />}
         {onClose && (
           <Button size="sm" variant="ghost" onClick={onClose}>

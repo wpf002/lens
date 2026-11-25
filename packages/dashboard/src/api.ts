@@ -74,6 +74,8 @@ export interface ProposedFix {
   invalid?: string;
   status: "proposed" | "applied" | "undone" | "discarded";
   mergedIn?: number;
+  /** When a commit named this item in a Lens-Fixed trailer. */
+  fixedAt?: string;
 }
 export type RemediationSource = "audit" | "review" | "health" | "layout";
 export interface RemediationRecord {
