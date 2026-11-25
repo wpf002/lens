@@ -26,7 +26,7 @@ import { grantCheckPermissions } from "./ci-permissions.js";
 import type { AppliedFix } from "./commit-text.js";
 import { FIX_SOURCES, SOURCES, appliedFixIds, applyFixes, discardFixesTouching, isPendingFix, loadRemediation, markCommittedFixesMerged, markFixesMerged, SHIPPED_OUTSIDE_LENS, undoFix, undoFixesSince, type FixSource, type RemediationSource } from "./remediate.js";
 import { layoutPrompt, loadLayoutPlan, reopenLayoutArea, usableMoves } from "./layout-plan.js";
-import { EnrichRunner, followFileMoves, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, buildFixPrompt, remediateBudget, remediateLimit, remediationItems, remediationRecord, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
+import { EnrichRunner, closeFindingsOnChangedCode, followFileMoves, HEALTH_BATCH, markVerifiedSafe, auditPath, auditWithDecisions, saveDecision, loadWontFix, setWontFix, estimateCost, reviewEstimate, reviewPlan, type CostEstimate, fixAllPlan, buildFixPrompt, remediateBudget, remediateLimit, remediationItems, remediationRecord, TEST_REPAIR_ID, checkClaudeAuth, reviewPath, type AuditRecord, type EnrichTask, type ReviewRecord } from "./enrich.js";
 import { TestsBroken } from "./local-tests.js";
 import {
   buildBatches, diffImpact, graphIsStale, isGitRepo, loadGraph, paths, readJson, scanAndSave, EmbeddingIndex, isFileKind,
@@ -94,7 +94,10 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
   }
   const loadProject = async (dir: string, graphFile?: string): Promise<Project> => {
     const root = realpathSync(path.resolve(dir));
-    if (!graphFile) await followFileMoves(root);
+    if (!graphFile) {
+      await followFileMoves(root);
+      await closeFindingsOnChangedCode(root);
+    }
     const store = await readJson<EmbeddingStore>(paths(root).embeddings);
     return {
       root,
@@ -122,7 +125,7 @@ export async function startServer(opts: ServeOptions): Promise<{ url: string; to
     if (!saved || !graphIsStale(saved, p.root)) return false;
     if (!refreshes.has(p.root)) {
       console.error(`[scan] ${p.root} changed since its last scan, rescanning`);
-      refreshes.set(p.root, scanAndSave(p.root).then(() => followFileMoves(p.root)).finally(() => refreshes.delete(p.root)));
+      refreshes.set(p.root, scanAndSave(p.root).then(() => followFileMoves(p.root)).then(() => closeFindingsOnChangedCode(p.root)).finally(() => refreshes.delete(p.root)));
     }
     await refreshes.get(p.root);
     return true;

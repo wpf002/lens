@@ -9,9 +9,9 @@
  */
 import { inRepairScope, loadRepairItems } from "./ci.js";
 import { deepenSince } from "./cloud.js";
-import { BATCH_MAX_FILES, coveredFiles, followMoves, hashFiles, keepReviewed, loadCoverage, markReviewed, mergeReview, pendingReview, planBatches, priorFindingsFor, renderReport, REVIEW_ID, reviewIndex, saveCoverage, type ReviewFile, type ReviewRecord } from "./review-ledger.js";
+import { BATCH_MAX_FILES, closeGoneLines, coveredFiles, followMoves, hashFiles, isReviewed, keepReviewed, loadCoverage, markReviewed, mergeReview, pendingReview, planBatches, priorFindingsFor, renderReport, REVIEW_ID, reviewIndex, saveCoverage, trimmedLines, type ReviewFile, type ReviewRecord, type StoredFinding } from "./review-ledger.js";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { promises as fs, existsSync, statSync } from "node:fs";
+import { promises as fs, existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { fileURLToPath } from "node:url";
@@ -1631,6 +1631,54 @@ export async function followFileMoves(root: string, moves?: PathMove[]): Promise
   if (!moved && !resolved) return;
   await saveReview(root, { ...rec, findings });
   console.error(`[scan] ${path.basename(root)}: ${moved} review findings followed moved files, ${resolved} closed because their file is gone`);
+}
+
+const gitOut = (root: string, args: string[]): string | undefined => {
+  try {
+    return execFileSync("git", args, { cwd: root, encoding: "utf8", timeout: 10_000, maxBuffer: 20_000_000, stdio: ["ignore", "pipe", "ignore"] });
+  } catch {
+    // A commit or path missing from history means the cited line can't be recovered; the finding stays open.
+    return undefined;
+  }
+};
+
+/**
+ * Close open review findings on files edited since their last review whose code is gone, reading
+ * each file as it was from the commit the review saw. Free: no AI run.
+ */
+export async function closeFindingsOnChangedCode(root: string): Promise<void> {
+  const rec = await readJson<ReviewRecord>(reviewPath(root));
+  if (!rec) return;
+  const closed = await reviewClosed(root);
+  const coverage = await loadCoverage(root);
+  const candidates = rec.findings.filter((f, i) => f.line && f.foundAt && !f.resolvedAt && !closed.fixed.has(i) && existsSync(path.join(root, f.path)));
+  if (!candidates.length) return;
+  const hashes = await hashFiles(root, [...new Set(candidates.map((f) => f.path))]);
+  const changed = new Set([...hashes].filter(([rel, hash]) => !isReviewed(coverage, rel, hash)).map(([rel]) => rel));
+  if (!changed.size) return;
+  const oldest = candidates.filter((f) => changed.has(f.path)).map((f) => f.foundAt!).sort()[0];
+  await deepenSince(root, oldest).catch((e: unknown) => console.error(`[scan] couldn't deepen ${path.basename(root)}: ${e instanceof Error ? e.message.split("\n")[0] : e}`));
+  const commitAt = new Map<string, string | undefined>();
+  const oldFiles = new Map<string, string[] | undefined>();
+  const nowFiles = new Map<string, Set<string> | undefined>();
+  const fileThen = (f: StoredFinding): string[] | undefined => {
+    if (!changed.has(f.path) || !f.foundAt) return undefined;
+    if (!commitAt.has(f.foundAt)) commitAt.set(f.foundAt, gitOut(root, ["rev-list", "-1", `--before=${f.foundAt}`, "HEAD"])?.trim() || undefined);
+    const commit = commitAt.get(f.foundAt);
+    if (!commit) return undefined;
+    const key = `${commit}:${f.path}`;
+    if (!oldFiles.has(key)) oldFiles.set(key, gitOut(root, ["show", key])?.split("\n"));
+    return oldFiles.get(key);
+  };
+  const current = (rel: string): Set<string> | undefined => {
+    if (!changed.has(rel)) return undefined;
+    if (!nowFiles.has(rel)) nowFiles.set(rel, existsSync(path.join(root, rel)) ? trimmedLines(readFileSync(path.join(root, rel), "utf8")) : undefined);
+    return nowFiles.get(rel);
+  };
+  const { findings, resolved } = closeGoneLines(rec.findings, fileThen, current, { ...closed, now: new Date().toISOString() });
+  if (!resolved) return;
+  await saveReview(root, { ...rec, findings });
+  console.error(`[scan] ${path.basename(root)}: ${resolved} review findings closed because the code they cite is gone or rewritten`);
 }
 
 /** Last commit time in ms, or 0 outside a git repo. */

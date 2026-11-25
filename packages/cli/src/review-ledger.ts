@@ -138,6 +138,45 @@ export function followMoves(
   return { findings, moved, resolved };
 }
 
+/** A cited line this short ("}", "return x;") turns up in most files, so its absence or presence says nothing. */
+export const MIN_CITED_LINE = 12;
+/** Share of a file's lines that must be gone for every finding in it to count as rewritten away, like a module split into others. */
+export const REWRITTEN_SHARE = 0.5;
+
+const meaningful = (lines: string[]) => lines.map((l) => l.trim()).filter((l) => l.length >= MIN_CITED_LINE);
+
+/**
+ * Close open findings whose code is gone: the cited line is nowhere in the file now, or most of
+ * the file was rewritten. `fileThen` is the file as the review read it; `fileNow` is the file now.
+ * Without this a finding fixed outside Lens stays open until a paid review re-reads its file. A
+ * file that changed is still pending review, so a problem that survived the edit is found again there.
+ */
+export function closeGoneLines(
+  prior: StoredFinding[],
+  fileThen: (f: StoredFinding, i: number) => string[] | undefined,
+  fileNow: (rel: string) => Set<string> | undefined,
+  ctx: Pick<MergeContext, "fixed" | "wontFix" | "now">,
+): { findings: StoredFinding[]; resolved: number } {
+  let resolved = 0;
+  const findings = prior.map((f, i) => {
+    if (findingStatus(f, i, ctx) !== "open" || !f.line) return f;
+    const then = fileThen(f, i);
+    const now = fileNow(f.path);
+    if (!then || !now) return f;
+    const cited = then[f.line - 1]?.trim() ?? "";
+    const citedGone = cited.length >= MIN_CITED_LINE && !now.has(cited);
+    const before = meaningful(then);
+    const rewritten = before.length > 0 && before.filter((l) => !now.has(l)).length / before.length >= REWRITTEN_SHARE;
+    if (!citedGone && !rewritten) return f;
+    resolved++;
+    return { ...f, resolvedAt: ctx.now };
+  });
+  return { findings, resolved };
+}
+
+/** Trimmed lines of a file's text, for checking whether a cited line is still there. */
+export const trimmedLines = (text: string): Set<string> => new Set(text.split("\n").map((l) => l.trim()));
+
 /** What the reviewer is told about earlier findings in the files it's reviewing. */
 export function priorFindingsFor(findings: StoredFinding[], files: Set<string>, ctx: Pick<MergeContext, "fixed" | "wontFix">) {
   return findings
